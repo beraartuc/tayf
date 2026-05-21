@@ -10,6 +10,7 @@
 // portable-pty and signal-hook; we cannot dedupe without forking upstream crates.
 #![allow(clippy::multiple_crate_versions)]
 
+pub mod cli;
 pub mod error;
 pub mod style;
 pub mod version;
