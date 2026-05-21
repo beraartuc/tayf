@@ -11,6 +11,7 @@
 #![allow(clippy::multiple_crate_versions)]
 
 pub mod error;
+pub mod style;
 
 pub use error::{Error, Result};
 
