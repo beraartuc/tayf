@@ -13,6 +13,8 @@
 pub mod error;
 pub mod style;
 
+pub(crate) mod rules;
+
 pub use error::{Error, Result};
 
 /// Placeholder facade. Implemented in Task 16.
