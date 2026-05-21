@@ -1,0 +1,43 @@
+[graph]
+all-features = true
+
+[licenses]
+# Licenses we allow across the dependency tree. Keep this list tight; every
+# entry should match a license actually present in our transitive deps or be a
+# common permissive license we are willing to accept for future deps.
+#
+# Unicode-3.0 is required for the ICU crates pulled in transitively via
+# `idna` -> `url` -> `git2` -> `built` (build-dep). It is the modern
+# replacement for Unicode-DFS-2016 and is OSI-approved.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "OpenSSL",
+    "MPL-2.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+deny = []
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # `serial` is unmaintained (last release 2017-07-02). It is pulled in
+    # transitively via portable-pty 0.8 and is not exposed in any code path we
+    # exercise (we only use portable-pty's native PTY APIs, not the serial
+    # backend). Tracked for removal when portable-pty drops the dependency
+    # or we migrate off portable-pty.
+    "RUSTSEC-2017-0008",
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
