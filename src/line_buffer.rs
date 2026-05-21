@@ -4,14 +4,6 @@
 //! reaches `MAX_BUFFER_BYTES` — in the last case the partial line is flushed
 //! *without* rule application (spec §6.1, "Memory exhaustion").
 
-// reason: this module exposes the line accumulator consumed by the pipeline
-// module. Pipeline itself is wired into io_loop in Task 7; until then it is
-// only exercised by unit tests, so the dead-code lint flags every name in
-// this transitive chain. The allow scope is the whole module to keep the
-// surface intentional and reviewable in one place; it will be removed once
-// the io_loop pulls Pipeline into the live binary path.
-#![allow(dead_code)]
-
 use std::time::{Duration, Instant};
 
 use crate::error::Error;
@@ -21,6 +13,11 @@ pub(crate) const MAX_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Idle timeout. If no newline arrives within this window, flush the partial
 /// buffer (interactive prompts have no trailing `\n`).
+// reason: consumed by `Pipeline::tick`, which is the spec'd idle-flush hook
+// but not yet polled from the v0.1 runtime (see `Pipeline::tick` doc-comment
+// and spec §3.4). The constant is exercised by tests and reserved for the
+// next runtime iteration.
+#[allow(dead_code)]
 pub(crate) const FLUSH_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Accumulator that emits complete lines.
@@ -40,6 +37,11 @@ impl LineBuffer {
     /// accumulated buffer (including the new chunk) is flushed as a single
     /// "line" without regex application. The caller is expected to log the
     /// overflow.
+    // reason: thin overflow-discarding wrapper around `feed_with_overflow`;
+    // the live pipeline path always uses `feed_with_overflow` so it can
+    // surface the warning via tracing. Kept as part of the type's
+    // documented surface and exercised by unit tests.
+    #[allow(dead_code)]
     pub(crate) fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         let (lines, _) = self.feed_with_overflow(chunk);
         lines
@@ -80,6 +82,9 @@ impl LineBuffer {
     }
 
     /// If the buffer has been idle since `cutoff`, drain and return it.
+    // reason: consumed by `Pipeline::tick`, the spec'd idle-flush hook not
+    // yet polled from the v0.1 runtime. See the `FLUSH_TIMEOUT` note above.
+    #[allow(dead_code)]
     pub(crate) fn flush_if_stale(&mut self, cutoff: Instant) -> Option<Vec<u8>> {
         if self.inner.is_empty() {
             return None;

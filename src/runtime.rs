@@ -9,11 +9,6 @@
 //! that it may stay blocked on `stdin.read()` until that byte arrives is
 //! documented in spec §3.4 step 7.
 
-// reason: `run` is consumed by the facade (`Tayf::run`, Task 16). Until that
-// task lands there is no in-crate caller, so the dead-code lint flags it.
-// The allow will be removed when the facade wires `runtime::run`.
-#![allow(dead_code)]
-
 use std::io::{self, Read, Write};
 use std::thread::{self, JoinHandle};
 

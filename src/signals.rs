@@ -13,11 +13,6 @@
 //! the `signal_hook` iterator (waking the blocked thread) and joins it. This
 //! keeps signal teardown deterministic and tied to the I/O loop's scope.
 
-// reason: this module is wired up by the I/O loop (Task 17) and the facade
-// (Task 16); until those land the public-in-crate items have no in-crate
-// caller and the dead-code lint flags them. The scope mirrors `pty.rs`.
-#![allow(dead_code)]
-
 use std::thread::{self, JoinHandle};
 
 use signal_hook::consts::{SIGINT, SIGTERM, SIGWINCH};

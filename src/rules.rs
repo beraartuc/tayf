@@ -5,14 +5,6 @@
 //! `RegexSet` fast-path so that switching does not break the public shape.
 //! See spec §3.6 and §3.8.
 
-// reason: this module exposes the rule set consumed by the pipeline module.
-// Pipeline itself is wired into io_loop in Task 7; until then it is only
-// exercised by unit tests, so the dead-code lint flags every name in this
-// transitive chain. The allow scope is the whole module to keep the surface
-// intentional and reviewable in one place; it will be removed once the
-// io_loop pulls Pipeline into the live binary path.
-#![allow(dead_code)]
-
 use regex::bytes::{Regex, RegexSet};
 
 use crate::error::{Error, Result};
@@ -23,6 +15,10 @@ use crate::style::{Color, Style};
 /// `&'static str`) because the filename rule is built dynamically; the cost
 /// of eight heap allocations at startup is negligible.
 pub(crate) struct BuiltinRule {
+    // reason: read by tests (`find_rule` selects by name) and reserved for
+    // diagnostic logging once user-defined rules land; the live compile
+    // path indexes by position so the field is otherwise unread.
+    #[allow(dead_code)]
     pub(crate) name: &'static str,
     pub(crate) pattern: String,
     pub(crate) style: Style,

@@ -20,14 +20,6 @@
 //! and are out of scope. tayf must avoid these in normal operation; the
 //! `disallowed-methods` clippy rule already bans `std::process::exit`.
 
-// reason: `TtyGuard` is consumed by Task 16 (facade) and the Task 19
-// integration smoke test. Until those land, the type's only callers are
-// behind `#[cfg(test)]` in this same module, so the dead-code lint flags
-// the production surface. The allow is module-scoped to keep the
-// intentional gap reviewable in one place; it will be removed when the
-// facade wires `TtyGuard::engage`.
-#![allow(dead_code)]
-
 use std::io::IsTerminal;
 use std::os::fd::{AsFd, RawFd};
 use std::sync::{Mutex, OnceLock};
@@ -55,6 +47,10 @@ static PANIC_RESTORE_STATE: OnceLock<Mutex<Option<Termios>>> = OnceLock::new();
 pub(crate) struct TtyGuard {
     /// Raw stdin fd, stored for identity/debug purposes. Syscalls always go
     /// through `std::io::stdin().as_fd()` to avoid `unsafe` fd construction.
+    // reason: kept on the type as an identity/debug record (see `fd()`).
+    // The Drop path resolves stdin afresh to stay robust if stdin was
+    // redirected; this field is the original-fd witness.
+    #[allow(dead_code)]
     fd: RawFd,
     original: Termios,
 }
@@ -85,6 +81,10 @@ impl TtyGuard {
 
     /// The raw fd this guard was constructed against. Provided for debug
     /// logging and tests; not used by restoration paths.
+    // reason: diagnostic accessor; live binary path does not need it but it
+    // is part of the documented surface and exercised by the Task 19 smoke
+    // test once that lands.
+    #[allow(dead_code)]
     pub(crate) fn fd(&self) -> RawFd {
         self.fd
     }

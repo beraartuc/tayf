@@ -8,14 +8,6 @@
 //! active. When any flag is set, bytes go straight to the writer without
 //! line buffering or rule application.
 
-// reason: this module is the output processing core consumed by the io_loop
-// module (Task 7). Until that task lands, the items are referenced only by
-// the unit tests in this file, so the dead-code lint flags every name. The
-// allow scope is the whole module to keep the surface intentional and
-// reviewable in one place; it will be removed when io_loop starts importing
-// these.
-#![allow(dead_code)]
-
 use std::io::Write;
 use std::time::Instant;
 
@@ -210,6 +202,11 @@ impl Pipeline {
     }
 
     /// Flush any pending partial line if it has been idle long enough.
+    // reason: spec'd idle-flush hook (§3.4). The v0.1 runtime is a pure
+    // blocking-read loop and does not yet poll `tick`; promoting the loop
+    // to a `poll(2)`-driven timer in v0.2 will wire it in. Exercised by
+    // tests via direct calls.
+    #[allow(dead_code)]
     pub(crate) fn tick<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
         if self.sm.passthrough() {
             return Ok(());

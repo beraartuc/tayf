@@ -12,17 +12,14 @@
 //! The pure decision function [`depth_from_env`] is split out so that depth
 //! inference is testable without mutating the process environment.
 
-// reason: `stdout_is_tty` and `detect_depth` are consumed by Task 16 (the
-// `Tayf` facade) which has not landed yet. Only the pure `depth_from_env`
-// helper is exercised by unit tests today, so the dead-code lint flags the
-// production entry points. The allow scope is the whole module to keep the
-// surface intentional and reviewable in one place; it will be removed when
-// the facade wires these in.
-#![allow(dead_code)]
-
 use std::env;
 
 /// Maximum color depth supported by the terminal we are connected to.
+// reason: v0.1 always emits the basic 16-color SGR palette (see `style.rs`)
+// so the facade has no consumer for depth yet. Detection is implemented and
+// tested so v0.2 can branch on it without churn. Same rationale applies to
+// `detect_depth` and `depth_from_env` below.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorDepth {
     /// `TERM=dumb` or no color allowed.
@@ -43,12 +40,14 @@ pub(crate) fn stdout_is_tty() -> bool {
 }
 
 /// Detect the maximum supported color depth from `$COLORTERM` and `$TERM`.
+#[allow(dead_code)] // reason: see `ColorDepth` above.
 pub(crate) fn detect_depth() -> ColorDepth {
     let colorterm = env::var("COLORTERM").ok();
     let term = env::var("TERM").ok();
     depth_from_env(colorterm.as_deref(), term.as_deref())
 }
 
+#[allow(dead_code)] // reason: see `ColorDepth` above; exercised by unit tests.
 fn depth_from_env(colorterm: Option<&str>, term: Option<&str>) -> ColorDepth {
     if matches!(term, Some("dumb")) {
         return ColorDepth::None;

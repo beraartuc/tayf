@@ -4,8 +4,6 @@
 //! Enabled by setting `TAYF_LOG`, e.g. `TAYF_LOG=debug tayf`.
 
 /// Initialize the global subscriber. Safe to call exactly once at program start.
-// reason: wired up by the CLI entry point in Task 11; tests already exercise it.
-#[allow(dead_code)]
 pub(crate) fn init() {
     use tracing_subscriber::EnvFilter;
 

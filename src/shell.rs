@@ -1,12 +1,5 @@
 //! Shell discovery cascade per spec §1 / brainstorming decision 3.
 
-// reason: `discover` and `passwd_shell` are consumed by Task 11 (CLI wiring) and
-// Task 16 (facade). Until those land, only `discover_with_env` is exercised
-// (via unit tests), so the dead-code lint flags the production entry point.
-// The allow scope is the whole module to keep the surface intentional and
-// reviewable in one place; it will be removed when the CLI wires `discover`.
-#![allow(dead_code)]
-
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +15,11 @@ pub(crate) struct ShellSpec {
 impl ShellSpec {
     /// What to pass as argv[0] when spawning. Login shells conventionally
     /// receive a leading `-` (e.g. `-zsh`).
+    // reason: portable-pty 0.8 has no `arg0` setter, so v0.1 passes `-l`
+    // through `CommandBuilder` instead (see `pty::PtySession::spawn`).
+    // Retained for v0.2 when we drop to a custom spawn path and need the
+    // leading-dash argv[0] convention. Exercised by unit tests.
+    #[allow(dead_code)]
     pub(crate) fn argv0(&self, login: bool) -> String {
         let base = self.path.file_name().and_then(|s| s.to_str()).unwrap_or("sh");
         if login {
