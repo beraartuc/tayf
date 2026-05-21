@@ -86,31 +86,54 @@ This project will be read by strangers. Make it look like it was always meant to
 ```
 tayf/
 ├── Cargo.toml
+├── Cargo.lock
+├── build.rs
+├── clippy.toml
+├── rustfmt.toml
+├── deny.toml                          # cargo-deny policy (licenses, advisories)
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md                          # this file
 ├── tayf-tasarim.md                    # master design (Turkish)
+├── .github/
+│   └── workflows/
+│       └── ci.yml                     # fmt + clippy + test + audit + deny
 ├── docs/
 │   └── superpowers/
-│       └── specs/
-│           └── 2026-05-21-tayf-v0.1-design.md
+│       ├── specs/
+│       │   ├── 2026-05-21-tayf-v0.1-design.md
+│       │   └── 2026-05-21-tayf-v0.2.0-design.md
+│       ├── plans/
+│       │   ├── 2026-05-21-tayf-v0.1.md
+│       │   └── 2026-05-21-tayf-v0.1.1-cleanup.md
+│       └── reviews/
+│           └── 2026-05-21-rust-senior-architecture-review.md
 ├── src/
-│   ├── main.rs                        # CLI entry, arg parsing, error → exit code
-│   ├── lib.rs                         # public API, module declarations
-│   ├── cli.rs                         # clap definitions
-│   ├── shell.rs                       # shell discovery ($SHELL → /etc/passwd → /bin/sh)
-│   ├── pty.rs                         # PTY spawn, child lifecycle
-│   ├── tty_guard.rs                   # RAII termios state guard
-│   ├── signals.rs                     # SIGWINCH handler, signal forwarding
-│   ├── io_loop.rs                     # input/output threads, byte plumbing
-│   ├── colorize.rs                    # regex engine, rule application
-│   ├── patterns.rs                    # built-in pattern definitions
-│   ├── line_buffer.rs                 # UTF-8-safe buffering, flush timeout
-│   └── alt_screen.rs                  # minimal alt-screen detection (passthrough toggle)
+│   ├── main.rs                        # CLI entry, ExitCode mapping
+│   ├── lib.rs                         # Tayf::run facade
+│   ├── cli.rs                         # clap derive Args
+│   ├── error.rs                       # tayf::Error enum (thiserror)
+│   ├── shell.rs                       # ShellSpec discovery
+│   ├── pty.rs                         # PtySession + into_parts decomposition
+│   ├── tty_guard.rs                   # RAII raw mode + panic hook
+│   ├── signals.rs                     # signal_hook thread
+│   ├── runtime.rs                     # two-thread I/O loop + shutdown
+│   ├── pipeline.rs                    # TUI mode SM + line buffer + apply_rules
+│   ├── line_buffer.rs                 # UTF-8 safe accumulator
+│   ├── rules.rs                       # Compiled struct + builtin patterns + filename catalog
+│   ├── style.rs                       # Color + Style + SGR audit gate
+│   ├── terminfo.rs                    # TTY detection + winsize helper + color depth
+│   ├── logging.rs                     # tracing init from TAYF_LOG
+│   └── version.rs                     # build-time SHA + rustc info
+├── benches/
+│   ├── throughput.rs                  # criterion throughput benches
+│   └── BASELINE.md                    # recorded baseline numbers
 └── tests/
-    └── integration_smoke.rs           # spawn shell, send command, assert exit
+    ├── integration_smoke.rs           # spawn shell, send command, assert exit
+    └── common/
+        └── mod.rs                     # shared test helpers
 ```
 
 Each file MUST have a module-level doc-comment explaining its purpose, public API, and invariants.
