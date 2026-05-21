@@ -14,6 +14,7 @@ pub mod error;
 pub mod style;
 
 pub(crate) mod line_buffer;
+pub(crate) mod logging;
 pub(crate) mod pipeline;
 pub(crate) mod rules;
 pub(crate) mod shell;
