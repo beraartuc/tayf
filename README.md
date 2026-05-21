@@ -79,6 +79,12 @@ conventions. Their output is never altered by `tayf`.
   one-line progress bar) are still colorized; in rare cases this can
   cause leakage into surrounding color contexts. Full ANSI-aware
   colorization arrives in v0.3.
+- **Bare-unit duration matching (`1m`, `1h`, `1s`) disabled in v0.1.**
+  These would collide with SGR escape sequence final bytes (`\x1b[49m`,
+  etc.) producing visible garbage in colorized prompts. Re-enabled in
+  v0.3 once VTE awareness can answer "is this match inside an escape
+  sequence?" Currently `ns`, `us`, `μs`, `ms` are supported and cover
+  modern logging conventions.
 - **No capture-group colorization.** Each match is wrapped in one style;
   per-group styling lands in v0.5.
 - **First match wins.** Overlapping rule matches resolve by definition order.
