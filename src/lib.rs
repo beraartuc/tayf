@@ -12,8 +12,8 @@
 #![allow(clippy::module_name_repetitions, clippy::missing_errors_doc)]
 #![allow(clippy::multiple_crate_versions)] // reason: unavoidable transitive dep duplicates in portable-pty + signal-hook (bitflags 1/2, nix 0.25/0.27)
 
-pub mod cli;
-pub mod error;
+pub(crate) mod cli;
+pub(crate) mod error;
 pub(crate) mod style;
 pub(crate) mod version;
 
