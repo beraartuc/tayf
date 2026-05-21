@@ -14,7 +14,7 @@ pub fn version_string() -> String {
     let dirty = built_info::GIT_DIRTY.unwrap_or(false);
     let suffix = if dirty { "-dirty" } else { "" };
     format!(
-        "tayf {pkg} (sha {sha}{suffix}, rustc {rustc})",
+        "{pkg} (sha {sha}{suffix}, rustc {rustc})",
         pkg = built_info::PKG_VERSION,
         rustc = built_info::RUSTC_VERSION,
     )
