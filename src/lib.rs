@@ -17,6 +17,7 @@ pub(crate) mod line_buffer;
 pub(crate) mod pipeline;
 pub(crate) mod rules;
 pub(crate) mod shell;
+pub(crate) mod terminfo;
 
 pub use error::{Error, Result};
 
