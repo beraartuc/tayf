@@ -295,7 +295,12 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         },
         BuiltinRule {
             name: "duration",
-            pattern: r"\b\d+(?:\.\d+)?\s?(?:ns|us|μs|ms|s|m|h)\b".into(),
+            // reason: dropping bare `s`, `m`, `h` units that collide with SGR final
+            // bytes (\x1b[49m, etc.) and produce false-positive duration matches inside
+            // escape sequences. Multi-character units cover the modern use cases
+            // (nanosec, microsec, millisec). Tracked in spec §6.2 — full ANSI awareness
+            // arrives in v0.3 to allow the bare units back safely.
+            pattern: r"\b\d+(?:\.\d+)?\s?(?:ns|us|μs|ms)\b".into(),
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
         },
     ]
@@ -407,11 +412,41 @@ mod tests {
     #[test]
     fn duration_matches() {
         assert!(matches("duration", "took 20.291 ms"));
-        assert!(matches("duration", "elapsed 1.5s"));
+        assert!(matches("duration", "elapsed 1500 ms"));
         assert!(matches("duration", "150ms"));
         assert!(matches("duration", "2.5 us"));
         assert!(matches("duration", "100 μs"));
+        assert!(matches("duration", "50 ns"));
+        // v0.1 drops bare `s` / `m` / `h` units because they collide with SGR
+        // final bytes; these intentionally do NOT match anymore:
+        assert!(!matches("duration", "took 1m"));
+        assert!(!matches("duration", "took 1h"));
+        assert!(!matches("duration", "took 1s"));
         assert!(!matches("duration", "milliseconds"));
+    }
+
+    #[test]
+    fn duration_does_not_match_sgr_parameters() {
+        // Regression test for v0.1 SGR-collision bug.
+        // Bytes like "\x1b[0m", "\x1b[49m" must NOT contain a duration match
+        // when scanned as raw bytes — otherwise apply_rules will inject an
+        // escape mid-sequence and break Powerlevel10k-style prompts.
+        use crate::pipeline::apply_rules;
+        let compiled = Compiled::load_builtins().unwrap();
+        let inputs: &[&[u8]] =
+            &[b"\x1b[0m", b"\x1b[49m", b"\x1b[1;39m", b"prefix \x1b[44m text \x1b[0m suffix"];
+        for input in inputs {
+            let mut out = Vec::new();
+            apply_rules(input, &compiled, &mut out).unwrap();
+            // Output must equal input — no SGR injection inside escape sequences.
+            assert_eq!(
+                out,
+                *input,
+                "apply_rules must not modify SGR sequences: input={:?} got={:?}",
+                String::from_utf8_lossy(input),
+                String::from_utf8_lossy(&out)
+            );
+        }
     }
 
     #[test]
