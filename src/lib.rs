@@ -12,6 +12,7 @@
 
 pub mod error;
 pub mod style;
+pub mod version;
 
 pub(crate) mod line_buffer;
 pub(crate) mod logging;
