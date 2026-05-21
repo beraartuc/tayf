@@ -69,21 +69,27 @@ fn partial_line_colorized_after_idle_tick() {
     // A trivial "shell": prints an IPv4-containing prompt with no newline,
     // then sleeps. The sleep is long enough that the only way the IPv4 can
     // reach our output is via the idle-tick flush path.
-    let mut script =
+    let mut tmp =
         tempfile::Builder::new().prefix("tayf-tick-").suffix(".sh").tempfile().expect("tempfile");
-    writeln!(script, "#!/bin/sh").expect("write");
-    writeln!(script, "printf 'host 192.168.1.1 $ '").expect("write");
-    writeln!(script, "sleep 2").expect("write");
-    script.flush().expect("flush");
-    let script_path = script.path().to_path_buf();
+    writeln!(tmp, "#!/bin/sh").expect("write");
+    writeln!(tmp, "printf 'host 192.168.1.1 $ '").expect("write");
+    writeln!(tmp, "sleep 2").expect("write");
+    tmp.flush().expect("flush");
     // Make executable.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script_path).expect("meta").permissions();
+        let mut perms = tmp.as_file().metadata().expect("meta").permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("chmod");
+        tmp.as_file().set_permissions(perms).expect("chmod");
     }
+    // Close the writer fd before spawning tayf. On Linux, `execve(2)` returns
+    // ETXTBSY when any process holds an O_RDWR descriptor for the target
+    // file; macOS does not enforce this. `into_temp_path` drops the `File`
+    // (closing the fd) while keeping the unlink-on-drop responsibility on
+    // the returned `TempPath`, which must outlive the spawned child.
+    let script = tmp.into_temp_path();
+    let script_path = script.to_path_buf();
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -164,22 +170,25 @@ fn input_thread_joins_promptly_after_child_exit() {
     // directly because the path is not guaranteed across all Unix targets
     // tayf supports; a tempfile script with `#!/bin/sh` and `exit 0` is
     // portable and self-documenting.
-    let mut script = tempfile::Builder::new()
+    let mut tmp = tempfile::Builder::new()
         .prefix("tayf-quickexit-")
         .suffix(".sh")
         .tempfile()
         .expect("tempfile");
-    writeln!(script, "#!/bin/sh").expect("write");
-    writeln!(script, "exit 0").expect("write");
-    script.flush().expect("flush");
-    let script_path = script.path().to_path_buf();
+    writeln!(tmp, "#!/bin/sh").expect("write");
+    writeln!(tmp, "exit 0").expect("write");
+    tmp.flush().expect("flush");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script_path).expect("meta").permissions();
+        let mut perms = tmp.as_file().metadata().expect("meta").permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("chmod");
+        tmp.as_file().set_permissions(perms).expect("chmod");
     }
+    // Close the writer fd before spawning tayf. See the sibling test above
+    // for why this matters on Linux (ETXTBSY from `execve(2)`).
+    let script = tmp.into_temp_path();
+    let script_path = script.to_path_buf();
 
     let pty_system = native_pty_system();
     let pair = pty_system
