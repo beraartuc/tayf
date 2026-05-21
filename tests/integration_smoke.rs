@@ -24,6 +24,29 @@ fn version_flag_prints_banner() {
     assert!(s.contains("rustc"), "missing rustc in: {s}");
 }
 
+/// clap's default exit code on parse errors is 2. The v0.1 spec promises
+/// BSD `EX_USAGE` (64); this test pins `main`'s `ErrorKind` mapping so a
+/// future refactor cannot silently regress to clap's default. We invoke the
+/// binary without a PTY because the assertion is purely on the exit status,
+/// and clap writes its error to stderr regardless of whether stdout is a
+/// terminal.
+#[test]
+fn invalid_flag_exits_with_64() {
+    use std::process::Command;
+
+    let out = Command::new(tayf_bin())
+        .arg("--bogus-flag")
+        .output()
+        .expect("spawn tayf with --bogus-flag");
+    assert_eq!(
+        out.status.code(),
+        Some(64),
+        "expected EX_USAGE (64), got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn help_flag_prints_usage() {
     let out = spawn_capture(tayf_bin(), &["--help"], Duration::from_secs(5));

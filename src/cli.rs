@@ -5,7 +5,10 @@
 //!
 //! Public API:
 //! - [`Args`] — parsed CLI arguments.
-//! - [`Args::parse_from_env`] — convenience wrapper invoked from `main`.
+//! - [`Args::try_parse_from_env`] — fallible convenience wrapper invoked from
+//!   `main`. Returning `Result` (rather than exiting internally) lets `main`
+//!   own the exit-code policy: BSD `EX_USAGE` (64) on parse failure, 0 on
+//!   `--help` / `--version`.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -48,13 +51,20 @@ pub struct Args {
 }
 
 impl Args {
-    /// Parse arguments from the process's environment (`std::env::args_os`).
+    /// Try to parse arguments from the process's environment
+    /// (`std::env::args_os`).
     ///
-    /// Exits the process via clap's default error handling on parse failure
-    /// or when `--help` / `--version` is requested.
-    #[must_use]
-    pub fn parse_from_env() -> Self {
-        <Self as Parser>::parse()
+    /// Returns the [`clap::Error`] unchanged so the caller can decide how to
+    /// surface it. `main` uses the error's [`clap::error::ErrorKind`] to map
+    /// `--help` / `--version` to a success exit and every other parse failure
+    /// to BSD `EX_USAGE` (64); clap's own `parse` would exit with code 2,
+    /// which contradicts the v0.1 spec.
+    ///
+    /// # Errors
+    /// Propagates any [`clap::Error`] raised by clap's parser, including the
+    /// non-failure `DisplayHelp` / `DisplayVersion` kinds.
+    pub fn try_parse_from_env() -> std::result::Result<Self, clap::Error> {
+        <Self as Parser>::try_parse()
     }
 }
 
