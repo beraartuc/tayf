@@ -5,11 +5,12 @@
 //! `RegexSet` fast-path so that switching does not break the public shape.
 //! See spec §3.6 and §3.8.
 
-// reason: this module exposes the rule set consumed by the colorize module
-// (Task 7). Until that task lands, the items are referenced only by the unit
-// tests in this file, so the dead-code lint flags every name. The allow scope
-// is the whole module to keep the surface intentional and reviewable in one
-// place; it will be removed when the colorize module starts importing these.
+// reason: this module exposes the rule set consumed by the pipeline module.
+// Pipeline itself is wired into io_loop in Task 7; until then it is only
+// exercised by unit tests, so the dead-code lint flags every name in this
+// transitive chain. The allow scope is the whole module to keep the surface
+// intentional and reviewable in one place; it will be removed once the
+// io_loop pulls Pipeline into the live binary path.
 #![allow(dead_code)]
 
 use regex::bytes::{Regex, RegexSet};

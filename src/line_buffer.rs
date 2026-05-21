@@ -4,11 +4,12 @@
 //! reaches `MAX_BUFFER_BYTES` — in the last case the partial line is flushed
 //! *without* rule application (spec §6.1, "Memory exhaustion").
 
-// reason: this module exposes the line accumulator consumed by the io_loop
-// module (Task 6). Until that task lands, the items are referenced only by the
-// unit tests in this file, so the dead-code lint flags every name. The allow
-// scope is the whole module to keep the surface intentional and reviewable in
-// one place; it will be removed when io_loop starts importing these.
+// reason: this module exposes the line accumulator consumed by the pipeline
+// module. Pipeline itself is wired into io_loop in Task 7; until then it is
+// only exercised by unit tests, so the dead-code lint flags every name in
+// this transitive chain. The allow scope is the whole module to keep the
+// surface intentional and reviewable in one place; it will be removed once
+// the io_loop pulls Pipeline into the live binary path.
 #![allow(dead_code)]
 
 use std::time::{Duration, Instant};
