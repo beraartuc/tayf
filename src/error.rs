@@ -36,7 +36,7 @@ pub enum Error {
     /// A line exceeded the buffer cap; flushed as-is without rule application.
     ///
     /// **Non-fatal — INVARIANT:** This variant must only be constructed for
-    /// `tracing::warn!` logging, never returned from `Result` to propagate via
+    /// `crate::log::warn_msg!` logging, never returned from `Result` to propagate via
     /// `?`. The line-buffer module signals overflow through the dedicated
     /// `(Vec<_>, Option<Error>)` return shape (spec §5 / Task 5), keeping this
     /// variant out of any normal control-flow path. Future contributors who

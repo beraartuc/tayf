@@ -36,8 +36,8 @@ impl LineBuffer {
     /// overflow.
     // reason: thin overflow-discarding wrapper around `feed_with_overflow`;
     // the live pipeline path always uses `feed_with_overflow` so it can
-    // surface the warning via tracing. Kept as part of the type's
-    // documented surface and exercised by unit tests.
+    // surface the warning via `crate::log::warn_msg!`. Kept as part of the
+    // type's documented surface and exercised by unit tests.
     #[allow(dead_code)]
     pub(crate) fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         let (lines, _) = self.feed_with_overflow(chunk);

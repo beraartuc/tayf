@@ -191,7 +191,7 @@ impl Pipeline {
             } else {
                 let (lines, overflow) = self.buffer.feed_with_overflow(segment);
                 if let Some(Error::BufferOverflow { cap }) = overflow {
-                    tracing::warn!(cap, "line buffer overflowed; flushing as-is");
+                    crate::log::warn_msg!("line buffer overflowed; cap={cap}");
                 }
                 for line in lines {
                     apply_rules(&line, &self.rules, out)?;

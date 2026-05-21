@@ -22,7 +22,7 @@ pub(crate) mod style;
 pub(crate) mod version;
 
 pub(crate) mod line_buffer;
-pub(crate) mod logging;
+pub(crate) mod log;
 pub(crate) mod pipeline;
 pub(crate) mod pty;
 pub(crate) mod rules;
@@ -54,7 +54,7 @@ impl Tayf {
     // point; taking ownership is the conventional shape even though we
     // currently only read individual fields.
     pub fn run(args: Args) -> Result<ExitCode> {
-        logging::init();
+        log::init_from_env();
 
         let apply_colors = !args.no_color && terminfo::stdout_is_tty();
 

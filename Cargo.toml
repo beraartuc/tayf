@@ -36,8 +36,6 @@ portable-pty = "0.9"
 regex = "1.10"
 signal-hook = "0.3"
 thiserror = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 # reason: criterion 0.5 — dual MIT/Apache-2.0, actively maintained by
