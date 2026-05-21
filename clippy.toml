@@ -1,0 +1,4 @@
+avoid-breaking-exported-api = true
+disallowed-methods = [
+    { path = "std::process::exit", reason = "Use ExitCode return from main to allow Drop." },
+]
