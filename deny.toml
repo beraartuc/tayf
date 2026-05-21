@@ -23,14 +23,7 @@ deny = []
 
 [advisories]
 yanked = "deny"
-ignore = [
-    # `serial` is unmaintained (last release 2017-07-02). It is pulled in
-    # transitively via portable-pty 0.8 and is not exposed in any code path we
-    # exercise (we only use portable-pty's native PTY APIs, not the serial
-    # backend). Tracked for removal when portable-pty drops the dependency
-    # or we migrate off portable-pty.
-    "RUSTSEC-2017-0008",
-]
+ignore = []
 
 [sources]
 unknown-registry = "deny"

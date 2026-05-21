@@ -2,7 +2,7 @@
 //!
 //! Spawns the tayf binary inside a freshly allocated PTY so the binary sees a
 //! real `tty(4)` and its `--version` / `--help` output reaches the test
-//! process. Built on `portable-pty` 0.8 for cross-platform consistency.
+//! process. Built on `portable-pty` 0.9 for cross-platform consistency.
 
 // reason: integration-test helper — `expect` is the conventional shape here.
 // Tests under `tests/` are not part of the library's production surface, but
