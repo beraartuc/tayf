@@ -6,6 +6,12 @@
 //! (`\x1b[…m` and `\x1b[0m`) and audited by a unit test. See spec §3.7.
 
 /// 16-color ANSI base palette plus 256-indexed and 24-bit RGB.
+// reason: the v0.1 built-in rule set only references a subset of variants
+// (Yellow, BrightYellow, Cyan, BrightRed, Magenta, BrightCyan, Blue, Green),
+// but `Color` is a complete model of the SGR color space — kept whole so
+// `fg_params`/`bg_params` stay symmetric and v0.2 TOML config parsing has a
+// target to land on. Tests in this file exercise the unused variants.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     /// Standard ANSI black (SGR 30 fg / 40 bg).
@@ -128,7 +134,7 @@ impl Style {
     /// Guaranteed to emit only `\x1b[…m` — see `tests::to_sgr_emits_only_sgr_sequences`,
     /// the audit gate for escape injection (CLAUDE.md §3, spec §3.7).
     #[must_use]
-    pub fn to_sgr(&self) -> String {
+    pub fn to_sgr(self) -> String {
         let mut params: Vec<String> = Vec::new();
 
         if self.bold {

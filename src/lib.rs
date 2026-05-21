@@ -14,8 +14,8 @@
 
 pub mod cli;
 pub mod error;
-pub mod style;
-pub mod version;
+pub(crate) mod style;
+pub(crate) mod version;
 
 pub(crate) mod line_buffer;
 pub(crate) mod logging;

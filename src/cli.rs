@@ -1,7 +1,7 @@
 //! Command-line interface definition (clap derive).
 //!
 //! Defines the `tayf` binary's argument surface. `--version` routes through
-//! [`crate::version::version_string`] so the SHA-and-rustc banner is shown.
+//! `crate::version::version_string` so the SHA-and-rustc banner is shown.
 //!
 //! Public API:
 //! - [`Args`] — parsed CLI arguments.
