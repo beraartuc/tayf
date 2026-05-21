@@ -81,9 +81,9 @@ impl Color {
 }
 
 /// Visual styling for a pattern match.
-// reason: SGR attributes (bold, italic, underline, dim) are an enumerated
-// fixed set in the ANSI spec; modelling them as separate bools mirrors the
-// wire format and keeps `to_sgr` a flat fold over independent flags.
+// reason: v0.1 models only four SGR attributes (bold, dim, italic, underline).
+// SGR has more (reverse, strikethrough, blink, hidden, etc.); v0.2 will migrate
+// to a `bitflags!` set if/when the additional attributes are scoped in.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Style {
@@ -209,5 +209,27 @@ mod tests {
     fn default_style_renders_empty_or_zero_m() {
         let s = Style::default().to_sgr();
         assert!(s == "\x1b[0m" || s.is_empty(), "default produced: {s:?}");
+    }
+
+    #[test]
+    fn empty_sgr_iff_no_visible_effect() {
+        // Audit gate: the only legitimate way to_sgr produces an empty string is
+        // a Style with no fg, no bg, and every attribute false. If a future edit
+        // ever lets to_sgr return "" while *some* effect was requested, this
+        // test catches it before the audit gate can be silently bypassed.
+        let visible_cases: Vec<Style> = vec![
+            Style { fg: Some(Color::Red), ..Style::DEFAULT },
+            Style { bg: Some(Color::Blue), ..Style::DEFAULT },
+            Style { bold: true, ..Style::DEFAULT },
+            Style { dim: true, ..Style::DEFAULT },
+            Style { italic: true, ..Style::DEFAULT },
+            Style { underline: true, ..Style::DEFAULT },
+        ];
+        for s in &visible_cases {
+            assert!(!s.to_sgr().is_empty(), "visible style {s:?} unexpectedly produced empty SGR");
+        }
+        // Inverse direction: only Style::DEFAULT (all None / all false) produces "".
+        assert!(Style::DEFAULT.to_sgr().is_empty());
+        assert!(Style::default().to_sgr().is_empty());
     }
 }
