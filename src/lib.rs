@@ -16,6 +16,7 @@ pub mod style;
 pub(crate) mod line_buffer;
 pub(crate) mod pipeline;
 pub(crate) mod rules;
+pub(crate) mod shell;
 
 pub use error::{Error, Result};
 
