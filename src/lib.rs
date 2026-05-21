@@ -10,7 +10,9 @@
 // portable-pty and signal-hook; we cannot dedupe without forking upstream crates.
 #![allow(clippy::multiple_crate_versions)]
 
-// Modules are added in subsequent tasks.
+pub mod error;
+
+pub use error::{Error, Result};
 
 /// Placeholder facade. Implemented in Task 16.
 pub struct Tayf;
