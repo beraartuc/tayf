@@ -134,17 +134,6 @@ impl Writer {
     pub(crate) fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.inner.write_all(buf)
     }
-
-    /// Close the master write side so that the input thread receives EPIPE
-    /// on its next write and exits cleanly. See spec §3.4.
-    // reason: documented teardown helper. v0.1 accepts the "input thread may
-    // remain blocked on stdin until the OS reaps it" limit (spec §3.4
-    // step 7); a future facade iteration that joins the input thread will
-    // call this. Kept on the type so callers see the supported shape.
-    #[allow(dead_code)]
-    pub(crate) fn shutdown(self) {
-        drop(self.inner);
-    }
 }
 
 impl Resizer {
