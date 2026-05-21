@@ -13,6 +13,7 @@
 pub mod error;
 pub mod style;
 
+pub(crate) mod line_buffer;
 pub(crate) mod rules;
 
 pub use error::{Error, Result};
