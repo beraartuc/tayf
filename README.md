@@ -88,9 +88,9 @@ conventions. Their output is never altered by `tayf`.
 - **No capture-group colorization.** Each match is wrapped in one style;
   per-group styling lands in v0.5.
 - **First match wins.** Overlapping rule matches resolve by definition order.
-- **Partial-line prompts are not colorized.** Interactive prompts that lack
-  a trailing newline within 50ms are flushed without rule application;
-  this is fixed in v0.2 when the tick-flush goes live.
+- **Partial-line prompts colorize on a 50ms idle tick.** The 50ms delay is
+  the cost of avoiding a per-byte flush; finer-grained flush-on-prompt
+  arrives in v0.3 with VTE awareness.
 - **Linux + Unix + macOS only.** Windows support is post-v1.0.
 - **If `tayf` is killed by SIGKILL or aborts**, terminal state may be left
   in raw mode. Run `reset` to recover.

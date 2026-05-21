@@ -9,6 +9,10 @@
 // for the only v0.1.1 use sites.
 #![warn(unsafe_code)]
 #![warn(clippy::pedantic, clippy::cargo)]
+// reason: `module_name_repetitions` is idiomatic for our file-per-concept layout
+// (e.g., `tty_guard::TtyGuard`); `missing_errors_doc` is satisfied at the
+// public-API boundary (`Tayf::run`) and tracked in the spec, not duplicated
+// on every `pub(crate)` fn.
 #![allow(clippy::module_name_repetitions, clippy::missing_errors_doc)]
 #![allow(clippy::multiple_crate_versions)] // reason: unavoidable transitive dep duplicates in portable-pty + signal-hook (bitflags 1/2, nix 0.25/0.27)
 
