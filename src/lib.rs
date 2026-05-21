@@ -23,6 +23,7 @@ pub(crate) mod logging;
 pub(crate) mod pipeline;
 pub(crate) mod pty;
 pub(crate) mod rules;
+pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod signals;
 pub(crate) mod terminfo;
