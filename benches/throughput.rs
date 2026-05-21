@@ -27,11 +27,12 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughpu
 
 use tayf::__bench__::{apply_rules, load_builtin_rules};
 
-/// Synthetic IPv4-heavy input. Three IPv4 addresses plus two log-level
-/// tokens per line, repeated to amortize criterion's per-iter overhead.
-/// Verified to match the IPv4 and `log_level` rules.
+/// Synthetic IPv4-heavy input. Three IPv4 addresses, one HTTP status code,
+/// and one log-level token per line — five non-overlapping matches total,
+/// repeated to amortize criterion's per-iter overhead. Verified to exercise
+/// the IPv4, `http_status`, and `log_level` rules.
 fn ipv4_heavy_input() -> Vec<u8> {
-    "connect 192.168.1.1 to 10.0.0.1 via 172.16.0.1 OK ERROR\n".repeat(1000).into_bytes()
+    "connect 192.168.1.1 to 10.0.0.1 via 172.16.0.1 status 200 OK ERROR\n".repeat(1000).into_bytes()
 }
 
 fn bench_apply_rules_ipv4_heavy(c: &mut Criterion) {

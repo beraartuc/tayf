@@ -12,26 +12,28 @@ over ~5s) apply.
 - Profile: `[profile.release]` from `Cargo.toml` (lto = "thin",
   codegen-units = 1, opt-level = 3, panic = "abort")
 - Input shape: 1000 copies of
-  `"connect 192.168.1.1 to 10.0.0.1 via 172.16.0.1 OK ERROR\n"`
-  (56 KB total), exercising the IPv4 and `log_level` rules on every line.
+  `"connect 192.168.1.1 to 10.0.0.1 via 172.16.0.1 status 200 OK ERROR\n"`
+  (67 KB total), exercising the IPv4, `http_status`, and `log_level` rules
+  on every line.
 
 ## apply_rules / ipv4-heavy
 
-Per-line rule scanner (six matches per line, no overlapping conflicts).
+Per-line rule scanner (five matches per line: three IPv4 + one
+`http_status` + one `log_level`, no overlapping conflicts).
 
-- Time per iter: 5.49 ms – 5.50 ms – 5.50 ms (low / mean / high)
-- Throughput:    9.704 MiB/s – 9.714 MiB/s – 9.724 MiB/s
-- Outliers:      2 / 100 mild
+- Time per iter: 7.46 ms – 7.48 ms – 7.51 ms (low / mean / high)
+- Throughput:    8.512 MiB/s – 8.545 MiB/s – 8.570 MiB/s
+- Outliers:      1 / 100 high severe
 
 ## passthrough / write_all
 
-`Cursor<Vec<u8>>::write_all` on the same 56 KB input — models tayf's
+`Cursor<Vec<u8>>::write_all` on the same 67 KB input — models tayf's
 TUI passthrough path (alt-screen, bracketed paste, mouse). Essentially
 the `cat`-equivalent denominator for the spec §7 overhead target.
 
-- Time per iter: 1.06 µs – 1.10 µs – 1.15 µs
-- Throughput:    45.247 GiB/s – 47.250 GiB/s – 49.181 GiB/s
-- Outliers:      7 / 100 (5 mild, 2 severe)
+- Time per iter: 1.29 µs – 1.33 µs – 1.38 µs
+- Throughput:    45.342 GiB/s – 46.781 GiB/s – 48.273 GiB/s
+- Outliers:      1 / 100 high mild
 
 ## Notes & caveats
 
