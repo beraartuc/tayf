@@ -12,12 +12,9 @@ use crate::error::Error;
 pub(crate) const MAX_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Idle timeout. If no newline arrives within this window, flush the partial
-/// buffer (interactive prompts have no trailing `\n`).
-// reason: consumed by `Pipeline::tick`, which is the spec'd idle-flush hook
-// but not yet polled from the v0.1 runtime (see `Pipeline::tick` doc-comment
-// and spec §3.4). The constant is exercised by tests and reserved for the
-// next runtime iteration.
-#[allow(dead_code)]
+/// buffer (interactive prompts have no trailing `\n`). Consumed by
+/// `Pipeline::tick`, which the output thread polls on a `poll(2)` timeout of
+/// the same duration (`runtime::POLL_TIMEOUT_MS`).
 pub(crate) const FLUSH_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Accumulator that emits complete lines.
@@ -82,9 +79,6 @@ impl LineBuffer {
     }
 
     /// If the buffer has been idle since `cutoff`, drain and return it.
-    // reason: consumed by `Pipeline::tick`, the spec'd idle-flush hook not
-    // yet polled from the v0.1 runtime. See the `FLUSH_TIMEOUT` note above.
-    #[allow(dead_code)]
     pub(crate) fn flush_if_stale(&mut self, cutoff: Instant) -> Option<Vec<u8>> {
         if self.inner.is_empty() {
             return None;

@@ -202,11 +202,10 @@ impl Pipeline {
     }
 
     /// Flush any pending partial line if it has been idle long enough.
-    // reason: spec'd idle-flush hook (§3.4). The v0.1 runtime is a pure
-    // blocking-read loop and does not yet poll `tick`; promoting the loop
-    // to a `poll(2)`-driven timer in v0.2 will wire it in. Exercised by
-    // tests via direct calls.
-    #[allow(dead_code)]
+    ///
+    /// Called from the poll-driven output thread on every 50ms timeout
+    /// (see `runtime::spawn_output_thread`). In passthrough mode the
+    /// pipeline holds no buffered content, so this is a no-op.
     pub(crate) fn tick<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
         if self.sm.passthrough() {
             return Ok(());

@@ -5,13 +5,21 @@
 //! on macOS Ok(0). Either way the output thread drains its partial line and
 //! exits. Main joins the output thread, then returns the child's exit code.
 //!
+//! The output thread is **`poll(2)`-driven** with a 50ms timeout so that
+//! interactive prompts (which do not end in `\n`) are flushed through
+//! `Pipeline::tick` within one tick instead of waiting for either a newline
+//! or the 64KB line-buffer cap (spec §3.4, `LineBuffer::FLUSH_TIMEOUT`).
+//!
 //! Input thread reads stdin, writes PTY master. **v0.1 limitation:** the
 //! input thread is NOT joined and may remain blocked on `stdin.read()` when
 //! tayf exits. The OS reaps it on process exit. Future versions will add a
 //! self-pipe wakeup so the thread terminates promptly (spec §3.4 step 7).
 
 use std::io::{self, Read, Write};
+use std::os::fd::BorrowedFd;
 use std::thread::{self, JoinHandle};
+
+use nix::poll::{poll, PollFd, PollFlags};
 
 use crate::error::Result;
 use crate::pipeline::Pipeline;
@@ -22,6 +30,10 @@ use crate::rules::Compiled;
 /// macOS and a common Linux default; larger sizes do not measurably help
 /// throughput at the latencies tayf cares about.
 const READ_BUF_BYTES: usize = 8 * 1024;
+
+/// Idle-flush tick interval. Matches `LineBuffer::FLUSH_TIMEOUT` so a partial
+/// line idle for one cap is guaranteed to flush on the next poll wake-up.
+const POLL_TIMEOUT_MS: nix::libc::c_int = 50;
 
 /// Run the I/O loop until the child exits.
 ///
@@ -58,6 +70,10 @@ pub(crate) fn run(
     Ok(code)
 }
 
+// reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments; the
+// single `unsafe { BorrowedFd::borrow_raw(raw_fd) }` below would otherwise be
+// rejected by `-D warnings`. See the SAFETY block inside for the invariant.
+#[allow(unsafe_code)]
 fn spawn_output_thread(
     mut reader: Reader,
     mut pipeline: Pipeline,
@@ -74,7 +90,34 @@ fn spawn_output_thread(
         .spawn(move || -> io::Result<()> {
             let mut stdout = io::stdout().lock();
             let mut buf = vec![0u8; READ_BUF_BYTES];
+            let raw_fd = reader.as_raw_fd();
             loop {
+                // SAFETY: `raw_fd` is the PTY master fd. Per the invariant
+                // documented on `Reader::master_fd`, the `MasterPty` that
+                // owns this fd is held alive by the `Resizer` retained in
+                // `Tayf::run`'s scope for the entire lifetime of this
+                // thread, so the fd is valid for the borrow below.
+                let borrowed = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+                let mut pollfds = [PollFd::new(&borrowed, PollFlags::POLLIN)];
+                match poll(&mut pollfds, POLL_TIMEOUT_MS) {
+                    Ok(0) => {
+                        // Timeout: flush any idle partial line via the
+                        // pipeline's tick. In passthrough mode the pipeline
+                        // was never fed, so the tick is skipped to avoid
+                        // emitting an empty SGR pair on the next prompt
+                        // refresh.
+                        if apply_colors {
+                            pipeline.tick(&mut stdout)?;
+                            stdout.flush()?;
+                        }
+                        continue;
+                    }
+                    Ok(_) => {}
+                    // Spurious EINTR (e.g. SIGWINCH delivered to this
+                    // thread): loop and retry the poll.
+                    Err(nix::errno::Errno::EINTR) => continue,
+                    Err(e) => return Err(io::Error::from(e)),
+                }
                 match reader.read(&mut buf) {
                     Ok(0) => break, // macOS: child closed
                     Ok(n) => {
@@ -88,8 +131,7 @@ fn spawn_output_thread(
                     // Linux signals child-closed by surfacing EIO on the
                     // master fd; macOS returns Ok(0). Treat both as EOF.
                     Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => break,
-                    // Spurious EINTR (e.g. SIGWINCH delivered to this
-                    // thread): loop and retry the read.
+                    // Spurious EINTR: loop and retry the read.
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     Err(e) => return Err(e),
                 }

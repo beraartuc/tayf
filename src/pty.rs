@@ -11,6 +11,7 @@
 //! `Arc<Mutex<PtySession>>` shared across every thread.
 
 use std::io::{Read, Write};
+use std::os::fd::RawFd;
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -27,6 +28,19 @@ pub(crate) struct PtySession {
 /// Read half of the master.
 pub(crate) struct Reader {
     inner: Box<dyn Read + Send>,
+    /// Raw fd of the master, captured at `PtySession::into_parts`. Used to
+    /// poll for readiness with a 50ms idle timeout in the output thread
+    /// (`runtime::spawn_output_thread`). The reader's actual bytes come from a
+    /// `dup`'d fd inside `inner`, but `dup`'d fds share the same open file
+    /// description, so polling this fd accurately reports readiness for
+    /// `inner.read`.
+    ///
+    /// **Lifetime invariant:** the underlying open file is owned by the
+    /// `MasterPty` held inside the `Resizer` returned alongside this `Reader`.
+    /// The facade (`Tayf::run`) keeps that `Resizer` alive — via the signal
+    /// thread's `SignalGuard` — until after the output thread joins, so the fd
+    /// stays open for the entire lifetime of this `Reader`.
+    master_fd: RawFd,
 }
 
 /// Write half of the master.
@@ -86,12 +100,17 @@ impl PtySession {
     pub(crate) fn into_parts(self) -> Result<(Reader, Writer, Resizer, ChildHandle)> {
         let reader = self.master.try_clone_reader().map_err(io_err)?;
         let writer = self.master.take_writer().map_err(io_err)?;
+        let master_fd = self.master.as_raw_fd().ok_or_else(|| {
+            crate::error::Error::Pty(std::io::Error::other(
+                "master pty does not expose a raw fd; required for poll-driven I/O loop",
+            ))
+        })?;
 
         let master = Arc::new(Mutex::new(self.master));
         let resizer = Resizer { master };
 
         Ok((
-            Reader { inner: reader },
+            Reader { inner: reader, master_fd },
             Writer { inner: writer },
             resizer,
             ChildHandle { child: self.child },
@@ -102,6 +121,12 @@ impl PtySession {
 impl Reader {
     pub(crate) fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.inner.read(buf)
+    }
+
+    /// Raw fd suitable for `poll(2)`. See the `Reader::master_fd` field
+    /// doc-comment for the lifetime invariant the caller must uphold.
+    pub(crate) fn as_raw_fd(&self) -> RawFd {
+        self.master_fd
     }
 }
 
