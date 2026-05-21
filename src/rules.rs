@@ -284,6 +284,11 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Magenta), ..Style::DEFAULT },
         },
         BuiltinRule {
+            name: "filename",
+            pattern: build_filename_pattern(),
+            style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
+        },
+        BuiltinRule {
             name: "fqdn",
             pattern: r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.){1,}[A-Za-z]{2,24}\b".into(),
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
@@ -292,11 +297,6 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             name: "duration",
             pattern: r"\b\d+(?:\.\d+)?\s?(?:ns|us|μs|ms|s|m|h)\b".into(),
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
-        },
-        BuiltinRule {
-            name: "filename",
-            pattern: build_filename_pattern(),
-            style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
         },
     ]
 }
@@ -451,5 +451,38 @@ mod tests {
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
         assert_eq!(n, 8, "v0.1 ships exactly eight built-in rules");
+    }
+
+    #[test]
+    fn filename_wins_over_fqdn_for_known_extensions() {
+        use crate::pipeline::apply_rules;
+        let compiled = Compiled::load_builtins().unwrap();
+        let mut out = Vec::new();
+        apply_rules(b"edit claude.md please\n", &compiled, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // BrightCyan fg = SGR 96; Blue fg = SGR 34. Verify the filename style wins.
+        assert!(s.contains("96"), "expected filename SGR 96 (bright cyan), got: {s:?}");
+        assert!(!s.contains("\x1b[34m"), "should not contain blue SGR 34: {s:?}");
+    }
+
+    #[test]
+    fn filename_wins_for_rust_source() {
+        use crate::pipeline::apply_rules;
+        let compiled = Compiled::load_builtins().unwrap();
+        let mut out = Vec::new();
+        apply_rules(b"vim src/main.rs and tests.rs\n", &compiled, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("96"), "expected bright cyan: {s:?}");
+    }
+
+    #[test]
+    fn fqdn_still_matches_when_no_filename_competes() {
+        use crate::pipeline::apply_rules;
+        let compiled = Compiled::load_builtins().unwrap();
+        let mut out = Vec::new();
+        apply_rules(b"visit api.example.org today\n", &compiled, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // Blue SGR 34 should appear (no extension to conflict).
+        assert!(s.contains("34"), "expected fqdn SGR 34 (blue): {s:?}");
     }
 }
