@@ -16,7 +16,7 @@
 //! self-pipe wakeup so the thread terminates promptly (spec §3.4 step 7).
 
 use std::io::{self, Read, Write};
-use std::os::fd::BorrowedFd;
+use std::os::fd::{BorrowedFd, RawFd};
 use std::thread::{self, JoinHandle};
 
 use nix::poll::{poll, PollFd, PollFlags};
@@ -70,10 +70,38 @@ pub(crate) fn run(
     Ok(code)
 }
 
-// reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments; the
-// single `unsafe { BorrowedFd::borrow_raw(raw_fd) }` below would otherwise be
-// rejected by `-D warnings`. See the SAFETY block inside for the invariant.
+/// Borrow the PTY master fd for the duration of one `poll(2)` call.
+///
+/// # Safety
+/// The caller must guarantee that `raw_fd` refers to an open file
+/// descriptor that remains valid (i.e. not closed by any other code path)
+/// for the entire lifetime of the returned `BorrowedFd`. In the tayf
+/// output thread:
+///
+/// * `raw_fd` is the PTY master fd. The `MasterPty` that owns it is held
+///   alive by the `Resizer` retained in `Tayf::run`'s scope (via
+///   `SignalGuard`) for the entire lifetime of the output thread, so the
+///   underlying fd is not closed while the borrow is live.
+/// * `Reader::inner` holds a separate `dup`'d fd (a different fd integer
+///   pointing at the same open file description). Closing that dup on
+///   `Reader` drop does not invalidate `raw_fd`, so the borrow remains
+///   sound even across `Reader` mutation.
+///
+/// The returned `'static` lifetime is a lie that the caller MUST shorten
+/// by only using the value within a stack frame whose lifetime is
+/// covered by the invariants above; never store it past that frame.
+// reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments;
+// this is the single point in the runtime that must opt in. The helper
+// isolates the unsafe block so no future edit to `spawn_output_thread`
+// can accidentally introduce a second unsafe operation under one allow.
 #[allow(unsafe_code)]
+unsafe fn borrow_master_fd(raw_fd: RawFd) -> BorrowedFd<'static> {
+    // SAFETY: Delegated to the caller — see the `# Safety` section above.
+    // In the output thread this is upheld by the `Resizer`-anchored
+    // lifetime of the `MasterPty` and the dup-fd non-aliasing argument.
+    unsafe { BorrowedFd::borrow_raw(raw_fd) }
+}
+
 fn spawn_output_thread(
     mut reader: Reader,
     mut pipeline: Pipeline,
@@ -95,9 +123,18 @@ fn spawn_output_thread(
                 // SAFETY: `raw_fd` is the PTY master fd. Per the invariant
                 // documented on `Reader::master_fd`, the `MasterPty` that
                 // owns this fd is held alive by the `Resizer` retained in
-                // `Tayf::run`'s scope for the entire lifetime of this
-                // thread, so the fd is valid for the borrow below.
-                let borrowed = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+                // `Tayf::run`'s scope (via `SignalGuard`) for the entire
+                // lifetime of this thread, so the fd is valid for the
+                // borrow below. The `dup`'d fd held by `Reader::inner` is
+                // a different fd integer and closing it on `Reader` drop
+                // does not affect this borrow. The returned `'static`
+                // borrow is used only within this iteration of the loop.
+                // reason: the helper's `# Safety` contract is satisfied
+                // above; the allow scopes only to this one statement so a
+                // future `unsafe` slip elsewhere in this function still
+                // trips the crate-level `warn(unsafe_code)` lint.
+                #[allow(unsafe_code)]
+                let borrowed = unsafe { borrow_master_fd(raw_fd) };
                 let mut pollfds = [PollFd::new(&borrowed, PollFlags::POLLIN)];
                 match poll(&mut pollfds, POLL_TIMEOUT_MS) {
                     Ok(0) => {

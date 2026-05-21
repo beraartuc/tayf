@@ -103,6 +103,11 @@ fn partial_line_colorized_after_idle_tick() {
         }
     }
     let _ = child.kill();
+    // Reap the signalled child so it does not linger as a zombie until
+    // process exit. `wait` returns promptly here because the child was
+    // just killed; we ignore the status because the kill makes it
+    // meaningless for the assertion below.
+    let _ = child.wait();
 
     let s = String::from_utf8_lossy(&out);
     assert!(
