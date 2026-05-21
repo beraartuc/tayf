@@ -187,7 +187,14 @@ impl Pipeline {
             let segment = &chunk[cursor..i];
             cursor = i;
 
-            if pass_before {
+            let pass_after = self.sm.passthrough();
+            let became_passthrough = !pass_before && pass_after;
+            if pass_before || became_passthrough {
+                // Either we WERE in passthrough for the whole segment, OR we
+                // transitioned INTO passthrough mid-segment (segment ends with
+                // the trigger sequence). Either way, those bytes are terminal
+                // control sequences and must reach the terminal immediately —
+                // not via LineBuffer.
                 out.write_all(segment)?;
             } else {
                 let (lines, overflow) = self.buffer.feed_with_overflow(segment);
@@ -376,39 +383,99 @@ mod pipeline_tests {
     use super::*;
 
     #[test]
-    fn alt_screen_bytes_bypass_rules() {
+    fn alt_screen_toggle_forwarded_and_content_bypasses_rules() {
         let compiled = Compiled::load_builtins().unwrap();
         let mut pipe = Pipeline::new(compiled);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?1049h", &mut out).unwrap();
         pipe.feed(b"192.168.1.1\n", &mut out).unwrap();
-        assert!(out.windows(11).any(|w| w == b"192.168.1.1"));
-        // The SGR introducer for our IPv4 style must NOT appear after the toggle.
-        let post_toggle = &out[8..];
-        assert!(!post_toggle.windows(2).any(|w| w == b"\x1b["));
+
+        // Toggle bytes must be forwarded to the terminal.
+        let toggle_pos = out.windows(8).position(|w| w == b"\x1b[?1049h");
+        let content_pos = out.windows(11).position(|w| w == b"192.168.1.1");
+        assert!(toggle_pos.is_some(), "alt-screen toggle missing from out: {out:?}");
+        assert!(content_pos.is_some(), "content missing from out: {out:?}");
+        assert!(toggle_pos < content_pos, "toggle must precede content");
+
+        // No SGR introducer for the IPv4 rule should appear (passthrough mode).
+        // The only \x1b[ in the output should be the toggle itself.
+        let esc_count = out.windows(2).filter(|w| w == b"\x1b[").count();
+        assert_eq!(esc_count, 1, "exactly one \\x1b[ expected (the toggle): {out:?}");
     }
 
     #[test]
-    fn bracketed_paste_bypasses_rules() {
+    fn bracketed_paste_toggle_forwarded_and_bypasses_rules() {
         let compiled = Compiled::load_builtins().unwrap();
         let mut pipe = Pipeline::new(compiled);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?2004h", &mut out).unwrap();
         pipe.feed(b"claude.md\n", &mut out).unwrap();
-        assert!(out.windows(9).any(|w| w == b"claude.md"));
-        let post_toggle = &out[8..];
-        assert!(!post_toggle.windows(2).any(|w| w == b"\x1b["));
+
+        let toggle_pos = out.windows(8).position(|w| w == b"\x1b[?2004h");
+        let content_pos = out.windows(9).position(|w| w == b"claude.md");
+        assert!(toggle_pos.is_some());
+        assert!(content_pos.is_some());
+        assert!(toggle_pos < content_pos);
+
+        let esc_count = out.windows(2).filter(|w| w == b"\x1b[").count();
+        assert_eq!(esc_count, 1, "exactly the toggle: {out:?}");
     }
 
     #[test]
-    fn mouse_mode_bypasses_rules() {
+    fn mouse_toggle_forwarded_and_bypasses_rules() {
         let compiled = Compiled::load_builtins().unwrap();
         let mut pipe = Pipeline::new(compiled);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?1000h", &mut out).unwrap();
         pipe.feed(b"server 10.0.0.1 ready\n", &mut out).unwrap();
-        assert!(out.windows(8).any(|w| w == b"10.0.0.1"));
-        let post_toggle = &out[8..];
-        assert!(!post_toggle.windows(2).any(|w| w == b"\x1b["));
+
+        let toggle_pos = out.windows(8).position(|w| w == b"\x1b[?1000h");
+        let content_pos = out.windows(8).position(|w| w == b"10.0.0.1");
+        assert!(toggle_pos.is_some());
+        assert!(content_pos.is_some());
+        assert!(toggle_pos < content_pos);
+
+        let esc_count = out.windows(2).filter(|w| w == b"\x1b[").count();
+        assert_eq!(esc_count, 1, "exactly the toggle: {out:?}");
+    }
+
+    #[test]
+    fn toggle_and_content_in_single_chunk() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let mut pipe = Pipeline::new(compiled);
+        let mut out = Vec::new();
+        // One chunk containing both the alt-screen enter and the content.
+        pipe.feed(b"\x1b[?1049hfile.md content\n", &mut out).unwrap();
+
+        let toggle_pos = out.windows(8).position(|w| w == b"\x1b[?1049h");
+        let content_pos = out.windows(7).position(|w| w == b"file.md");
+        assert!(toggle_pos.is_some(), "toggle must be forwarded: {out:?}");
+        assert!(content_pos.is_some(), "content must be forwarded: {out:?}");
+        assert!(toggle_pos < content_pos);
+
+        // No filename-rule SGR — we're in passthrough.
+        let esc_count = out.windows(2).filter(|w| w == b"\x1b[").count();
+        assert_eq!(esc_count, 1);
+    }
+
+    #[test]
+    fn exit_passthrough_returns_to_rule_application() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let mut pipe = Pipeline::new(compiled);
+        let mut out = Vec::new();
+        pipe.feed(b"\x1b[?1049hinside vim\n\x1b[?1049lback to shell file.md\n", &mut out).unwrap();
+
+        // Both toggles forwarded.
+        assert!(out.windows(8).any(|w| w == b"\x1b[?1049h"));
+        assert!(out.windows(8).any(|w| w == b"\x1b[?1049l"));
+        // After exiting passthrough, "file.md" must be colorized — at least one SGR
+        // wrapping it should appear after the exit toggle.
+        let exit_pos = out.windows(8).position(|w| w == b"\x1b[?1049l").unwrap();
+        let post_exit = &out[exit_pos + 8..];
+        // Look for an SGR introducer in the post-exit slice.
+        assert!(
+            post_exit.windows(2).any(|w| w == b"\x1b["),
+            "post-exit content should be rule-wrapped: {post_exit:?}"
+        );
     }
 }
