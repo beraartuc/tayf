@@ -2,9 +2,10 @@
 all-features = true
 
 [licenses]
-# Licenses we allow across the dependency tree. Keep this list tight; every
-# entry should match a license actually present in our transitive deps or be a
-# common permissive license we are willing to accept for future deps.
+# Licenses we allow across the dependency tree. Keep this list tight: every
+# entry must match a license actually present in our transitive deps. When a
+# new dep brings a new license, cargo-deny will fail loudly and we can decide
+# whether to allow it explicitly here.
 #
 # Unicode-3.0 is required for the ICU crates pulled in transitively via
 # `idna` -> `url` -> `git2` -> `built` (build-dep). It is the modern
@@ -12,13 +13,7 @@ all-features = true
 allow = [
     "MIT",
     "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
-    "OpenSSL",
-    "MPL-2.0",
 ]
 confidence-threshold = 0.93
 
