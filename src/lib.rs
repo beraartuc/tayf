@@ -74,3 +74,42 @@ impl Tayf {
         Ok(ExitCode::from(code))
     }
 }
+
+/// Bench-only adapters around `pub(crate)` internals so the `benches/`
+/// crate (an external crate from rustc's perspective) can drive the hot
+/// path directly.
+///
+/// Not part of the public API — hidden from rustdoc, no stability
+/// guarantees, may change or vanish between minor releases. See
+/// `benches/throughput.rs`.
+#[doc(hidden)]
+pub mod __bench__ {
+    use std::io::Write;
+
+    /// Opaque newtype carrying the compiled built-in rule set. Constructed
+    /// via [`load_builtin_rules`] and passed back into [`apply_rules`].
+    pub struct CompiledRules(crate::rules::Compiled);
+
+    /// Compile the v0.1 built-in rule set (same path the production runtime
+    /// uses). See `src/rules.rs::Compiled::load_builtins`.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::RegexCompile`] if any built-in pattern fails
+    /// to compile. In practice this never fires — the patterns are tested.
+    pub fn load_builtin_rules() -> crate::Result<CompiledRules> {
+        crate::rules::Compiled::load_builtins().map(CompiledRules)
+    }
+
+    /// Run the per-line rule scanner against `line`, emitting the SGR-wrapped
+    /// output to `out`. Mirrors `src/pipeline.rs::apply_rules`.
+    ///
+    /// # Errors
+    /// Forwards any `std::io::Error` produced by `out`.
+    pub fn apply_rules<W: Write>(
+        line: &[u8],
+        rules: &CompiledRules,
+        out: &mut W,
+    ) -> std::io::Result<()> {
+        crate::pipeline::apply_rules(line, &rules.0, out)
+    }
+}

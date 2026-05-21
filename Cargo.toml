@@ -43,7 +43,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 built = { version = "0.7", features = ["git2"] }
 
 [dev-dependencies]
+# reason: criterion 0.5 — dual MIT/Apache-2.0, actively maintained by
+# bheisler, used only by `benches/throughput.rs` to record v0.1 baseline
+# throughput numbers (spec §7). No `unsafe` is introduced in our bench
+# code; criterion itself uses minimal `unsafe` (well-audited).
+criterion = "0.5"
 tempfile = "3.10"
+
+[[bench]]
+name = "throughput"
+harness = false
 
 [profile.release]
 lto = "thin"

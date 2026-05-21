@@ -104,6 +104,18 @@ through a single audited SGR sequence. The full threat model is in
 If you find a security issue, please open an issue with the label
 `security`, or email the maintainer if it requires private disclosure.
 
+## Performance
+
+See [`benches/throughput.rs`](./benches/throughput.rs) and
+[`benches/BASELINE.md`](./benches/BASELINE.md) for current numbers.
+Target: <20% overhead vs native `cat` (spec §7).
+
+Reproduce locally with:
+
+```bash
+cargo bench --bench throughput
+```
+
 ## License
 
 Dual-licensed under either of:
