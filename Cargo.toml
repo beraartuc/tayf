@@ -39,9 +39,6 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-[build-dependencies]
-built = { version = "0.7", features = ["git2"] }
-
 [dev-dependencies]
 # reason: criterion 0.5 — dual MIT/Apache-2.0, actively maintained by
 # bheisler, used only by `benches/throughput.rs` to record v0.1 baseline

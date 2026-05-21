@@ -7,9 +7,11 @@ all-features = true
 # new dep brings a new license, cargo-deny will fail loudly and we can decide
 # whether to allow it explicitly here.
 #
-# Unicode-3.0 is required for the ICU crates pulled in transitively via
-# `idna` -> `url` -> `git2` -> `built` (build-dep). It is the modern
-# replacement for Unicode-DFS-2016 and is OSI-approved.
+# Unicode-3.0 is required by `unicode-ident` (transitive dep of `proc-macro2`,
+# which is pulled in by essentially every proc-macro crate we use:
+# clap_derive, thiserror-impl, tracing-attributes, serde_derive, etc.). It is
+# the modern replacement for Unicode-DFS-2016 and is OSI-approved. Removing
+# proc-macro2 from the tree is not realistic for an idiomatic Rust project.
 allow = [
     "MIT",
     "Apache-2.0",
