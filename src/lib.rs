@@ -21,6 +21,7 @@ pub(crate) mod pipeline;
 pub(crate) mod rules;
 pub(crate) mod shell;
 pub(crate) mod terminfo;
+pub(crate) mod tty_guard;
 
 pub use error::{Error, Result};
 
