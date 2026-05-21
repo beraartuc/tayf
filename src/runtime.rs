@@ -1,13 +1,14 @@
 //! Two-thread runtime + shutdown orchestration. See spec §3.4.
 //!
-//! `run` spawns one output thread (PTY master read → `Pipeline` → stdout)
-//! and one input thread (stdin → PTY master write), then blocks on the
-//! child. When the child exits the output thread observes EIO (Linux) or
-//! `Ok(0)` (macOS) on its next read and terminates after draining any
-//! partial line. The input thread is released by `Writer::shutdown` issued
-//! from the facade (Task 16) on the next stdin byte; the v0.1 limitation
-//! that it may stay blocked on `stdin.read()` until that byte arrives is
-//! documented in spec §3.4 step 7.
+//! Output thread reads PTY master, feeds Pipeline, writes stdout. When the
+//! child exits, the slave side closes; on Linux the master read returns EIO,
+//! on macOS Ok(0). Either way the output thread drains its partial line and
+//! exits. Main joins the output thread, then returns the child's exit code.
+//!
+//! Input thread reads stdin, writes PTY master. **v0.1 limitation:** the
+//! input thread is NOT joined and may remain blocked on `stdin.read()` when
+//! tayf exits. The OS reaps it on process exit. Future versions will add a
+//! self-pipe wakeup so the thread terminates promptly (spec §3.4 step 7).
 
 use std::io::{self, Read, Write};
 use std::thread::{self, JoinHandle};

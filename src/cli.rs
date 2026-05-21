@@ -37,7 +37,7 @@ pub struct Args {
     #[arg(long, value_name = "PATH")]
     pub shell: Option<PathBuf>,
 
-    /// Spawn the shell as a login shell (e.g. -zsh as argv[0]).
+    /// Spawn the shell as a login shell (e.g. -zsh as `argv[0]`).
     #[arg(long, default_value_t = false)]
     pub login: bool,
 

@@ -8,21 +8,37 @@
 /// 16-color ANSI base palette plus 256-indexed and 24-bit RGB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
+    /// Standard ANSI black (SGR 30 fg / 40 bg).
     Black,
+    /// Standard ANSI red (SGR 31 fg / 41 bg).
     Red,
+    /// Standard ANSI green (SGR 32 fg / 42 bg).
     Green,
+    /// Standard ANSI yellow (SGR 33 fg / 43 bg).
     Yellow,
+    /// Standard ANSI blue (SGR 34 fg / 44 bg).
     Blue,
+    /// Standard ANSI magenta (SGR 35 fg / 45 bg).
     Magenta,
+    /// Standard ANSI cyan (SGR 36 fg / 46 bg).
     Cyan,
+    /// Standard ANSI white (SGR 37 fg / 47 bg).
     White,
+    /// Bright ANSI black (SGR 90 fg / 100 bg).
     BrightBlack,
+    /// Bright ANSI red (SGR 91 fg / 101 bg).
     BrightRed,
+    /// Bright ANSI green (SGR 92 fg / 102 bg).
     BrightGreen,
+    /// Bright ANSI yellow (SGR 93 fg / 103 bg).
     BrightYellow,
+    /// Bright ANSI blue (SGR 94 fg / 104 bg).
     BrightBlue,
+    /// Bright ANSI magenta (SGR 95 fg / 105 bg).
     BrightMagenta,
+    /// Bright ANSI cyan (SGR 96 fg / 106 bg).
     BrightCyan,
+    /// Bright ANSI white (SGR 97 fg / 107 bg).
     BrightWhite,
     /// 256-color palette index.
     Indexed(u8),
@@ -87,11 +103,17 @@ impl Color {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Style {
+    /// Foreground color, if any.
     pub fg: Option<Color>,
+    /// Background color, if any.
     pub bg: Option<Color>,
+    /// Bold attribute (SGR 1).
     pub bold: bool,
+    /// Italic attribute (SGR 3).
     pub italic: bool,
+    /// Underline attribute (SGR 4).
     pub underline: bool,
+    /// Dim attribute (SGR 2).
     pub dim: bool,
 }
 

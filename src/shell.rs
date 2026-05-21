@@ -13,7 +13,7 @@ pub(crate) struct ShellSpec {
 }
 
 impl ShellSpec {
-    /// What to pass as argv[0] when spawning. Login shells conventionally
+    /// What to pass as `argv[0]` when spawning. Login shells conventionally
     /// receive a leading `-` (e.g. `-zsh`).
     // reason: portable-pty 0.8 has no `arg0` setter, so v0.1 passes `-l`
     // through `CommandBuilder` instead (see `pty::PtySession::spawn`).

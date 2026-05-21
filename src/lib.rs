@@ -68,7 +68,9 @@ impl Tayf {
 
         drop(guard); // explicit; Drop would handle it but make ordering clear
 
-        let code: u8 = u8::try_from(exit_code & 0xff).unwrap_or(1);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // reason: exit_code & 0xff is structurally in 0..=255
+        let code = (exit_code & 0xff) as u8;
         Ok(ExitCode::from(code))
     }
 }

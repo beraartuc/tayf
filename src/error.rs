@@ -20,9 +20,7 @@ pub enum Error {
     Pty(#[from] io::Error),
 
     /// Terminal control failed (termios get/set, ioctl).
-    #[error(
-        "terminal control failed: {0}. Run with --no-color to bypass terminal manipulation, or report this if your stdin is a real TTY."
-    )]
+    #[error("terminal control failed: {0}. tayf must be launched from a real terminal; piping stdin or running without a TTY is not supported in v0.1.")]
     Tty(#[from] nix::errno::Errno),
 
     /// Built-in or user regex failed to compile.
@@ -79,7 +77,7 @@ mod tests {
         let e: Error = nix::errno::Errno::EIO.into();
         let msg = e.to_string();
         assert!(msg.contains("terminal control failed"));
-        assert!(msg.contains("--no-color"));
+        assert!(msg.contains("real terminal") || msg.contains("not supported"));
     }
 
     #[test]
