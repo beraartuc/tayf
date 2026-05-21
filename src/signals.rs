@@ -55,7 +55,7 @@ pub(crate) fn spawn_handler(resizer: Resizer, child_pid: Option<u32>) -> Result<
             for sig in &mut signals {
                 match sig {
                     SIGWINCH => {
-                        if let Some((rows, cols)) = read_winsize() {
+                        if let Some((rows, cols)) = crate::terminfo::winsize() {
                             let _ = resizer.resize(rows, cols);
                         }
                     }
@@ -77,24 +77,6 @@ pub(crate) fn spawn_handler(resizer: Resizer, child_pid: Option<u32>) -> Result<
         .map_err(Error::Signal)?;
 
     Ok(SignalGuard { handle: Some(handle), closer })
-}
-
-// reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments; the
-// `-D warnings` gate would otherwise reject the TIOCGWINSZ call.
-#[allow(unsafe_code)]
-fn read_winsize() -> Option<(u16, u16)> {
-    use nix::libc::{ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ};
-    // SAFETY: TIOCGWINSZ is a read-only ioctl; the kernel writes into our
-    // local `winsize` from a file descriptor we own (stdout). The struct
-    // layout matches the kernel's expectation.
-    let mut ws: winsize = unsafe { std::mem::zeroed() };
-    #[allow(clippy::useless_conversion)] // reason: TIOCGWINSZ type differs per-target
-    let rc = unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ as _, std::ptr::addr_of_mut!(ws)) };
-    if rc != 0 {
-        None
-    } else {
-        Some((ws.ws_row, ws.ws_col))
-    }
 }
 
 fn forward_to_pgid(child_pid: i32, sig: i32) {

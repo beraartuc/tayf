@@ -4,8 +4,9 @@
 //! `docs/superpowers/specs/2026-05-21-tayf-v0.1-design.md` for the full design.
 
 // Crate-wide policy: unsafe is permitted only with a SAFETY comment;
-// reviewer enforces. See src/pty.rs::current_term_size for the sole use
-// in v0.1 (TIOCGWINSZ ioctl).
+// reviewer enforces. See `src/terminfo.rs::winsize` (TIOCGWINSZ ioctl) and
+// `src/runtime.rs::borrow_master_fd` (PTY master fd borrow for `poll(2)`)
+// for the only v0.1.1 use sites.
 #![warn(unsafe_code)]
 #![warn(clippy::pedantic, clippy::cargo)]
 #![allow(clippy::module_name_repetitions, clippy::missing_errors_doc)]

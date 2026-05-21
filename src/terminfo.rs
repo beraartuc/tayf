@@ -39,6 +39,42 @@ pub(crate) fn stdout_is_tty() -> bool {
     isatty(STDOUT_FILENO).unwrap_or(false)
 }
 
+/// Query the controlling terminal's window size via `TIOCGWINSZ`.
+///
+/// Returns `Some((rows, cols))` on success and `None` when the ioctl fails —
+/// the common cases being stdout not being a TTY (e.g. redirected to a file
+/// or pipe) or the kernel rejecting the request. Pixel dimensions reported
+/// by the kernel are discarded; v0.1 has no consumer for them, and the
+/// `PtySize` callers already pass `pixel_{width,height}: 0` on the fallback
+/// path.
+///
+/// This is the sole TIOCGWINSZ call site in v0.1.1; the PTY-spawn and
+/// `SIGWINCH` paths both route through here.
+// reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments; the
+// `-D warnings` gate would otherwise reject the ioctl call.
+#[allow(unsafe_code)]
+pub(crate) fn winsize() -> Option<(u16, u16)> {
+    use nix::libc::{ioctl, winsize as LibcWinsize, STDOUT_FILENO, TIOCGWINSZ};
+    // SAFETY: `LibcWinsize` is a `#[repr(C)]` plain-old-data struct of
+    // integer fields, so the all-zero bit pattern is a valid inhabitant
+    // (`std::mem::zeroed()` is sound).
+    let mut ws: LibcWinsize = unsafe { std::mem::zeroed() };
+    // SAFETY: `STDOUT_FILENO` is a fd we own (the process's standard output;
+    // never closed by tayf itself). `TIOCGWINSZ` is a read-only ioctl: the
+    // kernel writes into the `LibcWinsize` we pass and reads nothing else
+    // from our address space. The pointer comes from `addr_of_mut!` on a
+    // local that no other reference observes for the duration of the call,
+    // so exclusivity holds. On any failure (non-TTY, EINVAL, ...) we return
+    // `None` and `ws` is dropped untouched.
+    #[allow(clippy::useless_conversion)] // reason: TIOCGWINSZ type differs per-target
+    let rc = unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ as _, std::ptr::addr_of_mut!(ws)) };
+    if rc == 0 {
+        Some((ws.ws_row, ws.ws_col))
+    } else {
+        None
+    }
+}
+
 /// Detect the maximum supported color depth from `$COLORTERM` and `$TERM`.
 #[allow(dead_code)] // reason: see `ColorDepth` above.
 pub(crate) fn detect_depth() -> ColorDepth {

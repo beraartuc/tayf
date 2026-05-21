@@ -66,12 +66,8 @@ impl PtySession {
     /// child spawn fails.
     pub(crate) fn spawn(spec: &ShellSpec) -> Result<Self> {
         let pty_system = native_pty_system();
-        let size = current_term_size().unwrap_or(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        let (rows, cols) = crate::terminfo::winsize().unwrap_or((24, 80));
+        let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
         let pair = pty_system.openpty(size).map_err(io_err)?;
 
@@ -167,29 +163,6 @@ impl ChildHandle {
     pub(crate) fn pid(&self) -> Option<u32> {
         self.child.process_id()
     }
-}
-
-// reason: the crate-wide policy is `warn(unsafe_code)` with SAFETY comments;
-// this is the sole v0.1 unsafe site (TIOCGWINSZ ioctl). The `-D warnings`
-// gate would otherwise reject it.
-#[allow(unsafe_code)]
-fn current_term_size() -> Option<PtySize> {
-    use nix::libc::{ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ};
-    // SAFETY: TIOCGWINSZ writes into the local `winsize` from a file descriptor
-    // we own (stdout). The struct layout matches the kernel's expectation. On
-    // failure we return None.
-    let mut ws: winsize = unsafe { std::mem::zeroed() };
-    #[allow(clippy::useless_conversion)] // reason: TIOCGWINSZ type differs per-target
-    let rc = unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ as _, std::ptr::addr_of_mut!(ws)) };
-    if rc != 0 {
-        return None;
-    }
-    Some(PtySize {
-        rows: ws.ws_row,
-        cols: ws.ws_col,
-        pixel_width: ws.ws_xpixel,
-        pixel_height: ws.ws_ypixel,
-    })
 }
 
 fn io_err(e: impl std::fmt::Display) -> crate::error::Error {
