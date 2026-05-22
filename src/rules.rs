@@ -17,7 +17,7 @@ const REGEX_SIZE_LIMIT_BYTES: usize = 1 << 20;
 /// One built-in rule: a name (for diagnostics), a regex pattern source, and
 /// the style applied to each match. The pattern is owned `String` (not
 /// `&'static str`) because the filename rule is built dynamically; the cost
-/// of eight heap allocations at startup is negligible.
+/// of a handful of heap allocations at startup is negligible.
 pub(crate) struct BuiltinRule {
     pub(crate) name: String,
     pub(crate) pattern: String,
@@ -265,14 +265,16 @@ const TS_ISO8601: &str =
     r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:[Zz]|[+-]\d{2}:?\d{2})?\b";
 const TS_SYSLOG: &str =
     r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2}\b";
-const TS_APACHE: &str = r"\d{1,2}/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}";
-const TS_RFC2822: &str = r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} (?:GMT|UTC|[+-]\d{4})";
+const TS_APACHE: &str = r"\b\d{1,2}/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}";
+const TS_RFC2822: &str = r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} (?:GMT|UTC|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[+-]\d{4})";
 
+/// Join `TS_ISO8601`, `TS_SYSLOG`, `TS_APACHE`, `TS_RFC2822` as a single
+/// non-capturing alternation suitable for `regex::bytes::Regex`.
 fn build_timestamp_pattern() -> String {
     format!("(?:{TS_ISO8601})|(?:{TS_SYSLOG})|(?:{TS_APACHE})|(?:{TS_RFC2822})")
 }
 
-/// Construct the eight built-in rules. Returns a fresh `Vec` because the
+/// Construct the built-in rules. Returns a fresh `Vec` because the
 /// filename rule contains a dynamically built pattern string. See spec §3.6
 /// and §3.8.
 pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
@@ -345,7 +347,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     ]
 }
 
-/// Names of the eight built-in rules. Mirrors the order of [`builtin_rules`].
+/// Names of the built-in rules. Mirrors the order of [`builtin_rules`].
 pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "permission",
     "timestamp",
@@ -829,6 +831,7 @@ mod tests {
     fn timestamp_matches_rfc2822() {
         assert!(matches("timestamp", "Date: Wed, 22 May 2026 10:30:45 GMT"));
         assert!(matches("timestamp", "Date: Wed, 22 May 2026 10:30:45 +0300"));
+        assert!(matches("timestamp", "Date: Wed, 22 May 2026 10:30:45 EST"));
     }
 
     #[test]
