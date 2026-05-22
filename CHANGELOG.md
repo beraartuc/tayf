@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-05-22
+
+### Added
+
+- Preset color themes embedded in the binary. Two themes ship in this release: `dark` (explicit defaults, identical to running tayf without a theme — a copy-and-edit template) and `light` (re-tuned palette for light-background terminals).
+- `--theme <NAME>` CLI flag. CLI value overrides the config-file value.
+- `[general] theme = "..."` in `~/.config/tayf/config.toml`. Defaults to `None` (no theme).
+- New `Error::Theme { name, available }` variant; unknown theme names exit with BSD `EX_USAGE` (64) and list the available themes in stderr.
+
+### Fixed
+
+- Light-background terminal portability. Built-in styles `permission` (`White + dim`), `timestamp` (`BrightBlack`), `ipv6` (`BrightYellow`), and `ipv4` (`Yellow + bold`) were invisible or low-contrast on light backgrounds. The new `light` theme provides a readable palette without requiring a user config.
+
+### Notes
+
+- No new dependencies. No public API change beyond the additive `--theme` CLI flag and the additive `[general] theme` config field. Theme layer slots into the existing `apply_user_rules` cascade (built-ins → theme → user config).
+- Theme files are baked into the binary via `include_str!`. Users wanting a custom theme should still use the user-config layer (which is applied after the theme layer and so wins on conflicts).
+- Automatic background detection (`COLORFGBG` / OSC 11) is deferred to v0.3.
+
+[0.2.3]: https://github.com/beraartuc/tayf/releases/tag/v0.2.3
+
 ## [0.2.2] — 2026-05-22
 
 ### Added
