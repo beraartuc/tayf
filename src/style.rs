@@ -114,9 +114,6 @@ impl Color {
     /// Returns a human-readable error string on any unrecognised or
     /// out-of-range input. Callers wrap this into `Error::Config` with file
     /// path + line context.
-    // reason: first caller (`config::parse_color_field`) lands in v0.2.0 Task 4;
-    // until then the function is only exercised by unit tests in this file.
-    #[allow(dead_code)]
     pub(crate) fn parse_str(input: &str) -> Result<Self, String> {
         let trimmed = input.trim();
         // Lowercase once for branch dispatch so `COLOR(178)`, `RGB(...)`,
@@ -181,9 +178,6 @@ impl Color {
     }
 }
 
-// reason: helper for `Color::parse_str`; same dead-code window — first
-// non-test caller arrives with v0.2.0 Task 4.
-#[allow(dead_code)]
 fn parse_hex(rest: &str) -> Option<Color> {
     if rest.len() != 6 || !rest.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
@@ -207,9 +201,6 @@ impl Color {
     /// - None: always `None`.
     ///
     /// `pub(crate)` rather than `pub` — only `Compiled::load` calls it.
-    // reason: first caller (`Compiled::load`) lands in v0.2.0 Task 8;
-    // until then the function is only exercised by unit tests in this file.
-    #[allow(dead_code)]
     #[must_use]
     pub(crate) fn downgrade(self, depth: crate::terminfo::ColorDepth) -> Option<Color> {
         use crate::terminfo::ColorDepth as D;
@@ -257,9 +248,6 @@ impl Style {
     /// terminal that supports SGR at all.
     ///
     /// `pub(crate)` rather than `pub` — only `Compiled::load` calls it.
-    // reason: first caller (`Compiled::load`) lands in v0.2.0 Task 8;
-    // until then the function is only exercised by unit tests in this file.
-    #[allow(dead_code)]
     #[must_use]
     pub(crate) fn downgrade(self, depth: crate::terminfo::ColorDepth) -> Self {
         Style {
@@ -271,8 +259,6 @@ impl Style {
 }
 
 /// Map an 8-bit RGB triple into xterm's 6×6×6 color cube (indices 16..=231).
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
     // Pure grayscale gets the 232..=255 ramp (24 levels).
     if r == g && g == b {
@@ -292,8 +278,6 @@ fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
 }
 
 /// Quantize a single 8-bit channel to the xterm cube level `0..=5`.
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn quantize(v: u8) -> u8 {
     // Cube levels: 0, 95, 135, 175, 215, 255.
     match v {
@@ -307,8 +291,6 @@ fn quantize(v: u8) -> u8 {
 }
 
 /// Inverse of `rgb_to_xterm_256` for indices `16..=255` (RGB approximation).
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn xterm_256_to_rgb(n: u8) -> (u8, u8, u8) {
     if n < 16 {
         // Low palette — return canonical ANSI rgb approximations.
@@ -328,8 +310,6 @@ fn xterm_256_to_rgb(n: u8) -> (u8, u8, u8) {
     (cube_level(r), cube_level(g), cube_level(b))
 }
 
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn cube_level(q: u8) -> u8 {
     match q {
         0 => 0,
@@ -341,8 +321,6 @@ fn cube_level(q: u8) -> u8 {
     }
 }
 
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn ansi_from_low_index(n: u8) -> Color {
     match n {
         0 => Color::Black,
@@ -364,8 +342,6 @@ fn ansi_from_low_index(n: u8) -> Color {
     }
 }
 
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn ansi_rgb_approx(n: u8) -> (u8, u8, u8) {
     // Standard VGA approximations of the 16-color ANSI palette.
     match n {
@@ -388,8 +364,6 @@ fn ansi_rgb_approx(n: u8) -> (u8, u8, u8) {
     }
 }
 
-// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
-#[allow(dead_code)]
 fn nearest_ansi_basic(r: u8, g: u8, b: u8) -> Color {
     let mut best = (u32::MAX, 0u8);
     for n in 0u8..=15u8 {

@@ -14,7 +14,7 @@
 // public-API boundary (`Tayf::run`) and tracked in the spec, not duplicated
 // on every `pub(crate)` fn.
 #![allow(clippy::module_name_repetitions, clippy::missing_errors_doc)]
-#![allow(clippy::multiple_crate_versions)] // reason: portable-pty 0.9 still pulls bitflags 1.x while nix 0.28 and rustix (via tempfile dev-dep) use bitflags 2.x — out of our control until portable-pty updates.
+#![allow(clippy::multiple_crate_versions)] // reason: portable-pty 0.9 still pulls thiserror 1.x (via filedescriptor) while our direct dep is on thiserror 2.x; toml 0.9 transitively pulls winnow 0.7 alongside winnow 1.0 (via toml_parser). All from upstream crates we don't control.
 
 pub(crate) mod cli;
 pub(crate) mod config;

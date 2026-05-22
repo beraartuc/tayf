@@ -46,5 +46,9 @@ fn map_error_to_exit_code(err: &Error) -> u8 {
         Error::RegexCompile(_) => 70, // EX_SOFTWARE
         Error::BufferOverflow { .. } => 70,
         Error::Config { .. } => 64, // EX_USAGE
+        // reason: `Error` is `#[non_exhaustive]` for forward compat; future
+        // variants default to EX_SOFTWARE until explicitly mapped. New
+        // variants SHOULD be added above this arm with the appropriate code.
+        _ => 70,
     }
 }

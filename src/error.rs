@@ -9,6 +9,7 @@ use std::io;
 
 /// All recoverable errors produced by tayf.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Could not determine which shell to launch.
     #[error("could not determine shell: {0}. Set $SHELL or pass --shell <path>.")]
@@ -111,7 +112,6 @@ fn sanitize_for_display(message: &str) -> String {
 impl Error {
     /// Build a [`Error::Config`] from a `toml::de::Error`, extracting the
     /// 1-based line number when the source span is available.
-    #[allow(dead_code)] // reason: first non-test caller lands in Task 4 (config::parse).
     #[allow(clippy::needless_pass_by_value)]
     // reason: the diagnostic is single-shot — callers obtain `err` from
     // `toml::from_str(..).unwrap_err()` and never reuse it. Taking by value
