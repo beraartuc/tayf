@@ -38,10 +38,11 @@ use crate::terminfo::ColorDepth;
 ///
 /// # Errors
 /// Returns any error surfaced by [`crate::config::load`] (with the
-/// caller's explicit `path`) or [`crate::rules::Compiled::load`].
+/// caller's explicit `path`) or [`crate::rules::Compiled::load_with_theme`].
 pub(crate) fn reload_once(
     handle: &ArcSwap<Compiled>,
     path: Option<&Path>,
+    theme: Option<&str>,
     depth: ColorDepth,
 ) -> Result<()> {
     // Load using the same resolver the initial run used. `config::load`
@@ -51,7 +52,7 @@ pub(crate) fn reload_once(
     let cfg = loaded.as_ref().map(|(c, _)| c);
     let path_str = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
-    let compiled = Compiled::load(cfg, path_str.as_deref(), depth)?;
+    let compiled = Compiled::load_with_theme(cfg, path_str.as_deref(), theme, depth)?;
     handle.store(Arc::new(compiled));
     Ok(())
 }
@@ -74,9 +75,13 @@ impl ReloadOrchestrator {
     /// `config_path` is the path resolved at startup; it is re-used on
     /// every reload (we do NOT re-walk XDG fallbacks at runtime —
     /// avoids env-race surprises mid-session).
+    /// `theme` is the effective theme resolved at startup (CLI `--theme`
+    /// or `[general] theme`); it is re-applied on every reload so a
+    /// config edit cannot silently drop the active preset.
     pub(crate) fn spawn(
         rules_handle: Arc<ArcSwap<Compiled>>,
         config_path: Option<PathBuf>,
+        theme: Option<String>,
         depth: ColorDepth,
         rx: Receiver<ReloadRequest>,
     ) -> Self {
@@ -89,7 +94,9 @@ impl ReloadOrchestrator {
             .name("tayf-reload".into())
             .spawn(move || {
                 while let Ok(req) = rx.recv() {
-                    if let Err(e) = reload_once(&rules_handle, config_path.as_deref(), depth) {
+                    if let Err(e) =
+                        reload_once(&rules_handle, config_path.as_deref(), theme.as_deref(), depth)
+                    {
                         crate::log::warn_msg!(
                             "config reload failed ({req:?}): {e}; keeping previous rule set"
                         );
@@ -160,7 +167,7 @@ style = { fg = "yellow", bold = true }
 "#,
         );
 
-        super::reload_once(&handle, Some(&path), ColorDepth::Truecolor).unwrap();
+        super::reload_once(&handle, Some(&path), None, ColorDepth::Truecolor).unwrap();
 
         let after = handle.load_full();
         assert!(!Arc::ptr_eq(&before, &after), "reload_once must replace the Arc on success");
@@ -174,12 +181,32 @@ style = { fg = "yellow", bold = true }
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "this is = not valid = toml\n");
 
-        let err = super::reload_once(&handle, Some(&path), ColorDepth::Truecolor)
+        let err = super::reload_once(&handle, Some(&path), None, ColorDepth::Truecolor)
             .expect_err("invalid toml must fail reload");
         assert!(matches!(err, crate::error::Error::Config { .. }));
 
         let after = handle.load_full();
         assert!(Arc::ptr_eq(&before, &after), "reload_once must NOT swap the Arc on failure");
+    }
+
+    #[test]
+    fn reload_once_preserves_theme() {
+        // Build a handle from no-theme defaults; reload with Some("light") and
+        // verify the resulting styles match the light theme (permission becomes
+        // Color::Black + dim). Regression guard against the wiring dropping the
+        // theme through reload.
+        use crate::rules::BUILTIN_NAMES;
+        use crate::style::Color;
+
+        let handle =
+            Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().expect("builtins compile")));
+        super::reload_once(&handle, None, Some("light"), ColorDepth::Truecolor)
+            .expect("reload with theme must succeed");
+
+        let compiled = handle.load();
+        let idx = BUILTIN_NAMES.iter().position(|n| *n == "permission").unwrap();
+        assert_eq!(compiled.styles[idx].fg, Some(Color::Black));
+        assert!(compiled.styles[idx].dim);
     }
 
     // Deliberately NO `reload_once_with_none_path_*` test here — see plan
@@ -209,6 +236,7 @@ style = { fg = "yellow" }
         let _orchestrator = super::ReloadOrchestrator::spawn(
             Arc::clone(&handle),
             Some(path.clone()),
+            None,
             ColorDepth::Truecolor,
             rx,
         );
@@ -236,6 +264,7 @@ style = { fg = "yellow" }
         let _orchestrator = super::ReloadOrchestrator::spawn(
             Arc::clone(&handle),
             Some(path),
+            None,
             ColorDepth::Truecolor,
             rx,
         );

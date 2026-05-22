@@ -90,13 +90,24 @@ impl Tayf {
         let config_ref = loaded.as_ref().map(|(c, _)| c);
         let config_path: Option<String> = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
+        // Resolve the effective theme: CLI `--theme` wins over `[general] theme`;
+        // both may be absent. Threaded through compile + reload so config edits
+        // don't silently drop the active theme.
+        let effective_theme: Option<String> =
+            args.theme.clone().or_else(|| config_ref.and_then(|c| c.general.theme.clone()));
+
         // Compile rules BEFORE engaging the TTY guard. Rule validation
         // (missing pattern, missing style, bad regex, duplicate names,
-        // invalid color) lives inside `Compiled::load` via
+        // invalid color) lives inside `Compiled::load_with_theme` via
         // `config::apply_user_rules`; surfacing those errors before the
         // guard keeps the terminal in cooked mode and lets `Command::output`
         // callers (integration tests) observe exit code 64 cleanly.
-        let compiled = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
+        let compiled = rules::Compiled::load_with_theme(
+            config_ref,
+            config_path.as_deref(),
+            effective_theme.as_deref(),
+            effective_depth,
+        )?;
         let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
 
         // The reload channel: senders go to the signal thread (always)
@@ -131,6 +142,7 @@ impl Tayf {
         let _orchestrator = reload::ReloadOrchestrator::spawn(
             Arc::clone(&rules),
             loaded.as_ref().map(|(_, p)| p.clone()),
+            effective_theme.clone(),
             effective_depth,
             reload_rx,
         );
