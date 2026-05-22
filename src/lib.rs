@@ -32,6 +32,7 @@ pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod signals;
 pub(crate) mod terminfo;
+pub(crate) mod themes;
 pub(crate) mod tty_guard;
 pub(crate) mod watch;
 
