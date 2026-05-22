@@ -62,12 +62,27 @@ pub fn spawn_for_interaction(
     args: &[&str],
     size: portable_pty::PtySize,
 ) -> (Box<dyn portable_pty::MasterPty + Send>, Box<dyn portable_pty::Child + Send + Sync>) {
+    spawn_for_interaction_with_env(cmd, args, &[], size)
+}
+
+/// Same as [`spawn_for_interaction`] but applies per-child env overrides.
+/// The host process env is left untouched (no `std::env::set_var` calls),
+/// which keeps cargo-test parallelism safe.
+pub fn spawn_for_interaction_with_env(
+    cmd: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    size: portable_pty::PtySize,
+) -> (Box<dyn portable_pty::MasterPty + Send>, Box<dyn portable_pty::Child + Send + Sync>) {
     let pty_system = portable_pty::native_pty_system();
     let pair = pty_system.openpty(size).expect("openpty");
 
     let mut builder = portable_pty::CommandBuilder::new(cmd);
     for a in args {
         builder.arg(a);
+    }
+    for (k, v) in env {
+        builder.env(k, v);
     }
     let child = pair.slave.spawn_command(builder).expect("spawn");
     drop(pair.slave);
