@@ -13,13 +13,15 @@
 //! the `signal_hook` iterator (waking the blocked thread) and joins it. This
 //! keeps signal teardown deterministic and tied to the I/O loop's scope.
 
+use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 
-use signal_hook::consts::{SIGINT, SIGTERM, SIGWINCH};
+use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
 
 use crate::error::{Error, Result};
 use crate::pty::Resizer;
+use crate::reload::ReloadRequest;
 
 /// Owning handle to the signal thread. Drop closes the signal iterator and
 /// joins the thread.
@@ -41,12 +43,21 @@ impl Drop for SignalGuard {
 /// `child_pid` is forwarded to as the process-group leader on
 /// `SIGINT`/`SIGTERM`; when `None` (rare — `portable_pty` could not report a
 /// pid) forwarding is silently skipped, since there is no group to target.
+/// `reload_tx`, when `Some`, receives a
+/// [`ReloadRequest::SignalHup`](crate::reload::ReloadRequest::SignalHup) on
+/// every delivered `SIGHUP`. When `None`, `SIGHUP` is accepted by the
+/// signal iterator but otherwise ignored (no panic, no default
+/// disposition).
 ///
 /// # Errors
 /// Returns [`Error::Signal`] if `signal_hook` cannot register the requested
 /// signals or the OS refuses to spawn the dedicated thread.
-pub(crate) fn spawn_handler(resizer: Resizer, child_pid: Option<u32>) -> Result<SignalGuard> {
-    let mut signals = Signals::new([SIGWINCH, SIGINT, SIGTERM]).map_err(Error::Signal)?;
+pub(crate) fn spawn_handler(
+    resizer: Resizer,
+    child_pid: Option<u32>,
+    reload_tx: Option<Sender<ReloadRequest>>,
+) -> Result<SignalGuard> {
+    let mut signals = Signals::new([SIGWINCH, SIGINT, SIGTERM, SIGHUP]).map_err(Error::Signal)?;
     let closer = signals.handle();
 
     let handle = thread::Builder::new()
@@ -68,6 +79,13 @@ pub(crate) fn spawn_handler(resizer: Resizer, child_pid: Option<u32>) -> Result<
                             if let Ok(pid_i32) = i32::try_from(pid) {
                                 forward_to_pgid(pid_i32, sig);
                             }
+                        }
+                    }
+                    SIGHUP => {
+                        // Best-effort: orchestrator may have exited
+                        // (channel closed). Silent drop in that case.
+                        if let Some(tx) = &reload_tx {
+                            let _ = tx.send(ReloadRequest::SignalHup);
                         }
                     }
                     _ => {}

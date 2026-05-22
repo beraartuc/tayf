@@ -104,7 +104,7 @@ impl Tayf {
         let (reader, writer, resizer, child) = session.into_parts()?;
         let child_pid = child.pid();
 
-        let _signal_guard = signals::spawn_handler(resizer, child_pid)?;
+        let _signal_guard = signals::spawn_handler(resizer, child_pid, None)?;
 
         let exit_code = runtime::run(reader, writer, child, Arc::clone(&rules), apply_colors)?;
 
