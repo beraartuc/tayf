@@ -12,10 +12,25 @@ all-features = true
 # thiserror-impl, etc.). It is the modern replacement for Unicode-DFS-2016
 # and is OSI-approved. Removing proc-macro2 from the tree is not realistic
 # for an idiomatic Rust project.
+#
+# CC0-1.0 is the public-domain dedication used by `notify` 8.x (the cross-
+# platform fs watcher we adopted in v0.2.1 for config hot reload). The
+# Creative Commons Zero waiver is OSI-recognized as "Free / Libre" by the
+# FSF and imposes no copyleft contagion on tayf. Reviewing notify's
+# repository confirms the maintainer's intent: the crate is dedicated to
+# the public domain.
+#
+# ISC is the permissive license used by the `inotify` family (`inotify` +
+# `inotify-sys`), pulled in transitively by `notify` on Linux. Functionally
+# equivalent to MIT — short, OSI-approved, no copyleft. Tayf's Linux build
+# cannot ship without inotify support, and the inotify maintainer's choice
+# of ISC is industry-standard.
 allow = [
     "MIT",
     "Apache-2.0",
     "Unicode-3.0",
+    "CC0-1.0",
+    "ISC",
 ]
 confidence-threshold = 0.93
 
