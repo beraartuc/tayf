@@ -54,6 +54,12 @@ pub struct Args {
     /// built-in rule set (v0.1 behavior).
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
+
+    /// Apply a preset color theme before user-config rules. CLI override of
+    /// `[general] theme`. Available themes are `dark` and `light`; unknown
+    /// names exit with `EX_USAGE` (64) and a list of known themes.
+    #[arg(long, value_name = "NAME")]
+    pub theme: Option<String>,
 }
 
 impl Args {
@@ -96,12 +102,15 @@ mod tests {
             "--no-color",
             "--config",
             "/tmp/cfg.toml",
+            "--theme",
+            "dark",
         ])
         .unwrap();
         assert_eq!(args.shell.as_deref(), Some(std::path::Path::new("/bin/fish")));
         assert!(args.login);
         assert!(args.no_color);
         assert_eq!(args.config.as_deref(), Some(std::path::Path::new("/tmp/cfg.toml")));
+        assert_eq!(args.theme.as_deref(), Some("dark"));
     }
 
     #[test]
@@ -114,5 +123,17 @@ mod tests {
     fn config_defaults_to_none() {
         let args = Args::try_parse_from(["tayf"]).unwrap();
         assert!(args.config.is_none());
+    }
+
+    #[test]
+    fn parses_theme_flag() {
+        let args = Args::try_parse_from(["tayf", "--theme", "light"]).unwrap();
+        assert_eq!(args.theme.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn theme_defaults_to_none() {
+        let args = Args::try_parse_from(["tayf"]).unwrap();
+        assert!(args.theme.is_none());
     }
 }
