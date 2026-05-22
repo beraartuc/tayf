@@ -265,6 +265,12 @@ fn build_filename_pattern() -> String {
 pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     vec![
         BuiltinRule {
+            name: "permission".into(),
+            pattern: r"(?:^|\s)[dlcbps-][rwxsStT-]{9}\+?(?:\s|$)".into(),
+            style: Style { fg: Some(Color::White), dim: true, ..Style::DEFAULT },
+            is_user_supplied: false,
+        },
+        BuiltinRule {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
@@ -321,8 +327,17 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
 }
 
 /// Names of the eight built-in rules. Mirrors the order of [`builtin_rules`].
-pub(crate) const BUILTIN_NAMES: &[&str] =
-    &["ipv4", "ipv6", "mac", "log_level", "http_status", "filename", "fqdn", "duration"];
+pub(crate) const BUILTIN_NAMES: &[&str] = &[
+    "permission",
+    "ipv4",
+    "ipv6",
+    "mac",
+    "log_level",
+    "http_status",
+    "filename",
+    "fqdn",
+    "duration",
+];
 
 #[cfg(test)]
 mod builtin_names_test {
@@ -585,7 +600,7 @@ mod tests {
         assert_eq!(c.individuals.len(), n);
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
-        assert_eq!(n, 8, "v0.1 ships exactly eight built-in rules");
+        assert_eq!(n, 9, "v0.2.2 work-in-progress: 8 originals + permission");
     }
 
     #[test]
@@ -679,7 +694,7 @@ mod tests {
             Some(_) => {}
             None => panic!("uuid rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 9, "8 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 10, "9 built-ins + 1 user rule");
     }
 
     #[test]
@@ -747,6 +762,26 @@ mod tests {
         assert_eq!(c.individuals.len(), 0);
         assert_eq!(c.styles.len(), 0);
         assert_eq!(c.set.len(), 0);
+    }
+
+    #[test]
+    fn permission_matches_common_modes() {
+        assert!(matches("permission", "-rw-r--r-- 1 user staff 100 May 22 file"));
+        assert!(matches("permission", "drwxr-xr-x  3 user staff 96 May 22 dir"));
+        assert!(matches("permission", "lrwxrwxrwx 1 root root 7 May 22 link"));
+        assert!(matches("permission", "crw-rw-rw-  1 root tty 5, 0 May 22 console"));
+        // ACL trailing '+'
+        assert!(matches("permission", "-rwxr-xr-x+ 1 user staff 100 May 22 file"));
+    }
+
+    #[test]
+    fn permission_rejects_invalid_shapes() {
+        // Wrong leading char
+        assert!(!matches("permission", "xrwxrwxrwx 1 user file"));
+        // Too short (9 chars body)
+        assert!(!matches("permission", "-rwxrwx 1 user file"));
+        // Wrong perm chars
+        assert!(!matches("permission", "-rwzqqzqqz 1 user file"));
     }
 
     #[test]
