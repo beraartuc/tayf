@@ -1,4 +1,4 @@
-//! End-to-end integration tests for `--theme` and `[general] theme`.
+//! End-to-end integration tests for `--theme`.
 //!
 //! These spawn the compiled `tayf` binary as a subprocess. The unknown-theme
 //! case exits with BSD `EX_USAGE` (64) per spec §4.6, and `--help` advertises
@@ -15,7 +15,16 @@ fn tayf_bin() -> PathBuf {
 
 #[test]
 fn unknown_theme_exits_ex_usage() {
+    // Use an explicit empty config so the host's user config (which may be
+    // present and even malformed on developer machines) cannot mask the
+    // theme error with a "config error" stderr.
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(&cfg_path, "").expect("write empty config");
+
     let out = Command::new(tayf_bin())
+        .arg("--config")
+        .arg(&cfg_path)
         .arg("--theme")
         .arg("totally-not-a-real-theme")
         .stdin(Stdio::null())
