@@ -55,7 +55,7 @@ tayf runs in the user's terminal, spawns their shell, manipulates their TTY, and
   - Memory exhaustion — line buffer has a hard cap (default 64 KB, configurable). Exceeding the cap flushes, never grows unbounded.
   - Escape-sequence injection — we must never *introduce* a sequence (e.g., OSC) that the original program did not. Our SGR injections must be matched with a precise reset, never `\x1b[2J` (clear screen) or similar wide-effect codes.
   - Terminal state corruption — on any exit path (panic, signal, drop), the `termios` state MUST be restored to pre-tayf snapshot. RAII guard with `Drop`, plus `std::panic::set_hook` fallback.
-- **Credentials and PII in output:** tayf sees the user's entire shell stream. We MUST NOT log raw output to disk by default. Debug logging via `tracing` is gated behind `TAYF_LOG=...` env var and writes to stderr only.
+- **Credentials and PII in output:** tayf sees the user's entire shell stream. We MUST NOT log raw output to disk by default. Debug logging (via the in-crate `log` module) is gated behind `TAYF_LOG=...` env var and writes to stderr only.
 - **File-system access:** Config file path must be canonicalized; reject symlink traversal outside `~/.config/tayf/`. No code paths execute strings from config (no shell-out, no `eval`-equivalent).
 - **Process spawning:** Child shell is spawned with `execvp`-style direct invocation, never `sh -c "$user_input"`. The `--shell` flag value is passed as `argv[0]`, not concatenated into a command string.
 - **Signal forwarding:** SIGINT/SIGTERM go to the child *process group*, not just the child PID. Wrong target = orphan processes.
@@ -125,7 +125,7 @@ tayf/
 │   ├── rules.rs                       # Compiled struct + builtin patterns + filename catalog
 │   ├── style.rs                       # Color + Style + SGR audit gate
 │   ├── terminfo.rs                    # TTY detection + winsize helper + color depth
-│   ├── logging.rs                     # tracing init from TAYF_LOG
+│   ├── log.rs                         # env-gated stdlib logger (TAYF_LOG)
 │   └── version.rs                     # build-time SHA + rustc info
 ├── benches/
 │   ├── throughput.rs                  # criterion throughput benches
