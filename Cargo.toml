@@ -30,10 +30,10 @@ name = "tayf"
 path = "src/lib.rs"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 nix = { version = "0.28", features = ["term", "signal", "user", "fs", "poll"] }
 portable-pty = "0.9"
-regex = "1.10"
+regex = "1.12"
 signal-hook = "0.3"
 thiserror = "1.0"
 
@@ -43,7 +43,7 @@ thiserror = "1.0"
 # throughput numbers (spec §7). No `unsafe` is introduced in our bench
 # code; criterion itself uses minimal `unsafe` (well-audited).
 criterion = "0.5"
-tempfile = "3.10"
+tempfile = "3.27"
 
 [[bench]]
 name = "throughput"
