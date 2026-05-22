@@ -33,6 +33,7 @@ pub(crate) mod shell;
 pub(crate) mod signals;
 pub(crate) mod terminfo;
 pub(crate) mod tty_guard;
+pub(crate) mod watch;
 
 pub use cli::Args;
 pub use error::{Error, Result};
