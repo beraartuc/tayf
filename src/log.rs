@@ -111,6 +111,25 @@ macro_rules! warn_msg {
 
 pub(crate) use warn_msg;
 
+/// Emit an `info`-level record. Format-string syntax matches `eprintln!`.
+///
+/// `info` is the level used by the hot-reload orchestrator
+/// (`src/reload.rs`) to announce a successful reload. Default behavior
+/// (no `TAYF_LOG` set) is silent — users opt in with `TAYF_LOG=info`.
+#[allow(unused_macros)]
+// reason: first production call site lands in Task 6 (ReloadOrchestrator);
+// the macro is exercised by the in-module test today.
+macro_rules! info_msg {
+    ($($arg:tt)*) => {
+        $crate::log::emit($crate::log::LogLevel::Info, format_args!($($arg)*))
+    };
+}
+
+#[allow(unused_imports)]
+// reason: paired with the `unused_macros` allow above; removed when Task 6
+// adds the first non-test caller.
+pub(crate) use info_msg;
+
 #[cfg(test)]
 mod tests {
     use super::{parse_level, LogLevel};
@@ -137,5 +156,15 @@ mod tests {
         assert!((LogLevel::Warn as u8) < (LogLevel::Info as u8));
         assert!((LogLevel::Info as u8) < (LogLevel::Debug as u8));
         assert!((LogLevel::Debug as u8) < (LogLevel::Trace as u8));
+    }
+
+    #[test]
+    fn info_msg_macro_resolves_through_use_export() {
+        // Compile-time check that the macro is callable through the
+        // crate-level `pub(crate) use info_msg;` re-export, mirroring
+        // the existing warn_msg! pattern. Body is empty at runtime
+        // because the global Once latch is `Off` in tests by default;
+        // we just need the call to type-check.
+        super::info_msg!("orchestrator probe: {}", 42);
     }
 }
