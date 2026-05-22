@@ -616,40 +616,62 @@ Bu mesaj iki şeyi başarır:
 
 ## 11. Yol Haritası
 
-### v0.1 — Çalışan İskelet
-- [ ] PTY açma, shell spawn, iki yönlü kopyalama
-- [ ] Stdin raw mode + Drop guard
-- [ ] SIGWINCH handling
-- [ ] Çıkış kodu propagation
-- [ ] Hardcoded 2-3 regex ile renklendirme
+### v0.1 — Çalışan İskelet ✅ shipped
+- [x] PTY açma, shell spawn, iki yönlü kopyalama
+- [x] Stdin raw mode + Drop guard
+- [x] SIGWINCH handling (+ integration test v0.2.1'de eklendi)
+- [x] Çıkış kodu propagation
+- [x] Hardcoded 8 regex ile renklendirme (ipv4, ipv6, mac, log_level, http_status, filename, fqdn, duration)
+- Patch'ler: v0.1.1 (CI matrix), v0.1.2 (dep cleanup), v0.1.3 (criterion 0.5 → 0.8)
 
-### v0.2 — Config Sistemi
-- [ ] TOML config parser
-- [ ] CLI flag'leri (`--config`, `--profile`, `--no-color`)
-- [ ] Default config içinde IPv4, IPv6, MAC, log level kuralları
+### v0.2 — Config + Hot Reload + Expanded Builtins ✅ shipped
+- [x] **v0.2.0** — TOML config parser; CLI flag'leri (`--config`, `--no-color`; `--profile` v0.5'e ertelendi); override / append / disable by name; friendly regex compile errors; color depth downgrade (truecolor → 256 → basic16)
+- [x] **v0.2.1** — Config hot reload via `notify` 8 + SIGHUP; 200ms manuel debounce; `arc_swap::ArcSwap<Compiled>` ile atomik rule swap; pipeline per-line snapshot
+- [x] **v0.2.2** — Built-in pattern set 8 → 13: `permission` (POSIX ls -l), `timestamp` (ISO-8601/syslog/Apache/RFC 2822 + obsolete US zones), `uuid`, `url` (https?/ssh/ftp), `email`
+
+### v0.2.3 — Preset Themes (sıradaki, patch release)
+**Sorun:** Mevcut built-in renkleri dark-bg terminal varsayımıyla seçildi. Light-bg kullanıcılarda `BrightBlack` (timestamp), `White + dim` (permission), `BrightYellow` (ipv6) ya görünmüyor ya okunmuyor. Terminal portability bug'ı.
+- [ ] `assets/themes/dark.toml` — mevcut default'lar, explicit
+- [ ] `assets/themes/light.toml` — light-bg için ayarlanmış renkler
+- [ ] `assets/themes/solarized-dark.toml`, `solarized-light.toml` (opsiyonel)
+- [ ] `--theme <name>` CLI flag VEYA `[general] theme = "light"` config option (brainstorming aşamasında karar)
+- [ ] README'de theme listesi + ekran görüntüleri
+- Hedef olmayan: otomatik bg detection (v0.3 kapsamında)
 
 ### v0.3 — ANSI Doğruluğu
-- [ ] VTE parser entegrasyonu
-- [ ] Alt-screen passthrough
-- [ ] Mevcut SGR state koruma
-- [ ] OSC/bracketed paste handling
+- [ ] VTE parser entegrasyonu (vte crate)
+- [ ] Alt-screen passthrough (vim/htop çalışırken renklendirme suspend)
+- [ ] Mevcut SGR state koruma (`respect_existing_colors` gerçekten devreye girer)
+- [ ] OSC / bracketed paste handling
+- [ ] Otomatik terminal bg detection (COLORFGBG / OSC 11)
+- [ ] Trailing-punctuation trim in URL match (`https://example.com.` → `.` dışarda)
+- [ ] `git@host:path` SSH URL alt-form (`url` pattern'ın 4. branch'i)
+- [ ] `--bypass` / `TAYF_DISABLE=1` env-var escape hatch
+- [ ] `--no-hot-reload` opt-out flag
+- [ ] Reload inline overlay banner ("tayf: config reloaded", OSC 133 ile)
+- [ ] Duration pattern: bare `s`/`m`/`h` units geri eklenebilir (ANSI awareness sağlandığı için SGR çakışması kaybolur)
 
 ### v0.4 — Performans
-- [ ] RegexSet
+- [ ] RegexSet fast-path (compiled `set` field zaten populated, switch sadece burada)
 - [ ] Aho-Corasick literal optimizasyonu
-- [ ] Benchmark suite + CI'da regression detection
+- [ ] Benchmark suite genişletme + CI'da regression detection
 - [ ] Streaming heuristics
 
-### v0.5 — Genişletilebilirlik
-- [ ] Capture group renklendirme
-- [ ] Profile system
-- [ ] Built-in profile kütüphanesi (network, k8s, web logs, docker, vs.)
+### v0.5 — Genişletilebilirlik + Config TUI
+- [ ] Capture group renklendirme (`$1 kırmızı $2 yeşil`)
+- [ ] Profile system (`[profiles.network]`, `tayf --profile network`)
+- [ ] Built-in profile kütüphanesi: network, k8s, docker, web logs, AWS, GCP
+- [ ] `tayf config` interaktif TUI (ratatui ile, fullscreen, resize-safe; canlı önizleme, color picker, theme switch)
+- [ ] `tayf config dump` — built-in pattern'leri TOML olarak dök
+- [ ] `tayf config status` — watcher / reload debug görüntüsü
 
 ### v1.0 — Olgunluk
-- [ ] Hot reload
-- [ ] Comprehensive test suite (unit + integration + property-based)
-- [ ] Belgelenmiş public API
+- [x] Hot reload (master roadmap'te v1.0 idi; v0.2.1'de öne alındı)
+- [ ] Comprehensive test suite genişletme (property-based ekle)
+- [ ] Belgelenmiş public API stabilizasyonu
 - [ ] Web sitesi + kurulum dökümanı
+- [ ] Pre-built binary dağıtımı (cargo-dist; Linux/macOS x64+arm64, GitHub Releases, Homebrew tap)
+- [ ] crates.io publish (`cargo install tayf`)
 
 ### Sonraki
 - Windows desteği (ConPTY)
