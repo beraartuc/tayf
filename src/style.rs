@@ -6,11 +6,11 @@
 //! (`\x1b[…m` and `\x1b[0m`) and audited by a unit test. See spec §3.7.
 
 /// 16-color ANSI base palette plus 256-indexed and 24-bit RGB.
-// reason: the v0.1 built-in rule set only references a subset of variants
-// (Yellow, BrightYellow, Cyan, BrightRed, Magenta, BrightCyan, Blue, Green),
-// but `Color` is a complete model of the SGR color space — kept whole so
+// reason: `Color` is a complete model of the SGR color space — kept whole so
 // `fg_params`/`bg_params` stay symmetric and v0.2 TOML config parsing has a
-// target to land on. Tests in this file exercise the unused variants.
+// target to land on. The v0.1 built-in rule set references only a subset of
+// variants; the rest become reachable when Task 7 wires user-configurable
+// rules to `Color::parse_str`. Tests in this file exercise the unused variants.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
@@ -100,6 +100,104 @@ impl Color {
             Color::Rgb(r, g, b) => format!("48;2;{r};{g};{b}"),
         }
     }
+}
+
+impl Color {
+    /// Parse a color from a TOML configuration string.
+    ///
+    /// Accepts:
+    /// - ANSI names: `"red"`, `"green"`, ..., `"white"`, `"bright_red"`, ..., `"bright_white"` (case-insensitive).
+    /// - Indexed palette: `"color(N)"` where `0 <= N <= 255`.
+    /// - 24-bit hex: `"#rrggbb"` (six hex digits, case-insensitive).
+    /// - 24-bit functional: `"rgb(R, G, B)"` where each channel is `0..=255`.
+    ///
+    /// `pub(crate)` rather than `pub` — the exact error-message wording is
+    /// not a public contract; consumers go through `config::parse_color_field`
+    /// which wraps results into `Error::Config`. See CLAUDE.md §4 on
+    /// public-API stability.
+    ///
+    /// # Errors
+    /// Returns a human-readable error string on any unrecognised or
+    /// out-of-range input. Callers wrap this into `Error::Config` with file
+    /// path + line context.
+    // reason: first caller (`config::parse_color_field`) lands in v0.2.0 Task 4;
+    // until then the function is only exercised by unit tests in this file.
+    #[allow(dead_code)]
+    pub(crate) fn parse_str(input: &str) -> Result<Self, String> {
+        let trimmed = input.trim();
+        // Lowercase once for branch dispatch so `COLOR(178)`, `RGB(...)`,
+        // and `#FF8800` are all accepted symmetrically with the bare ANSI
+        // names. Keep `input` intact for error echo.
+        let lower = trimmed.to_ascii_lowercase();
+
+        if let Some(rest) = lower.strip_prefix('#') {
+            return parse_hex(rest)
+                .ok_or_else(|| format!("invalid hex color '{input}': expected '#rrggbb'"));
+        }
+
+        if let Some(inner) = lower.strip_prefix("color(").and_then(|s| s.strip_suffix(')')) {
+            let n: u16 = inner.trim().parse().map_err(|_| {
+                format!("invalid indexed color '{input}': expected 'color(N)' with 0 <= N <= 255")
+            })?;
+            if n > 255 {
+                return Err(format!("invalid indexed color '{input}': index {n} > 255"));
+            }
+            #[allow(clippy::cast_possible_truncation)] // reason: bounded by check above
+            return Ok(Color::Indexed(n as u8));
+        }
+
+        if let Some(inner) = lower.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
+            let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+            if parts.len() != 3 {
+                return Err(format!("invalid rgb color '{input}': expected 'rgb(R, G, B)'"));
+            }
+            let parse_channel = |s: &str| -> Result<u8, String> {
+                s.parse::<u8>()
+                    .map_err(|_| format!("invalid rgb channel '{s}' in '{input}': must be 0..=255"))
+            };
+            return Ok(Color::Rgb(
+                parse_channel(parts[0])?,
+                parse_channel(parts[1])?,
+                parse_channel(parts[2])?,
+            ));
+        }
+
+        // Bare ANSI name — already lower-cased above.
+        match lower.as_str() {
+            "black" => Ok(Color::Black),
+            "red" => Ok(Color::Red),
+            "green" => Ok(Color::Green),
+            "yellow" => Ok(Color::Yellow),
+            "blue" => Ok(Color::Blue),
+            "magenta" => Ok(Color::Magenta),
+            "cyan" => Ok(Color::Cyan),
+            "white" => Ok(Color::White),
+            "bright_black" => Ok(Color::BrightBlack),
+            "bright_red" => Ok(Color::BrightRed),
+            "bright_green" => Ok(Color::BrightGreen),
+            "bright_yellow" => Ok(Color::BrightYellow),
+            "bright_blue" => Ok(Color::BrightBlue),
+            "bright_magenta" => Ok(Color::BrightMagenta),
+            "bright_cyan" => Ok(Color::BrightCyan),
+            "bright_white" => Ok(Color::BrightWhite),
+            other => Err(format!(
+                "unknown color name '{other}'; expected an ANSI name (e.g. 'red', 'bright_cyan'), 'color(N)', '#rrggbb', or 'rgb(R, G, B)'"
+            )),
+        }
+    }
+}
+
+// reason: helper for `Color::parse_str`; same dead-code window — first
+// non-test caller arrives with v0.2.0 Task 4.
+#[allow(dead_code)]
+fn parse_hex(rest: &str) -> Option<Color> {
+    if rest.len() != 6 || !rest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let r = u8::from_str_radix(&rest[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&rest[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&rest[4..6], 16).ok()?;
+    Some(Color::Rgb(r, g, b))
 }
 
 /// Visual styling for a pattern match.
@@ -259,5 +357,87 @@ mod tests {
         // Inverse direction: only Style::DEFAULT (all None / all false) produces "".
         assert!(Style::DEFAULT.to_sgr().is_empty());
         assert!(Style::default().to_sgr().is_empty());
+    }
+
+    #[test]
+    fn parse_ansi_basic_names() {
+        assert_eq!(Color::parse_str("red"), Ok(Color::Red));
+        assert_eq!(Color::parse_str("black"), Ok(Color::Black));
+        assert_eq!(Color::parse_str("white"), Ok(Color::White));
+    }
+
+    #[test]
+    fn parse_ansi_bright_names() {
+        assert_eq!(Color::parse_str("bright_red"), Ok(Color::BrightRed));
+        assert_eq!(Color::parse_str("bright_cyan"), Ok(Color::BrightCyan));
+    }
+
+    #[test]
+    fn parse_indexed_form() {
+        assert_eq!(Color::parse_str("color(0)"), Ok(Color::Indexed(0)));
+        assert_eq!(Color::parse_str("color(178)"), Ok(Color::Indexed(178)));
+        assert_eq!(Color::parse_str("color(255)"), Ok(Color::Indexed(255)));
+    }
+
+    #[test]
+    fn parse_indexed_overflow_rejected() {
+        assert!(Color::parse_str("color(256)").is_err());
+        assert!(Color::parse_str("color(-1)").is_err());
+        assert!(Color::parse_str("color()").is_err());
+    }
+
+    #[test]
+    fn parse_hex_six_digit() {
+        assert_eq!(Color::parse_str("#ff8800"), Ok(Color::Rgb(0xff, 0x88, 0x00)));
+        assert_eq!(Color::parse_str("#FFFFFF"), Ok(Color::Rgb(0xff, 0xff, 0xff)));
+        assert_eq!(Color::parse_str("#000000"), Ok(Color::Rgb(0, 0, 0)));
+    }
+
+    #[test]
+    fn parse_hex_invalid_lengths_rejected() {
+        // Three-digit short form not supported in v0.2.0 — keep parser strict.
+        assert!(Color::parse_str("#fff").is_err());
+        assert!(Color::parse_str("#ff").is_err());
+        assert!(Color::parse_str("#gggggg").is_err());
+    }
+
+    #[test]
+    fn parse_rgb_function_form() {
+        assert_eq!(Color::parse_str("rgb(255, 136, 0)"), Ok(Color::Rgb(255, 136, 0)));
+        assert_eq!(Color::parse_str("rgb(0,0,0)"), Ok(Color::Rgb(0, 0, 0)));
+    }
+
+    #[test]
+    fn parse_rgb_overflow_rejected() {
+        assert!(Color::parse_str("rgb(256, 0, 0)").is_err());
+        assert!(Color::parse_str("rgb(1, 2)").is_err());
+        assert!(Color::parse_str("rgb()").is_err());
+    }
+
+    #[test]
+    fn parse_unknown_name_returns_friendly_error() {
+        let err = Color::parse_str("turquoise").unwrap_err();
+        assert!(err.contains("turquoise"), "error must echo input: {err}");
+        assert!(
+            err.contains("color name") || err.contains("recognised") || err.contains("color("),
+            "error must hint at accepted formats: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_case_insensitive_names() {
+        assert_eq!(Color::parse_str("RED"), Ok(Color::Red));
+        assert_eq!(Color::parse_str("Bright_Blue"), Ok(Color::BrightBlue));
+    }
+
+    #[test]
+    fn parse_case_insensitive_functional_forms() {
+        // `COLOR(178)`, `RGB(...)`, and `#FF8800` are accepted symmetrically
+        // with ANSI names — no surprising case asymmetry.
+        assert_eq!(Color::parse_str("COLOR(178)"), Ok(Color::Indexed(178)));
+        assert_eq!(Color::parse_str("RGB(255, 136, 0)"), Ok(Color::Rgb(255, 136, 0)));
+        assert_eq!(Color::parse_str("#FF8800"), Ok(Color::Rgb(0xff, 0x88, 0x00)));
+        // Mixed case also fine.
+        assert_eq!(Color::parse_str("Rgb(0, 0, 0)"), Ok(Color::Rgb(0, 0, 0)));
     }
 }
