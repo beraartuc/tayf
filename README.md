@@ -181,6 +181,8 @@ CLI `--theme` overrides the config field. Your own `[[rules]]` blocks still win 
 
 Unknown theme names exit with code 64 (`EX_USAGE`) and list the known themes on stderr.
 
+The theme selection is fixed at startup: changing `[general] theme` in your config does **not** take effect on hot reload, so restart tayf to switch themes. Your `[[rules]]` edits still hot-reload as usual.
+
 Automatic background detection is planned for v0.3; for now, pick a theme manually.
 
 ## TUI compatibility
