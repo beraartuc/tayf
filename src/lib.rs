@@ -17,6 +17,7 @@
 #![allow(clippy::multiple_crate_versions)] // reason: portable-pty 0.9 still pulls bitflags 1.x while nix 0.28 and rustix (via tempfile dev-dep) use bitflags 2.x — out of our control until portable-pty updates.
 
 pub(crate) mod cli;
+pub(crate) mod config;
 pub(crate) mod error;
 pub(crate) mod style;
 pub(crate) mod version;
