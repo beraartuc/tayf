@@ -949,6 +949,48 @@ mod tests {
     }
 
     #[test]
+    fn url_wins_over_fqdn() {
+        use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"go to https://api.example.com today\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // BrightBlue fg = SGR 94. Underline = SGR 4. fqdn = Blue (34) — must NOT appear.
+        assert!(s.contains("94"), "expected BrightBlue (url): {s:?}");
+        assert!(!s.contains("\x1b[34m"), "must not contain blue (fqdn) SGR: {s:?}");
+    }
+
+    #[test]
+    fn email_wins_over_fqdn() {
+        use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"mail user@example.com soon\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // BrightGreen = 92, Blue (fqdn) = 34
+        assert!(s.contains("92"), "expected BrightGreen (email): {s:?}");
+        assert!(!s.contains("\x1b[34m"), "must not contain blue (fqdn): {s:?}");
+    }
+
+    #[test]
+    fn permission_does_not_steal_mac_addresses() {
+        // A MAC address like aa:bb:cc:dd:ee:ff must still be styled as mac (Cyan, 36),
+        // not consumed by permission (whose char class includes `-` but not `:`).
+        use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"iface aa:bb:cc:dd:ee:ff up\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("36"), "expected Cyan (mac): {s:?}");
+    }
+
+    #[test]
     fn load_rejects_pattern_exceeding_size_limit() {
         use crate::config::{Config, GeneralSection, UserRule, UserStyle};
         use crate::terminfo::ColorDepth;
