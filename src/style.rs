@@ -6,12 +6,6 @@
 //! (`\x1b[…m` and `\x1b[0m`) and audited by a unit test. See spec §3.7.
 
 /// 16-color ANSI base palette plus 256-indexed and 24-bit RGB.
-// reason: `Color` is a complete model of the SGR color space — kept whole so
-// `fg_params`/`bg_params` stay symmetric and v0.2 TOML config parsing has a
-// target to land on. The v0.1 built-in rule set references only a subset of
-// variants; the rest become reachable when Task 7 wires user-configurable
-// rules to `Color::parse_str`. Tests in this file exercise the unused variants.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     /// Standard ANSI black (SGR 30 fg / 40 bg).
