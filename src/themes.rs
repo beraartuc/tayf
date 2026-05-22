@@ -14,6 +14,7 @@
 //! - [`load`] — resolve a theme name to its embedded TOML source.
 //! - [`names`] — alphabetically-sorted list of available theme names.
 //! - [`validate_theme_rules`] — schema-shape check applied after parsing.
+//! - [`synthetic_path`] — embedded source label used when feeding a theme through the user-config merge.
 
 use crate::config::UserRule;
 use crate::error::Error;

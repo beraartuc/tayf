@@ -200,7 +200,7 @@ impl Color {
     ///   Indexed `>=16` and Rgb → nearest ANSI by RGB Euclidean distance.
     /// - None: always `None`.
     ///
-    /// `pub(crate)` rather than `pub` — only `Compiled::load` calls it.
+    /// `pub(crate)` rather than `pub` — only [`crate::rules::Compiled`] constructors call it.
     #[must_use]
     pub(crate) fn downgrade(self, depth: crate::terminfo::ColorDepth) -> Option<Color> {
         use crate::terminfo::ColorDepth as D;
@@ -247,7 +247,7 @@ impl Style {
     /// (`bold`, `italic`, ...) are preserved as-is — they render on every
     /// terminal that supports SGR at all.
     ///
-    /// `pub(crate)` rather than `pub` — only `Compiled::load` calls it.
+    /// `pub(crate)` rather than `pub` — only [`crate::rules::Compiled`] constructors call it.
     #[must_use]
     pub(crate) fn downgrade(self, depth: crate::terminfo::ColorDepth) -> Self {
         Style {
