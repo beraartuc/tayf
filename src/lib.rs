@@ -14,7 +14,7 @@
 // public-API boundary (`Tayf::run`) and tracked in the spec, not duplicated
 // on every `pub(crate)` fn.
 #![allow(clippy::module_name_repetitions, clippy::missing_errors_doc)]
-#![allow(clippy::multiple_crate_versions)] // reason: unavoidable transitive dep duplicates — our direct nix 0.27 vs portable-pty 0.9's internal nix 0.28
+#![allow(clippy::multiple_crate_versions)] // reason: portable-pty 0.9 still pulls bitflags 1.x while nix 0.28 and rustix (via tempfile dev-dep) use bitflags 2.x — out of our control until portable-pty updates.
 
 pub(crate) mod cli;
 pub(crate) mod error;

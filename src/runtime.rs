@@ -19,10 +19,10 @@
 //! in spec §3.4 step 7.
 
 use std::io::{self, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
 use std::thread::{self, JoinHandle};
 
-use nix::poll::{poll, PollFd, PollFlags};
+use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 
 use crate::error::{Error, Result};
 use crate::pipeline::Pipeline;
@@ -36,7 +36,11 @@ const READ_BUF_BYTES: usize = 8 * 1024;
 
 /// Idle-flush tick interval. Matches `LineBuffer::FLUSH_TIMEOUT` so a partial
 /// line idle for one cap is guaranteed to flush on the next poll wake-up.
-const POLL_TIMEOUT_MS: nix::libc::c_int = 50;
+///
+/// nix 0.28 expects a typed `PollTimeout` rather than a raw `c_int` millis
+/// value; `PollTimeout: From<u16>` is infallible so the conversion is a
+/// `const`-friendly one-liner at the call site.
+const POLL_TIMEOUT_MS: u16 = 50;
 
 /// Run the I/O loop until the child exits.
 ///
@@ -90,25 +94,13 @@ pub(crate) fn run(
 /// drop without manual `libc::close`. Errors are surfaced as `Error::Pty`
 /// (an `io::Error` chained from the underlying errno).
 ///
-/// Close-on-exec is intentionally **not** set: nix 0.27 does not expose
-/// `pipe2` on all targets tayf supports, and tayf does not `exec` any
-/// further child after this point (the user's shell was already spawned
-/// in `PtySession::spawn` higher up in `Tayf::run`), so there is no
+/// Close-on-exec is intentionally **not** set: nix's `pipe2` is not exposed
+/// on every target tayf supports, and tayf does not `exec` any further
+/// child after this point (the user's shell was already spawned in
+/// `PtySession::spawn` higher up in `Tayf::run`), so there is no
 /// observable inheritance hazard.
 fn make_self_pipe() -> Result<(OwnedFd, OwnedFd)> {
-    let (r, w) = nix::unistd::pipe().map_err(|e| Error::Pty(io::Error::from(e)))?;
-    // SAFETY: `r` and `w` are freshly created by `pipe(2)` above and not
-    // owned by anything else; `OwnedFd::from_raw_fd` takes ownership of
-    // each fd and will close them on drop. Per its documented contract,
-    // the fds must be open, owned, and not used by any other code path —
-    // all three hold here because the two integers are only visible
-    // inside this function until they are wrapped.
-    // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY blocks;
-    // this is the only `unsafe` in `runtime::run` outside the existing
-    // `borrow_master_fd` helper.
-    #[allow(unsafe_code)]
-    let owned = unsafe { (OwnedFd::from_raw_fd(r), OwnedFd::from_raw_fd(w)) };
-    Ok(owned)
+    nix::unistd::pipe().map_err(|e| Error::Pty(io::Error::from(e)))
 }
 
 /// Write one byte to the self-pipe write end to wake the input thread.
@@ -119,10 +111,11 @@ fn make_self_pipe() -> Result<(OwnedFd, OwnedFd)> {
 /// woken or will wake on the next poll iteration when the write end is
 /// dropped by the caller.
 fn signal_shutdown(write_end: &OwnedFd) {
-    let fd = write_end.as_raw_fd();
     // A single-byte payload is sufficient; the input thread only checks
     // for readability and drains whatever is there before exiting.
-    let _ = nix::unistd::write(fd, &[0u8]);
+    // nix 0.28 `write` accepts any `AsFd`, so the borrowed `OwnedFd` flows
+    // through directly without a `RawFd` detour.
+    let _ = nix::unistd::write(write_end.as_fd(), &[0u8]);
 }
 
 /// Borrow the PTY master fd for the duration of one `poll(2)` call.
@@ -190,8 +183,8 @@ fn spawn_output_thread(
                 // trips the crate-level `warn(unsafe_code)` lint.
                 #[allow(unsafe_code)]
                 let borrowed = unsafe { borrow_master_fd(raw_fd) };
-                let mut pollfds = [PollFd::new(&borrowed, PollFlags::POLLIN)];
-                match poll(&mut pollfds, POLL_TIMEOUT_MS) {
+                let mut pollfds = [PollFd::new(borrowed, PollFlags::POLLIN)];
+                match poll(&mut pollfds, PollTimeout::from(POLL_TIMEOUT_MS)) {
                     Ok(0) => {
                         // Timeout: flush any idle partial line via the
                         // pipeline's tick. In passthrough mode the pipeline
@@ -257,13 +250,13 @@ fn spawn_input_thread(mut writer: Writer, shutdown_read: OwnedFd) -> JoinHandle<
                 let stdin_fd = handle.as_fd();
                 let shutdown_fd = shutdown_read.as_fd();
                 let mut pollfds = [
-                    PollFd::new(&stdin_fd, PollFlags::POLLIN),
-                    PollFd::new(&shutdown_fd, PollFlags::POLLIN),
+                    PollFd::new(stdin_fd, PollFlags::POLLIN),
+                    PollFd::new(shutdown_fd, PollFlags::POLLIN),
                 ];
-                // `-1` = block forever. There is no idle work on the input
-                // side; we only wake on stdin readiness, stdin EOF/error,
-                // or the shutdown signal.
-                match poll(&mut pollfds, -1i32) {
+                // `PollTimeout::NONE` = block forever. There is no idle work
+                // on the input side; we only wake on stdin readiness, stdin
+                // EOF/error, or the shutdown signal.
+                match poll(&mut pollfds, PollTimeout::NONE) {
                     Ok(_) => {}
                     // Spurious EINTR (e.g. SIGWINCH delivered to this
                     // thread): loop and retry the poll.
