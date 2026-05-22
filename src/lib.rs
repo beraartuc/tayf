@@ -57,9 +57,32 @@ impl Tayf {
     pub fn run(args: Args) -> Result<ExitCode> {
         log::init_from_env();
 
-        let apply_colors = !args.no_color && terminfo::stdout_is_tty();
+        // Detect terminal capabilities up-front so we can both gate the
+        // runtime's no-color fast path AND pre-bake colors into the rule
+        // set at their final depth.
+        //
+        // Note: the `depth != None` short-circuit here is for *performance*
+        // — `runtime::run` uses `apply_colors == false` to bypass the
+        // `Pipeline` entirely and stream raw PTY bytes to stdout. The
+        // pre-bake (`Compiled::load(_, _, ColorDepth::None)`) already
+        // guarantees empty SGR output for correctness, so a future
+        // maintainer simplifying this gate should preserve the runtime
+        // bypass separately, not just delete the depth check here.
+        let depth = terminfo::detect_depth();
+        let apply_colors =
+            !args.no_color && terminfo::stdout_is_tty() && depth != terminfo::ColorDepth::None;
+        let effective_depth = if apply_colors { depth } else { terminfo::ColorDepth::None };
 
         let spec = shell::discover(args.shell.as_deref(), args.login)?;
+
+        // Load TOML config before engaging the TTY guard — failures here
+        // produce friendly stderr output without leaving the terminal in
+        // raw mode. `config::load` returns the path it loaded from so we
+        // can thread it into user-rule error messages without a second
+        // resolve (which would race on $HOME / $XDG_CONFIG_HOME).
+        let loaded = config::load(args.config.as_deref())?;
+        let config_ref = loaded.as_ref().map(|(c, _)| c);
+        let config_path: Option<String> = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
         let guard = tty_guard::TtyGuard::engage()?;
 
@@ -69,7 +92,7 @@ impl Tayf {
 
         let _signal_guard = signals::spawn_handler(resizer, child_pid)?;
 
-        let rules = rules::Compiled::load_builtins()?;
+        let rules = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
         let exit_code = runtime::run(reader, writer, child, rules, apply_colors)?;
 
         drop(guard); // explicit; Drop would handle it but make ordering clear

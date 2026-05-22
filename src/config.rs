@@ -149,7 +149,6 @@ pub(crate) const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 /// can surface the path in downstream error messages without re-resolving
 /// (avoids env-race and file-deletion-between-calls regressions). Returns
 /// `Ok(None)` when no config file is present, preserving v0.1 behavior.
-#[allow(dead_code)] // reason: first non-test caller lands in Task 9 (Tayf::run wires config::load).
 pub(crate) fn load(explicit: Option<&Path>) -> Result<Option<(Config, std::path::PathBuf)>> {
     load_with(
         explicit,

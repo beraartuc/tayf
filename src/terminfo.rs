@@ -15,11 +15,6 @@
 use std::env;
 
 /// Maximum color depth supported by the terminal we are connected to.
-// reason: v0.1 always emits the basic 16-color SGR palette (see `style.rs`)
-// so the facade has no consumer for depth yet. Detection is implemented and
-// tested so v0.2 can branch on it without churn. Same rationale applies to
-// `detect_depth` and `depth_from_env` below.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorDepth {
     /// `TERM=dumb` or no color allowed.
@@ -76,14 +71,12 @@ pub(crate) fn winsize() -> Option<(u16, u16)> {
 }
 
 /// Detect the maximum supported color depth from `$COLORTERM` and `$TERM`.
-#[allow(dead_code)] // reason: see `ColorDepth` above.
 pub(crate) fn detect_depth() -> ColorDepth {
     let colorterm = env::var("COLORTERM").ok();
     let term = env::var("TERM").ok();
     depth_from_env(colorterm.as_deref(), term.as_deref())
 }
 
-#[allow(dead_code)] // reason: see `ColorDepth` above; exercised by unit tests.
 fn depth_from_env(colorterm: Option<&str>, term: Option<&str>) -> ColorDepth {
     if matches!(term, Some("dumb")) {
         return ColorDepth::None;
