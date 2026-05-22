@@ -37,11 +37,17 @@ pub enum Error {
     /// Failed to load or validate the user TOML config.
     ///
     /// `line` is 1-based when available; pass `0` for errors with no line
-    /// context (path resolution, size limit, IO). The `message` field passes
-    /// through `sanitize_for_display` in the `Display` impl so that any
-    /// user-supplied content echoed back (e.g. a color string from a config
-    /// rule) cannot smuggle an escape sequence onto the user's terminal —
-    /// CLAUDE.md §3 invariant.
+    /// context (path resolution, size limit, IO). `0` was chosen over
+    /// `Option<NonZeroUsize>` because thiserror's format-string support is
+    /// terser this way; the sentinel is constant across the codebase.
+    ///
+    /// **Display contract:** the `message` field passes through
+    /// `sanitize_for_display` in the `Display` impl so that any user-supplied
+    /// content echoed back (e.g. a color string from a config rule) cannot
+    /// smuggle an escape sequence onto the user's terminal — CLAUDE.md §3
+    /// invariant. Callers that read `message` directly (e.g. for structured
+    /// logging) get the raw bytes; format through `Display` or sanitize
+    /// yourself before printing to a terminal.
     #[error("config error in {path}{}: {}", line_suffix(*line), sanitize_for_display(message))]
     Config {
         /// Absolute path to the config file the error originated from.
@@ -87,7 +93,10 @@ fn line_suffix(line: usize) -> String {
 fn sanitize_for_display(message: &str) -> String {
     let mut out = String::with_capacity(message.len());
     for ch in message.chars() {
-        if (ch.is_ascii_control() && ch != '\n' && ch != '\t') || ch == '\x7f' {
+        // `is_control()` covers ASCII C0 (0x00..=0x1F + 0x7F) AND Unicode
+        // C1 (U+0080..U+009F). U+009B is the 8-bit CSI introducer — a hostile
+        // config string could otherwise smuggle "\u{009B}2J" past the gate.
+        if ch.is_control() && ch != '\n' && ch != '\t' {
             // `write!` into a String is infallible; the discard is
             // explicit per the plan's clippy::format_push_string fallback.
             let _ = write!(out, "\\x{:02x}", ch as u32);
@@ -119,13 +128,25 @@ impl Error {
     // callers move it in directly. Matches the by-value signature established
     // for `config_from_toml` so the two construction helpers are symmetric.
     pub(crate) fn config_regex(path: String, rule_name: &str, source: regex::Error) -> Self {
-        Error::Config { path, line: 0, message: format!("rule '{rule_name}': {source}") }
+        Error::Config {
+            path,
+            line: 0,
+            message: format!("rule '{rule_name}': {source}. Check the pattern syntax."),
+        }
     }
 }
 
+#[allow(clippy::naive_bytecount)]
+// reason: pulling the `bytecount` crate for a one-shot diagnostic helper
+// violates the dependency-minimalism policy; config errors are not on any
+// hot path and the linear scan is bounded by the 1 MiB config size cap.
 fn line_from_offset(source: &str, offset: usize) -> usize {
-    // 1-based: count newlines up to `offset` and add 1.
-    source[..offset.min(source.len())].bytes().filter(|&b| b == b'\n').count() + 1
+    // Count newline bytes before `offset`. Operates on `.as_bytes()` rather
+    // than slicing `&str` so a non-char-boundary `offset` can never panic —
+    // CLAUDE.md §2 ("no panics in library code") applies even when current
+    // callers happen to pass char-aligned offsets.
+    let upper = offset.min(source.len());
+    source.as_bytes()[..upper].iter().filter(|&&b| b == b'\n').count() + 1
 }
 
 #[cfg(test)]
@@ -258,5 +279,18 @@ mod tests {
         let e2 = Error::Config { path: "/x".into(), line: 0, message: "ok\nfine\there".into() };
         let r2 = e2.to_string();
         assert!(r2.contains("ok\nfine\there"), "safe whitespace must pass: {r2:?}");
+    }
+
+    #[test]
+    fn config_message_escapes_c1_control_introducer() {
+        // U+009B is the 8-bit CSI introducer — same threat class as ESC [.
+        // Regression guard for the `is_ascii_control` -> `is_control` fix.
+        let e = Error::Config { path: "/x".into(), line: 0, message: "fg: '\u{009b}2J'".into() };
+        let rendered = e.to_string();
+        assert!(
+            !rendered.contains('\u{009b}'),
+            "raw U+009B must not survive Display: {rendered:?}"
+        );
+        assert!(rendered.contains("\\x9b"), "U+009B must be escaped as \\x9b: {rendered:?}");
     }
 }
