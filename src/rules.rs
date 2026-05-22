@@ -413,7 +413,35 @@ pub(crate) struct Compiled {
 
 impl Compiled {
     /// Compile a rule set: built-ins, optionally merged with `config`, with
-    /// colors pre-baked for `depth`.
+    /// colors pre-baked for `depth`. Equivalent to [`Self::load_with_theme`]
+    /// with `theme = None`; preserved as the primary v0.1/v0.2 entry point so
+    /// existing callsites do not churn.
+    ///
+    /// # Errors
+    /// As for [`Self::load_with_theme`].
+    pub(crate) fn load(
+        config: Option<&crate::config::Config>,
+        config_path: Option<&str>,
+        depth: crate::terminfo::ColorDepth,
+    ) -> Result<Self> {
+        Self::load_with_theme(config, config_path, None, depth)
+    }
+
+    /// Compile a rule set with an optional preset theme layered between the
+    /// built-in defaults and the user config.
+    ///
+    /// Layering order (later layers override earlier ones):
+    /// 1. Built-in defaults from [`builtin_rules`].
+    /// 2. Optional preset theme resolved by [`crate::themes::load`].
+    /// 3. Optional user config (`config`).
+    ///
+    /// After merging, every style is downgraded for `depth` and then compiled.
+    ///
+    /// The theme layer is validated by [`crate::themes::validate_theme_rules`]
+    /// before it is merged so semantic errors (unknown rule name, stray
+    /// `pattern` or `enabled = false`) surface as [`crate::Error::Config`]
+    /// pointing at the embedded source label rather than the user's config
+    /// path.
     ///
     /// Each pattern is compiled with `regex::bytes::RegexBuilder::size_limit`
     /// capped at 1 MiB to bound the memory a single user regex can consume.
@@ -423,17 +451,35 @@ impl Compiled {
     /// surfaced [`crate::Error::Config`].
     ///
     /// # Errors
-    /// Returns [`crate::Error::Config`] when a user rule fails to compile
-    /// (regex error) or violates validation (missing fields / no visible
-    /// style). Returns [`crate::Error::RegexCompile`] when a *built-in*
-    /// pattern fails to compile — this never happens in practice (built-ins
-    /// are unit-tested) but is preserved so callers don't need to special-case.
-    pub(crate) fn load(
+    /// Returns [`crate::Error::Theme`] when `theme` names a preset that is not
+    /// in the embedded registry. Returns [`crate::Error::Config`] when the
+    /// theme's TOML fails to parse, the theme fails validation, a user rule
+    /// fails to compile (regex error), or a user rule violates validation
+    /// (missing fields / no visible style). Returns
+    /// [`crate::Error::RegexCompile`] when a *built-in* pattern fails to
+    /// compile — this never happens in practice (built-ins are unit-tested)
+    /// but is preserved so callers don't need to special-case.
+    pub(crate) fn load_with_theme(
         config: Option<&crate::config::Config>,
         config_path: Option<&str>,
+        theme: Option<&str>,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
         let mut rules = builtin_rules();
+
+        // Layer 1: optional preset theme. Applied BEFORE the user config so
+        // user rules win on conflict (spec §2 decision 5). Validation runs
+        // BEFORE the merge so semantic errors surface against the synthetic
+        // theme path rather than mutating the rule set first.
+        if let Some(name) = theme {
+            let src = crate::themes::load(name)?;
+            let synth = crate::themes::synthetic_path(name);
+            let theme_cfg = crate::config::parse(&synth, src)?;
+            crate::themes::validate_theme_rules(name, &theme_cfg.rules)?;
+            crate::config::apply_user_rules(&synth, &mut rules, &theme_cfg.rules)?;
+        }
+
+        // Layer 2: user config.
         if let Some(c) = config {
             // `config_path` flows into Error::Config messages produced inside
             // apply_user_rules (and any nested UserStyle::to_style call) so
@@ -988,6 +1034,89 @@ mod tests {
         apply_rules(b"iface aa:bb:cc:dd:ee:ff up\n", &rules, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("36"), "expected Cyan (mac): {s:?}");
+    }
+
+    #[test]
+    fn dark_theme_is_idempotent_with_builtin_defaults() {
+        // Applying the 'dark' theme MUST produce styles identical to no theme.
+        // This is the contract spelled out in spec §5.1.
+        use crate::terminfo::ColorDepth;
+        let no_theme = Compiled::load(None, None, ColorDepth::Truecolor).unwrap();
+        let dark =
+            Compiled::load_with_theme(None, None, Some("dark"), ColorDepth::Truecolor).unwrap();
+        assert_eq!(no_theme.styles, dark.styles, "dark theme must equal no-theme defaults");
+    }
+
+    #[test]
+    fn light_theme_changes_permission_to_black_dim() {
+        use crate::style::Color;
+        use crate::terminfo::ColorDepth;
+        let c =
+            Compiled::load_with_theme(None, None, Some("light"), ColorDepth::Truecolor).unwrap();
+        let idx = BUILTIN_NAMES.iter().position(|n| *n == "permission").unwrap();
+        assert_eq!(c.styles[idx].fg, Some(Color::Black));
+        assert!(c.styles[idx].dim, "permission must be dim in light theme");
+    }
+
+    #[test]
+    fn light_theme_changes_ipv4_to_red_bold() {
+        use crate::style::Color;
+        use crate::terminfo::ColorDepth;
+        let c =
+            Compiled::load_with_theme(None, None, Some("light"), ColorDepth::Truecolor).unwrap();
+        let idx = BUILTIN_NAMES.iter().position(|n| *n == "ipv4").unwrap();
+        assert_eq!(c.styles[idx].fg, Some(Color::Red));
+        assert!(c.styles[idx].bold, "ipv4 must be bold in light theme");
+    }
+
+    #[test]
+    fn user_config_overrides_theme_styles() {
+        // Apply 'light' first, then a user rule that changes ipv4 to its own color.
+        // The user rule must win.
+        use crate::style::Color;
+        use crate::terminfo::ColorDepth;
+        let cfg = crate::config::Config {
+            general: crate::config::GeneralSection::default(),
+            rules: vec![crate::config::UserRule {
+                name: "ipv4".into(),
+                pattern: None,
+                style: Some(crate::config::UserStyle {
+                    fg: Some("#22ddee".into()),
+                    ..crate::config::UserStyle::default()
+                }),
+                enabled: true,
+            }],
+        };
+        let c = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x/cfg.toml"),
+            Some("light"),
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
+        let idx = BUILTIN_NAMES.iter().position(|n| *n == "ipv4").unwrap();
+        match c.styles[idx].fg {
+            Some(Color::Rgb(0x22, 0xdd, 0xee)) => {}
+            other => panic!("user rule did not override theme; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_theme_returns_error_theme() {
+        use crate::terminfo::ColorDepth;
+        let err = Compiled::load_with_theme(None, None, Some("nope"), ColorDepth::Truecolor)
+            .expect_err("unknown theme must error");
+        assert!(matches!(err, crate::Error::Theme { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn load_proxies_to_load_with_theme_none() {
+        // Behavioral guarantee: existing `load(...)` continues to behave as if
+        // no theme were provided. Regression guard for the proxy refactor.
+        use crate::terminfo::ColorDepth;
+        let a = Compiled::load(None, None, ColorDepth::Truecolor).unwrap();
+        let b = Compiled::load_with_theme(None, None, None, ColorDepth::Truecolor).unwrap();
+        assert_eq!(a.styles, b.styles);
     }
 
     #[test]

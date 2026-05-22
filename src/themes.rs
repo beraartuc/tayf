@@ -15,13 +15,6 @@
 //! - [`names`] — alphabetically-sorted list of available theme names.
 //! - [`validate_theme_rules`] — schema-shape check applied after parsing.
 
-// reason: this module is the registry/validation half of the preset-theme
-// feature (v0.2.3). Call sites live in the upcoming `Compiled::load_with_theme`
-// path (Task 5) and the `[general] theme = "..."` plumbing (Task 4). The unit
-// tests below exercise every item, but clippy's `dead_code` lint only sees
-// non-test consumers, so we silence it here until the wiring lands.
-#![allow(dead_code)]
-
 use crate::config::UserRule;
 use crate::error::Error;
 use crate::Result;
