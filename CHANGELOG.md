@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] — 2026-MM-DD
+
+### Changed
+
+- README "Themes" section moved under `## Configuration (v0.2)` as a subsection. Themes are a configuration source, not a sibling concept; readers find them while looking for how to configure colors.
+- `Compiled::load` proxy removed. The v0.2.3 series kept a thin `load(config, path, depth)` wrapper around `load_with_theme(config, path, None, depth)` to spare existing callsites. With the layering settled, the proxy is dead surface — production callers use `load_with_theme` directly and the remaining test callers have been inlined. `Compiled::load_builtins` is the only convenience shim left.
+- CI workflow upgraded `actions/checkout` from v4 to v5 ahead of the Node.js 20 deprecation enforced June 2026.
+
+### Documentation
+
+- `src/rules.rs::compile_error_for` doc-comment now spells out that theme TOML rules ride the same error-routing path as user `[[rules]]` after `themes::validate_theme_rules` runs.
+
+### Notes
+
+- No new dependencies. No public API change. Patch release containing only the polish items flagged in the senior Rust review of v0.2.3.
+
+[0.2.4]: https://github.com/beraartuc/tayf/releases/tag/v0.2.4
+
 ## [0.2.3] — 2026-05-23
 
 ### Added
