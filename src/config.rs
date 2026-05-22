@@ -6,6 +6,8 @@
 //! shape, and returns `Ok(None)` when no file is present (preserving v0.1
 //! behavior). See `docs/superpowers/specs/2026-05-21-tayf-v0.2.0-design.md`.
 
+use std::path::Path;
+
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
@@ -136,9 +138,150 @@ fn parse_color_field(
 }
 
 /// Parse the TOML body. Caller supplies `path` for error context.
-#[allow(dead_code)] // reason: first non-test caller lands in Task 6 (config::load reads the file and calls parse).
 pub(crate) fn parse(path: &str, source: &str) -> Result<Config> {
     toml::from_str::<Config>(source).map_err(|e| Error::config_from_toml(path.into(), source, e))
+}
+
+/// Maximum config size in bytes. Files larger than this are rejected to
+/// bound the regex compile and TOML parse work the user can trigger.
+pub(crate) const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+
+/// Public entry point — wires real `$XDG_CONFIG_HOME` and `$HOME` env vars
+/// into [`load_with`]. Tests use `load_with` directly to avoid mutating env.
+///
+/// Returns `Some((config, path))` when a config file was loaded, so callers
+/// can surface the path in downstream error messages without re-resolving
+/// (avoids env-race and file-deletion-between-calls regressions). Returns
+/// `Ok(None)` when no config file is present, preserving v0.1 behavior.
+#[allow(dead_code)] // reason: first non-test caller lands in Task 9 (Tayf::run wires config::load).
+pub(crate) fn load(explicit: Option<&Path>) -> Result<Option<(Config, std::path::PathBuf)>> {
+    load_with(
+        explicit,
+        || std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from),
+        || std::env::var_os("HOME").map(std::path::PathBuf::from),
+    )
+}
+
+pub(crate) fn load_with(
+    explicit: Option<&Path>,
+    xdg: impl FnOnce() -> Option<std::path::PathBuf>,
+    home: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<Option<(Config, std::path::PathBuf)>> {
+    let Some(path) = resolve_path(explicit, xdg, home)? else {
+        return Ok(None);
+    };
+    let path_str = path.to_string_lossy().into_owned();
+    let body = read_capped(&path)?;
+    let cfg = parse(&path_str, &body)?;
+    Ok(Some((cfg, path)))
+}
+
+pub(crate) fn resolve_path(
+    explicit: Option<&Path>,
+    xdg: impl FnOnce() -> Option<std::path::PathBuf>,
+    home: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<Option<std::path::PathBuf>> {
+    if let Some(p) = explicit {
+        let meta = std::fs::metadata(p).map_err(|e| Error::Config {
+            path: p.display().to_string(),
+            line: 0,
+            message: format!("cannot read --config path: {e}"),
+        })?;
+        if !meta.is_file() {
+            return Err(Error::Config {
+                path: p.display().to_string(),
+                line: 0,
+                message: "--config path is not a regular file".into(),
+            });
+        }
+        return Ok(Some(p.to_path_buf()));
+    }
+
+    if let Some(base) = xdg() {
+        if let Some(p) = check_default_path(&base.join("tayf"))? {
+            return Ok(Some(p));
+        }
+    }
+
+    if let Some(home) = home() {
+        if let Some(p) = check_default_path(&home.join(".config").join("tayf"))? {
+            return Ok(Some(p));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Check `<base>/config.toml` for existence; enforce the symlink whitelist
+/// (canonical file MUST live under canonical base). Returns `Ok(None)` if
+/// the candidate doesn't exist, `Ok(Some(path))` if it's safe, or
+/// `Err(Error::Config)` if it resolves outside the base.
+///
+/// Returns the **original** `candidate` (not the canonicalized form) so
+/// downstream display doesn't leak platform-specific routing — on macOS,
+/// `/tmp/foo/...` would otherwise surface as `/private/tmp/foo/...` and
+/// confuse users who never typed `/private`. Canonical form is used solely
+/// for the `starts_with` symlink check.
+fn check_default_path(base: &Path) -> Result<Option<std::path::PathBuf>> {
+    let candidate = base.join("config.toml");
+    if !candidate.exists() {
+        return Ok(None);
+    }
+    let canonical_file = std::fs::canonicalize(&candidate).map_err(|e| Error::Config {
+        path: candidate.display().to_string(),
+        line: 0,
+        message: format!("cannot canonicalize config path: {e}"),
+    })?;
+    let canonical_base = std::fs::canonicalize(base).map_err(|e| Error::Config {
+        path: base.display().to_string(),
+        line: 0,
+        message: format!("cannot canonicalize config base directory: {e}"),
+    })?;
+    if !canonical_file.starts_with(&canonical_base) {
+        return Err(Error::Config {
+            path: candidate.display().to_string(),
+            line: 0,
+            message: format!(
+                "config file must live under {base}; symlinks pointing outside are rejected. Use --config <PATH> if you intentionally want a file outside this directory.",
+                base = canonical_base.display()
+            ),
+        });
+    }
+    Ok(Some(candidate))
+}
+
+pub(crate) fn read_capped(path: &Path) -> Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| Error::Config {
+        path: path.display().to_string(),
+        line: 0,
+        message: format!("cannot open config: {e}"),
+    })?;
+    let mut buf = Vec::with_capacity(4096);
+    // `Read::take(limit + 1)` so we can distinguish "exactly at cap" from "over cap".
+    let _read =
+        (&mut file).take((MAX_CONFIG_BYTES as u64) + 1).read_to_end(&mut buf).map_err(|e| {
+            Error::Config {
+                path: path.display().to_string(),
+                line: 0,
+                message: format!("cannot read config: {e}"),
+            }
+        })?;
+    if buf.len() > MAX_CONFIG_BYTES {
+        return Err(Error::Config {
+            path: path.display().to_string(),
+            line: 0,
+            message: format!(
+                "config file too large: {actual} bytes (max {MAX_CONFIG_BYTES})",
+                actual = buf.len()
+            ),
+        });
+    }
+    String::from_utf8(buf).map_err(|e| Error::Config {
+        path: path.display().to_string(),
+        line: 0,
+        message: format!("config is not valid UTF-8: {e}"),
+    })
 }
 
 #[cfg(test)]
@@ -316,5 +459,161 @@ style = { fg = "red" }
             msg.contains("no visible effect") || msg.contains("enabled = false"),
             "must hint at the fix: {msg}"
         );
+    }
+
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("create tmpdir")
+    }
+
+    fn write_config(dir: &Path, body: &str) -> PathBuf {
+        let p = dir.join("config.toml");
+        fs::write(&p, body).expect("write config");
+        p
+    }
+
+    #[test]
+    fn resolve_returns_explicit_path_when_present() {
+        let dir = tmp();
+        let path = write_config(dir.path(), "");
+        let resolved = resolve_path(Some(&path), || None, || None).unwrap();
+        assert_eq!(resolved.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn resolve_errors_when_explicit_path_missing() {
+        let err =
+            resolve_path(Some(Path::new("/nonexistent/cfg.toml")), || None, || None).unwrap_err();
+        assert!(err.to_string().contains("/nonexistent/cfg.toml"));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_xdg() {
+        let dir = tmp();
+        let tayf_dir = dir.path().join("tayf");
+        fs::create_dir(&tayf_dir).unwrap();
+        let path = write_config(&tayf_dir, "");
+        let resolved = resolve_path(None, || Some(dir.path().to_path_buf()), || None).unwrap();
+        assert_eq!(resolved.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_home_when_xdg_unset() {
+        let dir = tmp();
+        let tayf_dir = dir.path().join(".config").join("tayf");
+        fs::create_dir_all(&tayf_dir).unwrap();
+        let path = write_config(&tayf_dir, "");
+        let resolved = resolve_path(None, || None, || Some(dir.path().to_path_buf())).unwrap();
+        assert_eq!(resolved.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn resolve_returns_none_when_nothing_exists() {
+        let dir = tmp();
+        let resolved = resolve_path(
+            None,
+            || Some(dir.path().join("nowhere")),
+            || Some(dir.path().join("nowhere2")),
+        )
+        .unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_rejects_default_path_symlinked_outside_base() {
+        use std::os::unix::fs::symlink;
+        // Create the legitimate base dir AND a sibling "evil" dir; symlink the
+        // config.toml from inside the base to a file in the sibling.
+        let dir = tmp();
+        let tayf_dir = dir.path().join("tayf");
+        let evil_dir = dir.path().join("evil");
+        std::fs::create_dir(&tayf_dir).unwrap();
+        std::fs::create_dir(&evil_dir).unwrap();
+        let evil_target = evil_dir.join("config.toml");
+        std::fs::write(&evil_target, "# attacker payload\n").unwrap();
+        let link_path = tayf_dir.join("config.toml");
+        symlink(&evil_target, &link_path).unwrap();
+
+        // The symlink lives under `dir.path()/tayf` (the base), but after
+        // canonicalization it resolves to `dir.path()/evil/config.toml`,
+        // which is outside the base. Must be rejected.
+        let err = resolve_path(None, || Some(dir.path().to_path_buf()), || None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("outside") || msg.contains("must live under"),
+            "expected symlink-out diagnostic in: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_accepts_default_path_when_symlink_stays_inside_base() {
+        use std::os::unix::fs::symlink;
+        // A symlink to a regular file INSIDE the same base is fine — covers the
+        // common "config.toml -> shared.toml" case in the user's own dir.
+        let dir = tmp();
+        let tayf_dir = dir.path().join("tayf");
+        std::fs::create_dir(&tayf_dir).unwrap();
+        let real = tayf_dir.join("shared.toml");
+        std::fs::write(&real, "").unwrap();
+        let link = tayf_dir.join("config.toml");
+        symlink(&real, &link).unwrap();
+
+        let resolved = resolve_path(None, || Some(dir.path().to_path_buf()), || None).unwrap();
+        assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn resolve_explicit_config_bypasses_whitelist() {
+        // --config <path> is the explicit escape hatch: it goes through even
+        // when the file is nowhere near $HOME or $XDG_CONFIG_HOME.
+        let dir = tmp();
+        let outside = dir.path().join("anywhere.toml");
+        std::fs::write(&outside, "").unwrap();
+        let resolved = resolve_path(Some(&outside), || None, || None).unwrap();
+        assert_eq!(resolved.as_deref(), Some(outside.as_path()));
+    }
+
+    #[test]
+    fn read_under_cap_returns_body() {
+        let dir = tmp();
+        let path = write_config(dir.path(), "[general]\n");
+        let body = read_capped(&path).unwrap();
+        assert_eq!(body, "[general]\n");
+    }
+
+    #[test]
+    fn read_over_cap_errors() {
+        let dir = tmp();
+        let big = "a".repeat(MAX_CONFIG_BYTES + 1);
+        let path = write_config(dir.path(), &big);
+        let err = read_capped(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("too large"));
+        assert!(msg.contains(&MAX_CONFIG_BYTES.to_string()));
+    }
+
+    #[test]
+    fn load_returns_none_when_no_config() {
+        let dir = tmp();
+        let cfg = load_with(
+            None,
+            || Some(dir.path().join("nowhere")),
+            || Some(dir.path().join("nowhere2")),
+        )
+        .unwrap();
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn load_returns_some_for_valid_explicit_path() {
+        let dir = tmp();
+        let path = write_config(dir.path(), "[general]\n");
+        let (cfg, loaded_path) = load_with(Some(&path), || None, || None).unwrap().unwrap();
+        assert!(cfg.general.respect_existing_colors);
+        assert_eq!(loaded_path, path, "loaded path must round-trip exactly");
     }
 }
