@@ -85,6 +85,56 @@ pub(crate) struct UserStyle {
     pub(crate) dim: bool,
 }
 
+impl UserStyle {
+    /// Convert into a [`crate::style::Style`], or produce an actionable
+    /// [`Error::Config`].
+    ///
+    /// `path` and `rule_name` are folded into the error message so users
+    /// know exactly which `[[rules]]` entry is wrong.
+    #[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules).
+    pub(crate) fn to_style(&self, path: &str, rule_name: &str) -> Result<crate::style::Style> {
+        let fg =
+            self.fg.as_deref().map(|s| parse_color_field(path, rule_name, "fg", s)).transpose()?;
+        let bg =
+            self.bg.as_deref().map(|s| parse_color_field(path, rule_name, "bg", s)).transpose()?;
+
+        let style = crate::style::Style {
+            fg,
+            bg,
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+            dim: self.dim,
+        };
+
+        if style == crate::style::Style::DEFAULT {
+            return Err(Error::Config {
+                path: path.into(),
+                line: 0,
+                message: format!(
+                    "rule '{rule_name}': style has no visible effect; use `enabled = false` to disable this rule instead"
+                ),
+            });
+        }
+
+        Ok(style)
+    }
+}
+
+#[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules via UserStyle::to_style).
+fn parse_color_field(
+    path: &str,
+    rule_name: &str,
+    field: &str,
+    value: &str,
+) -> Result<crate::style::Color> {
+    crate::style::Color::parse_str(value).map_err(|msg| Error::Config {
+        path: path.into(),
+        line: 0,
+        message: format!("rule '{rule_name}': {field}: {msg}"),
+    })
+}
+
 /// Parse the TOML body. Caller supplies `path` for error context.
 #[allow(dead_code)] // reason: first non-test caller lands in Task 6 (config::load reads the file and calls parse).
 pub(crate) fn parse(path: &str, source: &str) -> Result<Config> {
@@ -185,5 +235,61 @@ style = { fg = "red" }
         assert!(msg.contains("/cfg.toml"));
         // The offending token sits on line 2; toml::Error::span points there.
         assert!(msg.contains(":2") || msg.contains("line 2"), "expected line 2 in: {msg}");
+    }
+
+    use crate::style::{Color, Style};
+
+    #[test]
+    fn user_style_with_fg_only() {
+        let us = UserStyle { fg: Some("yellow".into()), ..UserStyle::default() };
+        let s = us.to_style("/x", "log_level").unwrap();
+        assert_eq!(s.fg, Some(Color::Yellow));
+        assert_eq!(s.bg, None);
+        assert!(!s.bold);
+    }
+
+    #[test]
+    fn user_style_full_round_trip() {
+        let us = UserStyle {
+            fg: Some("#ff8800".into()),
+            bg: Some("color(0)".into()),
+            bold: true,
+            italic: true,
+            underline: true,
+            dim: false,
+        };
+        let s = us.to_style("/x", "kubernetes-pod").unwrap();
+        assert_eq!(s.fg, Some(Color::Rgb(0xff, 0x88, 0x00)));
+        assert_eq!(s.bg, Some(Color::Indexed(0)));
+        assert!(s.bold && s.italic && s.underline && !s.dim);
+    }
+
+    #[test]
+    fn user_style_bad_color_carries_rule_name() {
+        let us = UserStyle { fg: Some("turquoise".into()), ..UserStyle::default() };
+        let err = us.to_style("/x/cfg.toml", "log_level").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("log_level"), "rule name missing: {msg}");
+        assert!(msg.contains("turquoise"));
+        assert!(msg.contains("/x/cfg.toml"));
+    }
+
+    #[test]
+    fn user_style_attribute_only_is_accepted() {
+        let us = UserStyle { bold: true, ..UserStyle::default() };
+        let s = us.to_style("/x", "any").unwrap();
+        assert_eq!(s, Style { bold: true, ..Style::DEFAULT });
+    }
+
+    #[test]
+    fn user_style_empty_is_rejected_with_actionable_message() {
+        let us = UserStyle::default();
+        let err = us.to_style("/x", "uuid").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("uuid"));
+        assert!(
+            msg.contains("no visible effect") || msg.contains("enabled = false"),
+            "must hint at the fix: {msg}"
+        );
     }
 }
