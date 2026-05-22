@@ -2,8 +2,10 @@
 #
 # Adjusts the 13 built-in styles for terminals with a light background,
 # where the bright_* color family renders washed out and white/bright_yellow
-# are effectively invisible. Each rule keeps a unique (fg, attrs) combination
-# so visually-distinct categories remain distinguishable.
+# are effectively invisible. Most rules keep distinct (fg, attrs) tuples;
+# the one intentional overlap is `ipv4` and `log_level`, both styled
+# `red + bold`. They are disambiguated by context (dotted-quad number vs.
+# uppercase level word) and the spec locks this trade-off.
 #
 # Schema: same subset of the user config as dark.toml.
 
