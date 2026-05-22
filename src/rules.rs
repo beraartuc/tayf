@@ -304,6 +304,12 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             is_user_supplied: false,
         },
         BuiltinRule {
+            name: "email".into(),
+            pattern: r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b".into(),
+            style: Style { fg: Some(Color::BrightGreen), ..Style::DEFAULT },
+            is_user_supplied: false,
+        },
+        BuiltinRule {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
@@ -365,6 +371,7 @@ pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "timestamp",
     "uuid",
     "url",
+    "email",
     "ipv4",
     "ipv6",
     "mac",
@@ -636,7 +643,7 @@ mod tests {
         assert_eq!(c.individuals.len(), n);
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
-        assert_eq!(n, 12, "v0.2.2 work-in-progress: + permission, timestamp, uuid, url");
+        assert_eq!(n, 13, "v0.2.2 ships thirteen built-in rules");
     }
 
     #[test]
@@ -730,7 +737,7 @@ mod tests {
             Some(_) => {}
             None => panic!("user rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 13, "12 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 14, "13 built-ins + 1 user rule");
     }
 
     #[test]
@@ -889,6 +896,22 @@ mod tests {
         assert!(!matches("url", "no scheme example.com/path"));
         // Scheme alone without "://" doesn't match
         assert!(!matches("url", "talk about https in general"));
+    }
+
+    #[test]
+    fn email_matches_common_forms() {
+        assert!(matches("email", "contact user@example.com"));
+        assert!(matches("email", "from first.last@sub.example.org"));
+        assert!(matches("email", "filter user+tag@example.com"));
+        // SSH URL shape — intentionally matches as email
+        assert!(matches("email", "clone git@github.com"));
+    }
+
+    #[test]
+    fn email_rejects_malformed() {
+        assert!(!matches("email", "@example.com"));
+        assert!(!matches("email", "user@"));
+        assert!(!matches("email", "no at sign here"));
     }
 
     #[test]
