@@ -4,9 +4,9 @@ Terminal-agnostic, PTY-based, regex-driven output colorizer in Rust.
 
 `tayf` wraps your shell inside a pseudo-terminal and applies a small set of
 regular expressions to the byte stream, so common patterns (IP addresses,
-log levels, HTTP status codes, durations, FQDNs, file extensions) appear
-colorized — in any terminal emulator, with any shell, with no aliases or
-per-command wrapping.
+log levels, HTTP status codes, durations, FQDNs, file extensions, UUIDs,
+URLs, emails, timestamps, file permissions) appear colorized — in any
+terminal emulator, with any shell, with no aliases or per-command wrapping.
 
 > **Status:** v0.1 is the working skeleton. Use it for casual sessions; expect
 > rough edges around interactive programs that aren't full-screen. Full ANSI
@@ -38,31 +38,48 @@ request a login shell with `--login`.
 When stdout is not a TTY (e.g. `tayf | tee log.txt`), colorization is
 disabled automatically.
 
-## Built-in rules (v0.1)
+## Built-in rules
+
+`tayf` ships with thirteen built-in patterns, listed in priority order
+(most-specific first; first match wins):
 
 | Name        | Color           | Example                                       |
 |-------------|-----------------|-----------------------------------------------|
+| Permission  | dim white       | `-rw-r--r--`, `drwxr-xr-x`                    |
+| Timestamp   | bright black    | `2026-05-22T10:30:00Z`, `[22/May/2026:10:30:00 +0000]` |
+| UUID        | bright magenta  | `550e8400-e29b-41d4-a716-446655440000`        |
+| URL         | bright blue, underlined | `https://example.com/path`, `ssh://host` |
+| Email       | bright green    | `user@example.com`                            |
 | IPv4        | bold yellow     | `192.168.1.1`                                 |
 | IPv6        | bright yellow   | `fe80::1`, `2001:db8::1`                      |
 | MAC         | cyan            | `aa:bb:cc:dd:ee:ff`                           |
 | Log level   | bold bright-red | `ERROR`, `WARN`, `INFO`, ...                  |
 | HTTP status | magenta         | ` 200 `, `/404`, `:500`                       |
+| Filename    | bright cyan     | `claude.md`, `archive.tar.gz`, `config.json`  |
 | FQDN        | blue            | `api.example.com`                             |
 | Duration    | green           | `20.291 ms`, `1.5s`, `100ms`                  |
-| Filename    | bright cyan     | `claude.md`, `archive.tar.gz`, `config.json`  |
 
-The filename rule covers a curated catalog of common extensions — archives
-(`zip`, `tar.gz`, `7z`, ...), source code (`rs`, `py`, `ts`, `go`, ...),
-configuration (`json`, `yaml`, `toml`, ...), documents (`pdf`, `md`, ...),
-media, and binary formats. See `src/rules.rs` for the full list.
+Pattern notes:
+
+- **Permission** matches POSIX `ls -l` file mode strings.
+- **Timestamp** spans multiple common formats: ISO-8601, syslog (`May 22
+  10:30:00`), Apache/nginx (`[22/May/2026:10:30:00 +0000]`), and RFC 2822.
+- **UUID** matches the canonical 8-4-4-4-12 hex form.
+- **URL** matches `https?://`, `ssh://`, and `ftp://` URLs.
+- **Email** matches an RFC 5322 simplified shape.
+- The **filename** rule covers a curated catalog of common extensions —
+  archives (`zip`, `tar.gz`, `7z`, ...), source code (`rs`, `py`, `ts`,
+  `go`, ...), configuration (`json`, `yaml`, `toml`, ...), documents
+  (`pdf`, `md`, ...), media, and binary formats. See `src/rules.rs` for
+  the full list.
 
 ## Configuration (v0.2)
 
 `tayf` reads an optional TOML config from
 `$XDG_CONFIG_HOME/tayf/config.toml` (falling back to
 `~/.config/tayf/config.toml`). Pass `--config <path>` to use a different
-file. Without a config file, `tayf` behaves exactly as v0.1: the eight
-built-in rules described above are active.
+file. Without a config file, all thirteen built-in rules described above
+are active with their default styles.
 
 ```toml
 # ~/.config/tayf/config.toml
@@ -80,14 +97,14 @@ enabled = false
 
 # Append a new custom rule.
 [[rules]]
-name = "uuid"
-pattern = '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
-style = { fg = "#888888" }
-
-[[rules]]
 name = "kubernetes-pod"
 pattern = '\b[a-z][a-z0-9-]+-[a-z0-9]{5}-[a-z0-9]{5}\b'
 style = { fg = "magenta", italic = true }
+
+[[rules]]
+name = "git-sha"
+pattern = '\b[0-9a-f]{7,40}\b'
+style = { fg = "#888888" }
 ```
 
 ### Color values
@@ -110,7 +127,8 @@ rejected at load time — use `enabled = false` to disable a rule instead.
 
 ### Built-in rule names
 
-The eight names you can override or disable: `ipv4`, `ipv6`, `mac`,
+The thirteen names you can override or disable, in priority order:
+`permission`, `timestamp`, `uuid`, `url`, `email`, `ipv4`, `ipv6`, `mac`,
 `log_level`, `http_status`, `filename`, `fqdn`, `duration`.
 
 ### Errors
