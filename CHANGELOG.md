@@ -8,10 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Preset color themes embedded in the binary. Two themes ship in this release: `dark` (explicit defaults, identical to running tayf without a theme — a copy-and-edit template) and `light` (re-tuned palette for light-background terminals).
+- Preset color themes embedded in the binary. `dark` ships as the explicit defaults — identical to running tayf without a theme, useful as a copy-and-edit template. `light` ships as a re-tuned palette for light-background terminals.
 - `--theme <NAME>` CLI flag. CLI value overrides the config-file value.
 - `[general] theme = "..."` in `~/.config/tayf/config.toml`. Defaults to `None` (no theme).
-- New `Error::Theme { name, available }` variant; unknown theme names exit with BSD `EX_USAGE` (64) and list the available themes in stderr.
+- New `Error::Theme { name, available }` variant; unknown theme names exit with code 64 (`EX_USAGE`) and list the available themes on stderr.
 
 ### Fixed
 
@@ -19,8 +19,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Notes
 
-- No new dependencies. No public API change beyond the additive `--theme` CLI flag and the additive `[general] theme` config field. Theme layer slots into the existing `apply_user_rules` cascade (built-ins → theme → user config).
-- Theme files are baked into the binary via `include_str!`. Users wanting a custom theme should still use the user-config layer (which is applied after the theme layer and so wins on conflicts).
+- No new dependencies. No public API change beyond the additive `--theme` CLI flag and the additive `[general] theme` config field.
+- Theme styles apply on top of built-in defaults; your `[[rules]]` in `~/.config/tayf/config.toml` still win over the theme. Same precedence as before, with the theme as a new middle layer.
+- Theme files are baked into the binary at build time. Users wanting a custom theme should still use the user-config layer.
 - Automatic background detection (`COLORFGBG` / OSC 11) is deferred to v0.3.
 
 [0.2.3]: https://github.com/beraartuc/tayf/releases/tag/v0.2.3
