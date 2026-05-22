@@ -915,6 +915,40 @@ mod tests {
     }
 
     #[test]
+    fn new_builtins_do_not_match_sgr_parameters() {
+        // Regression: ensure none of the v0.2.2 new built-ins (permission,
+        // timestamp, uuid, url, email) inject SGR codes inside an existing
+        // escape sequence. apply_rules must not modify any SGR bytes —
+        // mid-sequence injection would break tools like Powerlevel10k.
+        use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        // Each input is a raw SGR sequence or a sequence wrapped in plain
+        // text. The output of apply_rules must equal the input (no SGR
+        // injection inside escape bytes).
+        let inputs: &[&[u8]] = &[
+            b"\x1b[0m",
+            b"\x1b[1;39m",
+            b"\x1b[38;5;202m",
+            b"\x1b[38;2;255;136;0m",
+            // Escape sequences sandwiched in plain text:
+            b"prefix \x1b[44m text \x1b[0m suffix",
+        ];
+        for input in inputs {
+            let mut out = Vec::new();
+            apply_rules(input, &rules, &mut out).unwrap();
+            assert_eq!(
+                out,
+                *input,
+                "apply_rules must not modify SGR sequences: input={:?} got={:?}",
+                String::from_utf8_lossy(input),
+                String::from_utf8_lossy(&out)
+            );
+        }
+    }
+
+    #[test]
     fn load_rejects_pattern_exceeding_size_limit() {
         use crate::config::{Config, GeneralSection, UserRule, UserStyle};
         use crate::terminfo::ColorDepth;
