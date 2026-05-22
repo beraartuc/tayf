@@ -4,6 +4,7 @@
 //! `main`) can map them to user-facing messages and exit codes in one place.
 //! See spec §4.
 
+use std::fmt::Write as _;
 use std::io;
 
 /// All recoverable errors produced by tayf.
@@ -33,6 +34,24 @@ pub enum Error {
     )]
     Signal(#[source] io::Error),
 
+    /// Failed to load or validate the user TOML config.
+    ///
+    /// `line` is 1-based when available; pass `0` for errors with no line
+    /// context (path resolution, size limit, IO). The `message` field passes
+    /// through `sanitize_for_display` in the `Display` impl so that any
+    /// user-supplied content echoed back (e.g. a color string from a config
+    /// rule) cannot smuggle an escape sequence onto the user's terminal —
+    /// CLAUDE.md §3 invariant.
+    #[error("config error in {path}{}: {}", line_suffix(*line), sanitize_for_display(message))]
+    Config {
+        /// Absolute path to the config file the error originated from.
+        path: String,
+        /// 1-based line number, or `0` for "no line context".
+        line: usize,
+        /// Human-readable description ending in actionable guidance.
+        message: String,
+    },
+
     /// A line exceeded the buffer cap; flushed as-is without rule application.
     ///
     /// **Non-fatal — INVARIANT:** This variant must only be constructed for
@@ -51,6 +70,63 @@ pub enum Error {
 
 /// Convenience alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+fn line_suffix(line: usize) -> String {
+    if line == 0 {
+        String::new()
+    } else {
+        format!(":{line}")
+    }
+}
+
+/// Replace ASCII control bytes in a diagnostic message with their `\xNN`
+/// escape form so a hostile config string (e.g. `"\x1b[2J"` in a color value)
+/// cannot execute as a terminal control sequence when the error is printed
+/// to stderr. Preserves common whitespace (`\n`, `\t`, regular space) since
+/// those round-trip safely through a terminal.
+fn sanitize_for_display(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    for ch in message.chars() {
+        if (ch.is_ascii_control() && ch != '\n' && ch != '\t') || ch == '\x7f' {
+            // `write!` into a String is infallible; the discard is
+            // explicit per the plan's clippy::format_push_string fallback.
+            let _ = write!(out, "\\x{:02x}", ch as u32);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+impl Error {
+    /// Build a [`Error::Config`] from a `toml::de::Error`, extracting the
+    /// 1-based line number when the source span is available.
+    #[allow(dead_code)] // reason: first non-test caller lands in Task 4 (config::parse).
+    #[allow(clippy::needless_pass_by_value)]
+    // reason: the diagnostic is single-shot — callers obtain `err` from
+    // `toml::from_str(..).unwrap_err()` and never reuse it. Taking by value
+    // matches that lifecycle and keeps the signature stable for Task 4.
+    pub(crate) fn config_from_toml(path: String, source: &str, err: toml::de::Error) -> Self {
+        let line = err.span().map_or(0, |range| line_from_offset(source, range.start));
+        Error::Config { path, line, message: err.message().to_string() }
+    }
+
+    /// Build a [`Error::Config`] for a regex compile failure inside a named
+    /// rule. `line` is 0 unless the caller already knows the source line.
+    #[allow(dead_code)] // reason: first caller lands in Task 8 (Compiled::load).
+    #[allow(clippy::needless_pass_by_value)]
+    // reason: `regex::Error` is the single-shot return of `Regex::new(..)`;
+    // callers move it in directly. Matches the by-value signature established
+    // for `config_from_toml` so the two construction helpers are symmetric.
+    pub(crate) fn config_regex(path: String, rule_name: &str, source: regex::Error) -> Self {
+        Error::Config { path, line: 0, message: format!("rule '{rule_name}': {source}") }
+    }
+}
+
+fn line_from_offset(source: &str, offset: usize) -> usize {
+    // 1-based: count newlines up to `offset` and add 1.
+    source[..offset.min(source.len())].bytes().filter(|&b| b == b'\n').count() + 1
+}
 
 #[cfg(test)]
 mod tests {
@@ -128,5 +204,59 @@ mod tests {
         let io = io::Error::from(io::ErrorKind::PermissionDenied);
         let e: Error = io.into();
         assert!(matches!(e, Error::Pty(_)));
+    }
+
+    #[test]
+    fn config_message_includes_path_line_and_message() {
+        let e = Error::Config {
+            path: "/home/u/.config/tayf/config.toml".into(),
+            line: 12,
+            message: "unknown color name 'turquoise'".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("/home/u/.config/tayf/config.toml"));
+        assert!(msg.contains("12"));
+        assert!(msg.contains("turquoise"));
+    }
+
+    #[test]
+    fn config_message_omits_line_when_zero() {
+        let e = Error::Config {
+            path: "/etc/tayf.toml".into(),
+            line: 0,
+            message: "file too large: 2097152 bytes (max 1048576)".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("/etc/tayf.toml"));
+        assert!(!msg.contains(":0:"), "line 0 sentinel must not surface in message: {msg}");
+        assert!(msg.contains("too large"));
+    }
+
+    #[test]
+    fn config_from_toml_parse_error_carries_line() {
+        // Unterminated inline-table — guaranteed parse failure in toml 0.9.
+        let bad = "rules = [ { unterminated\n";
+        let err: toml::de::Error = toml::from_str::<toml::Table>(bad).unwrap_err();
+        let cfg = Error::config_from_toml("/tmp/cfg.toml".into(), bad, err);
+        let msg = cfg.to_string();
+        assert!(msg.contains("/tmp/cfg.toml"));
+    }
+
+    #[test]
+    fn config_message_escapes_control_bytes_to_prevent_terminal_injection() {
+        // A hostile config string echoed back in an error message must not
+        // execute as a terminal control sequence when Display'd to stderr.
+        let e = Error::Config {
+            path: "/tmp/cfg.toml".into(),
+            line: 7,
+            message: "rule 'evil': fg: unknown color name '\x1b[2J\x1b[H'".into(),
+        };
+        let rendered = e.to_string();
+        assert!(!rendered.contains('\x1b'), "raw ESC must not survive Display: {rendered:?}");
+        assert!(rendered.contains("\\x1b"), "ESC must be escaped as \\x1b: {rendered:?}");
+        // Newline and tab pass through unchanged (safe whitespace).
+        let e2 = Error::Config { path: "/x".into(), line: 0, message: "ok\nfine\there".into() };
+        let r2 = e2.to_string();
+        assert!(r2.contains("ok\nfine\there"), "safe whitespace must pass: {r2:?}");
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! Exit-code policy (BSD `sysexits.h`):
 //! - 0 (`EX_OK`) — success, including `--help` and `--version` output.
-//! - 64 (`EX_USAGE`) — CLI parse failure (unknown flag, bad value, etc.).
+//! - 64 (`EX_USAGE`) — CLI parse failure (unknown flag, bad value, etc.),
+//!   or a malformed `--config` / `~/.config/tayf/config.toml`.
 //! - 70 (`EX_SOFTWARE`) — internal programming error (regex compile, buffer
 //!   overflow).
 //! - 71 (`EX_OSERR`) — operating-system failure (PTY, TTY, signal, shell
@@ -44,5 +45,6 @@ fn map_error_to_exit_code(err: &Error) -> u8 {
         Error::Signal(_) => 71,
         Error::RegexCompile(_) => 70, // EX_SOFTWARE
         Error::BufferOverflow { .. } => 70,
+        Error::Config { .. } => 64, // EX_USAGE
     }
 }
