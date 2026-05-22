@@ -60,6 +60,14 @@ pub enum Error {
         message: String,
     },
 
+    /// File-watcher operation failed (start, register path, event channel).
+    ///
+    /// Uses `#[source]` rather than `#[from]` so call sites in the watcher
+    /// and reload orchestrator construct `Error::Watch(...)` explicitly — the
+    /// conversion is part of the contract there, not an implicit coercion.
+    #[error("file watcher error: {0}")]
+    Watch(#[source] notify::Error),
+
     /// A line exceeded the buffer cap; flushed as-is without rule application.
     ///
     /// **Non-fatal — INVARIANT:** This variant must only be constructed for
@@ -306,5 +314,14 @@ mod tests {
             "raw U+009B must not survive Display: {rendered:?}"
         );
         assert!(rendered.contains("\\x9b"), "U+009B must be escaped as \\x9b: {rendered:?}");
+    }
+
+    #[test]
+    fn watch_error_display_is_helpful() {
+        let inner = notify::Error::generic("permission denied");
+        let err = crate::error::Error::Watch(inner);
+        let msg = err.to_string();
+        assert!(msg.contains("file watcher error"));
+        assert!(msg.contains("permission denied"));
     }
 }

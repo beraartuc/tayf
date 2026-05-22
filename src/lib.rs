@@ -26,6 +26,7 @@ pub(crate) mod line_buffer;
 pub(crate) mod log;
 pub(crate) mod pipeline;
 pub(crate) mod pty;
+pub(crate) mod reload;
 pub(crate) mod rules;
 pub(crate) mod runtime;
 pub(crate) mod shell;
