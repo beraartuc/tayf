@@ -63,7 +63,7 @@ pub enum Error {
     /// Returned when `--theme <NAME>` or `[general] theme = "..."` names a theme
     /// that is not in the embedded registry. The available list is computed
     /// from [`crate::themes::names`] at construction time.
-    #[error("theme {:?} not found; available: {}. Run with --theme <name>.", name, available.join(", "))]
+    #[error("theme '{}' not found; available: {}. Run with --theme <name>.", sanitize_for_display(name), available.join(", "))]
     Theme { name: String, available: Vec<String> },
 
     /// File-watcher operation failed (start, register path, event channel).
@@ -335,9 +335,23 @@ mod tests {
     fn theme_display_shows_name_and_alternatives() {
         let e = Error::Theme { name: "foo".into(), available: vec!["dark".into(), "light".into()] };
         let s = e.to_string();
-        assert!(s.contains("\"foo\""), "should quote unknown name; got: {s}");
+        assert!(s.contains("'foo'"), "should quote unknown name; got: {s}");
         assert!(s.contains("dark"), "should list 'dark'; got: {s}");
         assert!(s.contains("light"), "should list 'light'; got: {s}");
         assert!(s.contains("--theme"), "should suggest --theme; got: {s}");
+    }
+
+    #[test]
+    fn theme_display_sanitizes_control_bytes_in_name() {
+        // Defense-in-depth: a hostile `--theme $'\x1b[2J'` must not let an ESC
+        // sequence reach the terminal via the error path. Mirrors the gate that
+        // `Error::Config` applies to `path` and `message`.
+        let e = Error::Theme {
+            name: "\x1b[2Jevil".into(),
+            available: vec!["dark".into(), "light".into()],
+        };
+        let s = e.to_string();
+        assert!(!s.contains('\x1b'), "raw ESC must not survive Display; got: {s:?}");
+        assert!(s.contains("\\x1b"), "ESC must appear as \\x1b escape; got: {s:?}");
     }
 }
