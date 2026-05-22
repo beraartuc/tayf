@@ -32,7 +32,7 @@ pub(crate) struct Config {
 /// but the field itself is omitted.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules reads general).
+#[allow(dead_code)] // reason: first non-test caller lands in Task 9 (Tayf::run reads general after load).
 pub(crate) struct GeneralSection {
     /// Accepted but ignored in v0.2.0 — v0.3 will use it once full ANSI
     /// awareness lands.
@@ -55,7 +55,6 @@ fn default_true() -> bool {
 /// validation in `apply_user_rules` enforces that *new* rules supply both.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules iterates rules).
 pub(crate) struct UserRule {
     pub(crate) name: String,
     #[serde(default)]
@@ -70,7 +69,6 @@ pub(crate) struct UserRule {
 /// input goes through [`crate::style::Color::parse_str`] and bool literals.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules reads style fields).
 #[allow(clippy::struct_excessive_bools)] // reason: mirrors the SGR style attribute set (bold/italic/underline/dim); each maps 1:1 to a TOML key and a distinct ANSI code. Collapsing into an enum or bitflags would obscure the user-facing schema.
 pub(crate) struct UserStyle {
     #[serde(default)]
@@ -93,7 +91,6 @@ impl UserStyle {
     ///
     /// `path` and `rule_name` are folded into the error message so users
     /// know exactly which `[[rules]]` entry is wrong.
-    #[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules).
     pub(crate) fn to_style(&self, path: &str, rule_name: &str) -> Result<crate::style::Style> {
         let fg =
             self.fg.as_deref().map(|s| parse_color_field(path, rule_name, "fg", s)).transpose()?;
@@ -123,7 +120,6 @@ impl UserStyle {
     }
 }
 
-#[allow(dead_code)] // reason: first non-test caller lands in Task 7 (apply_user_rules via UserStyle::to_style).
 fn parse_color_field(
     path: &str,
     rule_name: &str,
@@ -325,6 +321,87 @@ pub(crate) fn read_capped(path: &Path) -> Result<String> {
         line: 0,
         message: format!("config is not valid UTF-8: {e}"),
     })
+}
+
+/// Merge user-defined rules into the built-in vector following spec §4.2.
+///
+/// Semantics (strict):
+/// - `name` matching a built-in → override-in-place. `pattern`, `style`,
+///   and `enabled = false` all apply individually.
+/// - `name` NOT matching a built-in → new custom rule, appended at the end.
+///   Both `pattern` and `style` are required; `style` must yield a visible
+///   effect (via [`UserStyle::to_style`]).
+/// - `enabled = false` removes the matching rule (built-in or already-appended
+///   custom) without further inspection of `pattern`/`style`.
+///
+/// `path` flows into error messages so users see file/rule context.
+#[allow(dead_code)] // reason: first non-test caller lands in Task 8 (Compiled::load wires the merge).
+pub(crate) fn apply_user_rules(
+    path: &str,
+    builtins: &mut Vec<crate::rules::BuiltinRule>,
+    user: &[UserRule],
+) -> Result<()> {
+    let known: std::collections::HashSet<&str> =
+        crate::rules::BUILTIN_NAMES.iter().copied().collect();
+
+    for ur in user {
+        let is_builtin = known.contains(ur.name.as_str());
+
+        if !ur.enabled {
+            builtins.retain(|b| b.name != ur.name);
+            continue;
+        }
+
+        if is_builtin {
+            // Override in place.
+            let Some(existing) = builtins.iter_mut().find(|b| b.name == ur.name) else {
+                // `enabled = true` re-introduction of a previously disabled
+                // built-in within the same TOML — not a documented case in
+                // v0.2.0; treat as a friendly error rather than silently
+                // ignoring it.
+                return Err(Error::Config {
+                    path: path.into(),
+                    line: 0,
+                    message: format!(
+                        "rule '{name}': appears twice with conflicting `enabled` values",
+                        name = ur.name
+                    ),
+                });
+            };
+            if let Some(p) = &ur.pattern {
+                existing.pattern.clone_from(p);
+            }
+            if let Some(s) = &ur.style {
+                existing.style = s.to_style(path, &ur.name)?;
+            }
+        } else {
+            // New custom rule — both pattern and style required.
+            let Some(pattern) = ur.pattern.clone() else {
+                return Err(Error::Config {
+                    path: path.into(),
+                    line: 0,
+                    message: format!(
+                        "rule '{name}': missing `pattern` (no built-in by this name; new rules must define one)",
+                        name = ur.name
+                    ),
+                });
+            };
+            let Some(user_style) = &ur.style else {
+                return Err(Error::Config {
+                    path: path.into(),
+                    line: 0,
+                    message: format!(
+                        "rule '{name}': missing `style` (new rules must define one)",
+                        name = ur.name
+                    ),
+                });
+            };
+            let style = user_style.to_style(path, &ur.name)?;
+            builtins.push(crate::rules::BuiltinRule { name: ur.name.clone(), pattern, style });
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -701,5 +778,162 @@ style = { fg = "red" }
         let (cfg, loaded_path) = load_with(Some(&path), || None, || None).unwrap().unwrap();
         assert!(cfg.general.respect_existing_colors);
         assert_eq!(loaded_path, path, "loaded path must round-trip exactly");
+    }
+
+    use crate::rules::{builtin_rules, BUILTIN_NAMES};
+
+    fn user_rule(name: &str) -> UserRule {
+        UserRule { name: name.into(), pattern: None, style: None, enabled: true }
+    }
+
+    #[test]
+    fn apply_with_no_user_rules_is_identity() {
+        let mut rules = builtin_rules();
+        let before_len = rules.len();
+        apply_user_rules("/x", &mut rules, &[]).unwrap();
+        assert_eq!(rules.len(), before_len);
+    }
+
+    #[test]
+    fn override_builtin_style_replaces_wholesale() {
+        let mut rules = builtin_rules();
+        // log_level built-in is bold + BrightRed. Override with just yellow.
+        let user = vec![UserRule {
+            name: "log_level".into(),
+            pattern: None,
+            style: Some(UserStyle { fg: Some("yellow".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let log = rules.iter().find(|r| r.name == "log_level").expect("present");
+        assert_eq!(log.style.fg, Some(crate::style::Color::Yellow));
+        assert!(!log.style.bold, "REPLACE semantics: built-in bold must NOT carry over");
+    }
+
+    #[test]
+    fn disable_removes_builtin() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule { enabled: false, ..user_rule("fqdn") }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        assert!(rules.iter().all(|r| r.name != "fqdn"));
+    }
+
+    #[test]
+    fn append_new_custom_rule() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: "uuid".into(),
+            pattern: Some(r"\b[0-9a-fA-F]{8}\b".into()),
+            style: Some(UserStyle { fg: Some("#888888".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let uuid = rules.last().expect("appended");
+        assert_eq!(uuid.name, "uuid");
+        assert_eq!(uuid.style.fg, Some(crate::style::Color::Rgb(0x88, 0x88, 0x88)));
+    }
+
+    #[test]
+    fn appended_rules_preserve_declaration_order() {
+        let mut rules = builtin_rules();
+        let user = vec![
+            UserRule {
+                name: "a".into(),
+                pattern: Some("a".into()),
+                style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+                enabled: true,
+            },
+            UserRule {
+                name: "b".into(),
+                pattern: Some("b".into()),
+                style: Some(UserStyle { fg: Some("blue".into()), ..UserStyle::default() }),
+                enabled: true,
+            },
+        ];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let last_two: Vec<&str> = rules.iter().rev().take(2).map(|r| r.name.as_str()).collect();
+        assert_eq!(last_two, vec!["b", "a"], "user rules append in TOML order");
+    }
+
+    #[test]
+    fn override_replaces_pattern_when_provided() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: "ipv4".into(),
+            pattern: Some(r"\bX\.X\.X\.X\b".into()),
+            style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let ipv4 = rules.iter().find(|r| r.name == "ipv4").unwrap();
+        assert_eq!(ipv4.pattern, r"\bX\.X\.X\.X\b");
+    }
+
+    #[test]
+    fn new_rule_without_pattern_is_rejected() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: "uuid".into(),
+            pattern: None,
+            style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("uuid"));
+        assert!(msg.to_lowercase().contains("pattern"));
+    }
+
+    #[test]
+    fn new_rule_without_style_is_rejected() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: "uuid".into(),
+            pattern: Some(r"\b[0-9a-f]{8}\b".into()),
+            style: None,
+            enabled: true,
+        }];
+        let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
+        assert!(err.to_string().contains("uuid"));
+        assert!(err.to_string().to_lowercase().contains("style"));
+    }
+
+    #[test]
+    fn disable_user_appended_rule_is_noop() {
+        // A disabled user-only rule must simply not be added.
+        let mut rules = builtin_rules();
+        let before_len = rules.len();
+        let user = vec![UserRule {
+            name: "uuid".into(),
+            pattern: Some("X".into()),
+            style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+            enabled: false,
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        assert_eq!(rules.len(), before_len);
+    }
+
+    #[test]
+    fn builtin_names_constant_is_exhaustive() {
+        let rules = builtin_rules();
+        let from_rules: std::collections::HashSet<&str> =
+            rules.iter().map(|r| r.name.as_str()).collect();
+        let from_const: std::collections::HashSet<&str> = BUILTIN_NAMES.iter().copied().collect();
+        assert_eq!(from_rules, from_const);
+    }
+
+    #[test]
+    fn override_with_invalid_color_propagates_error_with_rule_name() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: "log_level".into(),
+            pattern: None,
+            style: Some(UserStyle { fg: Some("turquoise".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        let err = apply_user_rules("/x/cfg.toml", &mut rules, &user).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("log_level"));
+        assert!(msg.contains("turquoise"));
     }
 }

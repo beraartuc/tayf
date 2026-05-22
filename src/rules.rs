@@ -15,11 +15,11 @@ use crate::style::{Color, Style};
 /// `&'static str`) because the filename rule is built dynamically; the cost
 /// of eight heap allocations at startup is negligible.
 pub(crate) struct BuiltinRule {
-    // reason: read by tests (`find_rule` selects by name) and reserved for
-    // diagnostic logging once user-defined rules land; the live compile
-    // path indexes by position so the field is otherwise unread.
+    // reason: read by tests (`find_rule`) and by `config::apply_user_rules`
+    // (membership checks and override-in-place); the live compile path
+    // indexes by position so this field is otherwise unread.
     #[allow(dead_code)]
-    pub(crate) name: &'static str,
+    pub(crate) name: String,
     pub(crate) pattern: String,
     pub(crate) style: Style,
 }
@@ -259,42 +259,42 @@ fn build_filename_pattern() -> String {
 pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     vec![
         BuiltinRule {
-            name: "ipv4",
+            name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "ipv6",
+            name: "ipv6".into(),
             pattern: r"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}|::[0-9A-Fa-f]{1,4}|::1".into(),
             style: Style { fg: Some(Color::BrightYellow), ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "mac",
+            name: "mac".into(),
             pattern: r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b".into(),
             style: Style { fg: Some(Color::Cyan), ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "log_level",
+            name: "log_level".into(),
             pattern: r"\b(?:ERROR|FAIL|FATAL|CRITICAL|WARN|WARNING|INFO|DEBUG|TRACE)\b".into(),
             style: Style { fg: Some(Color::BrightRed), bold: true, ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "http_status",
+            name: "http_status".into(),
             pattern: r"(?:^|[\s/:])([1-5]\d{2})\b".into(),
             style: Style { fg: Some(Color::Magenta), ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "filename",
+            name: "filename".into(),
             pattern: build_filename_pattern(),
             style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "fqdn",
+            name: "fqdn".into(),
             pattern: r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.){1,}[A-Za-z]{2,24}\b".into(),
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
         },
         BuiltinRule {
-            name: "duration",
+            name: "duration".into(),
             // reason: dropping bare `s`, `m`, `h` units that collide with SGR final
             // bytes (\x1b[49m, etc.) and produce false-positive duration matches inside
             // escape sequences. Multi-character units cover the modern use cases
@@ -304,6 +304,22 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
         },
     ]
+}
+
+/// Names of the eight built-in rules. Mirrors the order of [`builtin_rules`].
+#[allow(dead_code)] // reason: first non-test caller lands in Task 8 (Compiled::load wires the merge); the membership set is built from this in apply_user_rules.
+pub(crate) const BUILTIN_NAMES: &[&str] =
+    &["ipv4", "ipv6", "mac", "log_level", "http_status", "filename", "fqdn", "duration"];
+
+#[cfg(test)]
+mod builtin_names_test {
+    use super::{builtin_rules, BUILTIN_NAMES};
+    #[test]
+    fn builtin_names_match_builtin_rules_order() {
+        let rules = builtin_rules();
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, BUILTIN_NAMES);
+    }
 }
 
 /// Compiled rule set ready for application against output lines.
