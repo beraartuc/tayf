@@ -12,12 +12,6 @@
 /// orchestrator code path; the variant is preserved purely for
 /// diagnostic logging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-// reason: variants are constructed only in tests until Task 9 wires the
-// watcher (FileChanged) and signal handler (SignalHup) producers. The
-// orchestrator consumes the enum via `{req:?}` Debug formatting, which
-// clippy intentionally ignores for dead-code analysis. Allow is removed
-// at that point.
 pub(crate) enum ReloadRequest {
     /// The file watcher observed a change to the config path.
     FileChanged,
@@ -72,10 +66,6 @@ pub(crate) struct ReloadOrchestrator {
     handle: Option<JoinHandle<()>>,
 }
 
-#[allow(dead_code)]
-// reason: no non-test caller until Task 9 wires the orchestrator into
-// runtime startup. Allow covers the `impl` block (struct + spawn) and
-// is removed when Task 9 lands.
 impl ReloadOrchestrator {
     /// Spawn the orchestrator thread.
     ///

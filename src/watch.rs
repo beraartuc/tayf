@@ -25,11 +25,6 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(200);
 /// Owns the watcher and the debounce thread. Drop closes both:
 /// the watcher's OS resource (`Drop` on `RecommendedWatcher`) and
 /// the debounce thread (channel close → loop exits → join).
-#[allow(dead_code)]
-// reason: ConfigWatcher has no non-test caller until Task 9 wires it
-// into `Tayf::run`. The struct, its spawn constructors, and its Drop
-// impl are all exercised by the unit tests below. Allow is removed
-// when the orchestrator owns one.
 pub(crate) struct ConfigWatcher {
     debounce_handle: Option<JoinHandle<()>>,
     // Held as Option so Drop can release the OS watcher BEFORE
@@ -40,8 +35,6 @@ pub(crate) struct ConfigWatcher {
     watcher: Option<RecommendedWatcher>,
 }
 
-#[allow(dead_code)]
-// reason: see ConfigWatcher above — retired in Task 9.
 impl ConfigWatcher {
     /// Begin watching `path`. Bursts of events are debounced into a
     /// single `ReloadRequest::FileChanged` per quiescent window.

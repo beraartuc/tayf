@@ -98,15 +98,61 @@ impl Tayf {
         let compiled = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
         let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
 
+        // The reload channel: senders go to the signal thread (always)
+        // and the file-watcher debounce thread (when a config exists).
+        // Receiver is moved into the orchestrator below. Both ends are
+        // owned here until the orchestrator spawns; if any `?` returns
+        // before that point, both ends drop with no observable effect
+        // (no thread holds them yet).
+        let (reload_tx, reload_rx) = std::sync::mpsc::channel::<reload::ReloadRequest>();
+
         let guard = tty_guard::TtyGuard::engage()?;
 
         let session = pty::PtySession::spawn(&spec)?;
         let (reader, writer, resizer, child) = session.into_parts()?;
         let child_pid = child.pid();
 
-        let _signal_guard = signals::spawn_handler(resizer, child_pid, None)?;
+        let signal_guard = signals::spawn_handler(resizer, child_pid, Some(reload_tx.clone()))?;
+
+        // Spawn the file watcher only when a config file was loaded.
+        // Per spec §8 question 2: absent config → no watcher; SIGHUP
+        // can still trigger a reload that re-resolves the config path.
+        let watcher = loaded
+            .as_ref()
+            .map(|(_, p)| watch::ConfigWatcher::spawn(p, reload_tx.clone()))
+            .transpose()?;
+
+        // Orchestrator is declared LAST among the threading scaffolding.
+        // If any `?` above had returned `Err`, no orchestrator would
+        // have been spawned — preventing the join-deadlock where the
+        // orchestrator's Drop blocks on a channel still holding live
+        // senders in already-spawned signal/watcher threads.
+        let _orchestrator = reload::ReloadOrchestrator::spawn(
+            Arc::clone(&rules),
+            loaded.as_ref().map(|(_, p)| p.clone()),
+            effective_depth,
+            reload_rx,
+        );
+
+        // Drop the local sender now. The only remaining `reload_tx`
+        // clones live in the signal thread and (when present) the
+        // watcher thread. When BOTH threads exit at shutdown, the
+        // orchestrator's `recv()` returns Err and the reload thread
+        // exits cleanly. Without this drop, the orchestrator's
+        // channel would never reach a zero-sender state.
+        drop(reload_tx);
 
         let exit_code = runtime::run(reader, writer, child, Arc::clone(&rules), apply_colors)?;
+
+        // Explicit ordered shutdown — drop the watcher and signal
+        // guard BEFORE the implicit `_orchestrator` drop at end of
+        // scope. Each of those drops joins its thread, which in turn
+        // drops the thread's `reload_tx` clone. Once both clones are
+        // gone, `recv()` in the reload thread returns Err and its
+        // loop exits, so the orchestrator's `Drop`-time `join()` is
+        // unblocked.
+        drop(watcher);
+        drop(signal_guard);
 
         drop(guard); // explicit; Drop would handle it but make ordering clear
 
