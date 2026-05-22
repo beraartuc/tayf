@@ -57,7 +57,7 @@ disabled automatically.
 | HTTP status | magenta         | ` 200 `, `/404`, `:500`                       |
 | Filename    | bright cyan     | `claude.md`, `archive.tar.gz`, `config.json`  |
 | FQDN        | blue            | `api.example.com`                             |
-| Duration    | green           | `20.291 ms`, `1.5s`, `100ms`                  |
+| Duration    | green           | `20.291 ms`, `1.5 ms`, `100ms`                |
 
 Pattern notes:
 
