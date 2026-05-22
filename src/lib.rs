@@ -84,6 +84,14 @@ impl Tayf {
         let config_ref = loaded.as_ref().map(|(c, _)| c);
         let config_path: Option<String> = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
+        // Compile rules BEFORE engaging the TTY guard. Rule validation
+        // (missing pattern, missing style, bad regex, duplicate names,
+        // invalid color) lives inside `Compiled::load` via
+        // `config::apply_user_rules`; surfacing those errors before the
+        // guard keeps the terminal in cooked mode and lets `Command::output`
+        // callers (integration tests) observe exit code 64 cleanly.
+        let rules = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
+
         let guard = tty_guard::TtyGuard::engage()?;
 
         let session = pty::PtySession::spawn(&spec)?;
@@ -92,7 +100,6 @@ impl Tayf {
 
         let _signal_guard = signals::spawn_handler(resizer, child_pid)?;
 
-        let rules = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
         let exit_code = runtime::run(reader, writer, child, rules, apply_colors)?;
 
         drop(guard); // explicit; Drop would handle it but make ordering clear
