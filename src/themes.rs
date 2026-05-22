@@ -29,16 +29,16 @@ use crate::Result;
 const DARK_SRC: &str = include_str!("../assets/themes/dark.toml");
 const LIGHT_SRC: &str = include_str!("../assets/themes/light.toml");
 
-/// `(name, source)` pairs, sorted alphabetically by name. Sorted order
-/// matters: [`names`] returns this slice's names verbatim, and error
-/// messages quote that order to give users a stable list.
-const REGISTRY: &[(&str, &str)] = &[("dark", DARK_SRC), ("light", LIGHT_SRC)];
-
-/// Alphabetically-sorted slice of available theme names, kept in lockstep
-/// with [`REGISTRY`]. Mirroring the names here lets [`names`] return a
-/// `'static` slice without runtime allocation; the
-/// `names_match_registry_order` unit test guarantees the two stay aligned.
+/// Alphabetically-sorted slice of available theme names. Single source of
+/// truth for the set and order of themes; [`REGISTRY`] is keyed by
+/// `THEME_NAMES[i]` so the two cannot drift.
 const THEME_NAMES: [&str; 2] = ["dark", "light"];
+
+/// `(name, source)` pairs, sorted alphabetically by name. `REGISTRY` is
+/// keyed by [`THEME_NAMES`]`[i]` so the two cannot drift; sorted order
+/// matters because error messages quote that order to give users a stable
+/// list.
+const REGISTRY: &[(&str, &str)] = &[(THEME_NAMES[0], DARK_SRC), (THEME_NAMES[1], LIGHT_SRC)];
 
 /// Resolve a theme name to its embedded TOML source.
 ///
@@ -134,12 +134,6 @@ mod tests {
         let mut sorted: Vec<_> = n.to_vec();
         sorted.sort_unstable();
         assert_eq!(n.to_vec(), sorted);
-    }
-
-    #[test]
-    fn names_match_registry_order() {
-        let registry_names: Vec<&str> = REGISTRY.iter().map(|(n, _)| *n).collect();
-        assert_eq!(registry_names, names().to_vec());
     }
 
     #[test]
