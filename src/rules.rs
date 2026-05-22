@@ -259,6 +259,19 @@ fn build_filename_pattern() -> String {
     format!(r"\b[\w.-]+\.(?:{alternation})\b")
 }
 
+/// Four timestamp formats joined as alternation. Each branch is anchor-
+/// bounded with fixed counts; no backtracking risk under `regex::bytes`.
+const TS_ISO8601: &str =
+    r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:[Zz]|[+-]\d{2}:?\d{2})?\b";
+const TS_SYSLOG: &str =
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2}\b";
+const TS_APACHE: &str = r"\d{1,2}/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}";
+const TS_RFC2822: &str = r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} (?:GMT|UTC|[+-]\d{4})";
+
+fn build_timestamp_pattern() -> String {
+    format!("(?:{TS_ISO8601})|(?:{TS_SYSLOG})|(?:{TS_APACHE})|(?:{TS_RFC2822})")
+}
+
 /// Construct the eight built-in rules. Returns a fresh `Vec` because the
 /// filename rule contains a dynamically built pattern string. See spec §3.6
 /// and §3.8.
@@ -268,6 +281,12 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             name: "permission".into(),
             pattern: r"(?:^|\s)[dlcbps-][rwxsStT-]{9}\+?(?:\s|$)".into(),
             style: Style { fg: Some(Color::White), dim: true, ..Style::DEFAULT },
+            is_user_supplied: false,
+        },
+        BuiltinRule {
+            name: "timestamp".into(),
+            pattern: build_timestamp_pattern(),
+            style: Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT },
             is_user_supplied: false,
         },
         BuiltinRule {
@@ -329,6 +348,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
 /// Names of the eight built-in rules. Mirrors the order of [`builtin_rules`].
 pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "permission",
+    "timestamp",
     "ipv4",
     "ipv6",
     "mac",
@@ -600,7 +620,7 @@ mod tests {
         assert_eq!(c.individuals.len(), n);
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
-        assert_eq!(n, 9, "v0.2.2 work-in-progress: 8 originals + permission");
+        assert_eq!(n, 10, "v0.2.2 work-in-progress: + permission, timestamp");
     }
 
     #[test]
@@ -694,7 +714,7 @@ mod tests {
             Some(_) => {}
             None => panic!("uuid rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 10, "9 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 11, "10 built-ins + 1 user rule");
     }
 
     #[test]
@@ -782,6 +802,40 @@ mod tests {
         assert!(!matches("permission", "-rwxrwx 1 user file"));
         // Wrong perm chars
         assert!(!matches("permission", "-rwzqqzqqz 1 user file"));
+    }
+
+    #[test]
+    fn timestamp_matches_iso8601() {
+        assert!(matches("timestamp", "log 2026-05-22T10:30:45Z message"));
+        assert!(matches("timestamp", "log 2026-05-22T10:30:45.123Z message"));
+        assert!(matches("timestamp", "log 2026-05-22 10:30:45 message"));
+        assert!(matches("timestamp", "log 2026-05-22T10:30:45+03:00 message"));
+        assert!(matches("timestamp", "log 2026-05-22T10:30:45-0500 message"));
+    }
+
+    #[test]
+    fn timestamp_matches_syslog() {
+        assert!(matches("timestamp", "May 22 10:30:45 host kernel: ..."));
+        // Single-digit day, space-padded
+        assert!(matches("timestamp", "Jan  5 09:08:07 host kernel: ..."));
+    }
+
+    #[test]
+    fn timestamp_matches_apache() {
+        assert!(matches("timestamp", "[22/May/2026:10:30:45 +0300] \"GET /\""));
+    }
+
+    #[test]
+    fn timestamp_matches_rfc2822() {
+        assert!(matches("timestamp", "Date: Wed, 22 May 2026 10:30:45 GMT"));
+        assert!(matches("timestamp", "Date: Wed, 22 May 2026 10:30:45 +0300"));
+    }
+
+    #[test]
+    fn timestamp_rejects_non_timestamps() {
+        assert!(!matches("timestamp", "date only 2026-05-22"));
+        assert!(!matches("timestamp", "time only 10:30:45"));
+        assert!(!matches("timestamp", "random May text without time"));
     }
 
     #[test]
