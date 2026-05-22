@@ -864,15 +864,15 @@ style = { fg = "red" }
     fn append_new_custom_rule() {
         let mut rules = builtin_rules();
         let user = vec![UserRule {
-            name: "uuid".into(),
+            name: "custom_id".into(),
             pattern: Some(r"\b[0-9a-fA-F]{8}\b".into()),
             style: Some(UserStyle { fg: Some("#888888".into()), ..UserStyle::default() }),
             enabled: true,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
-        let uuid = rules.last().expect("appended");
-        assert_eq!(uuid.name, "uuid");
-        assert_eq!(uuid.style.fg, Some(crate::style::Color::Rgb(0x88, 0x88, 0x88)));
+        let appended = rules.last().expect("appended");
+        assert_eq!(appended.name, "custom_id");
+        assert_eq!(appended.style.fg, Some(crate::style::Color::Rgb(0x88, 0x88, 0x88)));
     }
 
     #[test]
@@ -915,14 +915,14 @@ style = { fg = "red" }
     fn new_rule_without_pattern_is_rejected() {
         let mut rules = builtin_rules();
         let user = vec![UserRule {
-            name: "uuid".into(),
+            name: "custom_id".into(),
             pattern: None,
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("uuid"));
+        assert!(msg.contains("custom_id"));
         assert!(msg.to_lowercase().contains("pattern"));
     }
 
@@ -930,13 +930,13 @@ style = { fg = "red" }
     fn new_rule_without_style_is_rejected() {
         let mut rules = builtin_rules();
         let user = vec![UserRule {
-            name: "uuid".into(),
+            name: "custom_id".into(),
             pattern: Some(r"\b[0-9a-f]{8}\b".into()),
             style: None,
             enabled: true,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
-        assert!(err.to_string().contains("uuid"));
+        assert!(err.to_string().contains("custom_id"));
         assert!(err.to_string().to_lowercase().contains("style"));
     }
 
@@ -946,7 +946,7 @@ style = { fg = "red" }
         let mut rules = builtin_rules();
         let before_len = rules.len();
         let user = vec![UserRule {
-            name: "uuid".into(),
+            name: "custom_id".into(),
             pattern: Some("X".into()),
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: false,

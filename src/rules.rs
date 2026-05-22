@@ -292,6 +292,12 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             is_user_supplied: false,
         },
         BuiltinRule {
+            name: "uuid".into(),
+            pattern: r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b".into(),
+            style: Style { fg: Some(Color::BrightMagenta), ..Style::DEFAULT },
+            is_user_supplied: false,
+        },
+        BuiltinRule {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
@@ -351,6 +357,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
 pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "permission",
     "timestamp",
+    "uuid",
     "ipv4",
     "ipv6",
     "mac",
@@ -622,7 +629,7 @@ mod tests {
         assert_eq!(c.individuals.len(), n);
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
-        assert_eq!(n, 10, "v0.2.2 work-in-progress: + permission, timestamp");
+        assert_eq!(n, 11, "v0.2.2 work-in-progress: + permission, timestamp, uuid");
     }
 
     #[test]
@@ -702,21 +709,21 @@ mod tests {
         let cfg = Config {
             general: GeneralSection::default(),
             rules: vec![UserRule {
-                name: "uuid".into(),
+                name: "custom_id".into(),
                 pattern: Some(r"\b[0-9a-fA-F]{8}\b".into()),
                 style: Some(UserStyle { fg: Some("#ff8800".into()), ..UserStyle::default() }),
                 enabled: true,
             }],
         };
-        // At Basic16 depth, the appended uuid rule's Rgb fg downgrades to an ANSI color.
+        // At Basic16 depth, the appended user rule's Rgb fg downgrades to an ANSI color.
         let c = Compiled::load(Some(&cfg), Some("/test/cfg.toml"), ColorDepth::Basic16).unwrap();
         let last_style = c.styles.last().unwrap();
         match last_style.fg {
             Some(crate::style::Color::Rgb(_, _, _)) => panic!("Rgb not downgraded: {last_style:?}"),
             Some(_) => {}
-            None => panic!("uuid rule should still carry a color at Basic16"),
+            None => panic!("user rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 11, "10 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 12, "11 built-ins + 1 user rule");
     }
 
     #[test]
@@ -839,6 +846,24 @@ mod tests {
         assert!(!matches("timestamp", "date only 2026-05-22"));
         assert!(!matches("timestamp", "time only 10:30:45"));
         assert!(!matches("timestamp", "random May text without time"));
+    }
+
+    #[test]
+    fn uuid_matches_canonical_form() {
+        assert!(matches("uuid", "id 550e8400-e29b-41d4-a716-446655440000 done"));
+        assert!(matches("uuid", "id 00000000-0000-0000-0000-000000000000 nil"));
+        // Mixed case allowed
+        assert!(matches("uuid", "id 550E8400-E29B-41d4-A716-446655440000 done"));
+    }
+
+    #[test]
+    fn uuid_rejects_malformed() {
+        // Wrong segment lengths
+        assert!(!matches("uuid", "550e8400-e29b-41d4-a716"));
+        // Non-hex chars (use 'g' which is not hex)
+        assert!(!matches("uuid", "ggggggggg-eeee-eeee-eeee-eeeeeeeeeeee"));
+        // No hyphens
+        assert!(!matches("uuid", "550e8400e29b41d4a716446655440000"));
     }
 
     #[test]

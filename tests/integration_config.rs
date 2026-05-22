@@ -48,11 +48,11 @@ fn new_rule_missing_pattern_exits_64_with_path_and_rule_name() {
     let dir = tempfile::tempdir().expect("tmpdir");
     let path = dir.path().join("cfg.toml");
     let mut f = std::fs::File::create(&path).expect("create");
-    f.write_all(b"[[rules]]\nname = \"uuid\"\nstyle = { fg = \"red\" }\n").unwrap();
+    f.write_all(b"[[rules]]\nname = \"custom_id\"\nstyle = { fg = \"red\" }\n").unwrap();
     let out = Command::new(tayf_bin()).args(["--config"]).arg(&path).output().expect("spawn tayf");
     assert_eq!(out.status.code(), Some(64), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("uuid"));
+    assert!(stderr.contains("custom_id"));
     assert!(stderr.to_lowercase().contains("pattern"));
     // Path-threading regression check: validation errors from inside
     // `apply_user_rules` must still carry the actual config file path,
