@@ -119,6 +119,25 @@ Malformed configs exit with code `64` (`EX_USAGE`) and print a friendly
 diagnostic to stderr that includes the file path and the offending line
 number when available.
 
+### Hot reload (v0.2.1)
+
+`tayf` watches your config file and reloads it whenever you save:
+
+- Editing `~/.config/tayf/config.toml` (or the file passed to `--config`)
+  takes effect within ~250 ms — no restart, no shell respawn.
+- `pkill -HUP tayf` (or `kill -HUP <pid>`) forces an immediate reload that
+  bypasses the file-watcher debounce window. Useful from scripts.
+- If your edit produces invalid TOML or a bad regex, `tayf` keeps the
+  **previous** rule set in effect and logs a warning to stderr
+  (`TAYF_LOG=warn`, the default). Your terminal session is never disrupted
+  by a typo in the config.
+- The child shell is never restarted. `tayf` only swaps its in-process
+  rule set; the PTY, signal handlers, and the running shell are untouched.
+
+If `tayf` was launched without a config file, the file watcher is not
+active — but `SIGHUP` still works as a manual reload trigger. If you
+create a config later, send `SIGHUP` to pick it up.
+
 ## TUI compatibility
 
 `tayf` detects when a program enters a full-screen or interactive mode and

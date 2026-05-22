@@ -363,6 +363,8 @@ OSC 133 özellikle önemli çünkü Powerlevel10k, modern Oh My Zsh temaları, f
 
 **Çözüm:** `notify` crate ile dosya değişikliğini izle. Yeni config'i parse et, başarılıysa atomik swap (Arc<Config>). v1'de yok, v1.1'de eklenir.
 
+> **Status:** v0.2.1'de uygulandı (2026-05-22). `notify 8.2` + 200 ms manuel debounce + `arc_swap::ArcSwap<Compiled>` ile atomik swap. SIGHUP manuel tetikleyici olarak destekleniyor; parse hatasında eski rule set korunur ve `warn_msg!` ile stderr'e yazılır. Detaylı tasarım: `docs/superpowers/specs/2026-05-22-tayf-v0.2.1-hot-reload.md`; uygulama planı: `docs/superpowers/plans/2026-05-22-tayf-v0.2.1.md`.
+
 ### 6.16 Output Pipe'a Yönlendirildiğinde
 
 **Sorun:** `tayf | less` yapılırsa stdout TTY değildir; ANSI kod eklemek anlamsız ve `less`'in gözünden bozuk görünür.
