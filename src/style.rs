@@ -194,6 +194,220 @@ fn parse_hex(rest: &str) -> Option<Color> {
     Some(Color::Rgb(r, g, b))
 }
 
+impl Color {
+    /// Return the closest representable color for `depth`, or `None` if the
+    /// terminal cannot display color at all (`ColorDepth::None`).
+    ///
+    /// Approximation strategy:
+    /// - Truecolor: identity.
+    /// - Indexed256: ANSI / Indexed → unchanged; Rgb → 6×6×6 xterm cube
+    ///   quantization (`16 + 36*r + 6*g + b` with each channel in `0..=5`).
+    /// - Basic16: ANSI → unchanged; Indexed `0..=15` → matching ANSI;
+    ///   Indexed `>=16` and Rgb → nearest ANSI by RGB Euclidean distance.
+    /// - None: always `None`.
+    ///
+    /// `pub(crate)` rather than `pub` — only `Compiled::load` calls it.
+    // reason: first caller (`Compiled::load`) lands in v0.2.0 Task 8;
+    // until then the function is only exercised by unit tests in this file.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn downgrade(self, depth: crate::terminfo::ColorDepth) -> Option<Color> {
+        use crate::terminfo::ColorDepth as D;
+        // reason: arms intentionally grouped by `ColorDepth` rather than by
+        // RHS to keep the depth-major dispatch table readable; merging the
+        // three `Some(c)` arms across depths would obscure intent.
+        #[allow(clippy::match_same_arms)]
+        match (depth, self) {
+            (D::None, _) => None,
+            (D::Truecolor, c) => Some(c),
+            (D::Indexed256, Color::Rgb(r, g, b)) => Some(Color::Indexed(rgb_to_xterm_256(r, g, b))),
+            (D::Indexed256, c) => Some(c),
+            (
+                D::Basic16,
+                c @ (Color::Black
+                | Color::Red
+                | Color::Green
+                | Color::Yellow
+                | Color::Blue
+                | Color::Magenta
+                | Color::Cyan
+                | Color::White
+                | Color::BrightBlack
+                | Color::BrightRed
+                | Color::BrightGreen
+                | Color::BrightYellow
+                | Color::BrightBlue
+                | Color::BrightMagenta
+                | Color::BrightCyan
+                | Color::BrightWhite),
+            ) => Some(c),
+            (D::Basic16, Color::Indexed(n)) if n < 16 => Some(ansi_from_low_index(n)),
+            (D::Basic16, Color::Indexed(n)) => {
+                let (r, g, b) = xterm_256_to_rgb(n);
+                Some(nearest_ansi_basic(r, g, b))
+            }
+            (D::Basic16, Color::Rgb(r, g, b)) => Some(nearest_ansi_basic(r, g, b)),
+        }
+    }
+}
+
+impl Style {
+    /// Apply [`Color::downgrade`] to both `fg` and `bg`. Attribute bits
+    /// (`bold`, `italic`, ...) are preserved as-is — they render on every
+    /// terminal that supports SGR at all.
+    ///
+    /// `pub(crate)` rather than `pub` — only `Compiled::load` calls it.
+    // reason: first caller (`Compiled::load`) lands in v0.2.0 Task 8;
+    // until then the function is only exercised by unit tests in this file.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn downgrade(self, depth: crate::terminfo::ColorDepth) -> Self {
+        Style {
+            fg: self.fg.and_then(|c| c.downgrade(depth)),
+            bg: self.bg.and_then(|c| c.downgrade(depth)),
+            ..self
+        }
+    }
+}
+
+/// Map an 8-bit RGB triple into xterm's 6×6×6 color cube (indices 16..=231).
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
+    // Pure grayscale gets the 232..=255 ramp (24 levels).
+    if r == g && g == b {
+        if r < 8 {
+            return 16;
+        }
+        if r > 248 {
+            return 231;
+        }
+        // u16 conversion avoids any overflow.
+        let level = (u16::from(r) - 8) / 10;
+        // 0..=23 + 232 = 232..=255; truncation safe by bound.
+        #[allow(clippy::cast_possible_truncation)] // reason: bounded 0..=23
+        return 232 + level as u8;
+    }
+    16 + 36 * quantize(r) + 6 * quantize(g) + quantize(b)
+}
+
+/// Quantize a single 8-bit channel to the xterm cube level `0..=5`.
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn quantize(v: u8) -> u8 {
+    // Cube levels: 0, 95, 135, 175, 215, 255.
+    match v {
+        0..=47 => 0,
+        48..=114 => 1,
+        115..=154 => 2,
+        155..=194 => 3,
+        195..=234 => 4,
+        _ => 5,
+    }
+}
+
+/// Inverse of `rgb_to_xterm_256` for indices `16..=255` (RGB approximation).
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn xterm_256_to_rgb(n: u8) -> (u8, u8, u8) {
+    if n < 16 {
+        // Low palette — return canonical ANSI rgb approximations.
+        let (r, g, b) = ansi_rgb_approx(n);
+        return (r, g, b);
+    }
+    if n >= 232 {
+        let level = u16::from(n - 232) * 10 + 8;
+        #[allow(clippy::cast_possible_truncation)] // reason: level fits u8
+        let v = level as u8;
+        return (v, v, v);
+    }
+    let idx = n - 16;
+    let r = idx / 36;
+    let g = (idx % 36) / 6;
+    let b = idx % 6;
+    (cube_level(r), cube_level(g), cube_level(b))
+}
+
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn cube_level(q: u8) -> u8 {
+    match q {
+        0 => 0,
+        1 => 95,
+        2 => 135,
+        3 => 175,
+        4 => 215,
+        _ => 255,
+    }
+}
+
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn ansi_from_low_index(n: u8) -> Color {
+    match n {
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::White,
+        8 => Color::BrightBlack,
+        9 => Color::BrightRed,
+        10 => Color::BrightGreen,
+        11 => Color::BrightYellow,
+        12 => Color::BrightBlue,
+        13 => Color::BrightMagenta,
+        14 => Color::BrightCyan,
+        _ => Color::BrightWhite,
+    }
+}
+
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn ansi_rgb_approx(n: u8) -> (u8, u8, u8) {
+    // Standard VGA approximations of the 16-color ANSI palette.
+    match n {
+        0 => (0, 0, 0),
+        1 => (170, 0, 0),
+        2 => (0, 170, 0),
+        3 => (170, 85, 0),
+        4 => (0, 0, 170),
+        5 => (170, 0, 170),
+        6 => (0, 170, 170),
+        7 => (170, 170, 170),
+        8 => (85, 85, 85),
+        9 => (255, 85, 85),
+        10 => (85, 255, 85),
+        11 => (255, 255, 85),
+        12 => (85, 85, 255),
+        13 => (255, 85, 255),
+        14 => (85, 255, 255),
+        _ => (255, 255, 255),
+    }
+}
+
+// reason: helper for `Color::downgrade`; first caller lands in Task 8 (Compiled::load).
+#[allow(dead_code)]
+fn nearest_ansi_basic(r: u8, g: u8, b: u8) -> Color {
+    let mut best = (u32::MAX, 0u8);
+    for n in 0u8..=15u8 {
+        let (ar, ag, ab) = ansi_rgb_approx(n);
+        let dr = i32::from(r) - i32::from(ar);
+        let dg = i32::from(g) - i32::from(ag);
+        let db = i32::from(b) - i32::from(ab);
+        // u32 cast safe — squares of i32 differences in [-255, 255] sum to <= 3*255^2.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        // reason: positive sum bounded
+        let dist = (dr * dr + dg * dg + db * db) as u32;
+        if dist < best.0 {
+            best = (dist, n);
+        }
+    }
+    ansi_from_low_index(best.1)
+}
+
 /// Visual styling for a pattern match.
 // reason: v0.1 models only four SGR attributes (bold, dim, italic, underline).
 // SGR has more (reverse, strikethrough, blink, hidden, etc.); v0.2 will migrate
@@ -433,5 +647,126 @@ mod tests {
         assert_eq!(Color::parse_str("#FF8800"), Ok(Color::Rgb(0xff, 0x88, 0x00)));
         // Mixed case also fine.
         assert_eq!(Color::parse_str("Rgb(0, 0, 0)"), Ok(Color::Rgb(0, 0, 0)));
+    }
+
+    use crate::terminfo::ColorDepth;
+
+    #[test]
+    fn downgrade_truecolor_keeps_rgb() {
+        let c = Color::Rgb(255, 136, 0);
+        assert_eq!(c.downgrade(ColorDepth::Truecolor), Some(c));
+        assert_eq!(Color::Indexed(178).downgrade(ColorDepth::Truecolor), Some(Color::Indexed(178)));
+        assert_eq!(Color::Red.downgrade(ColorDepth::Truecolor), Some(Color::Red));
+    }
+
+    #[test]
+    fn downgrade_rgb_to_indexed256_uses_6x6x6_cube() {
+        // Pure orange (255, 136, 0) with the quantize() table below:
+        //   r=255 → q=5  (in `_=>5`)
+        //   g=136 → q=2  (in `115..=154 => 2`)
+        //   b=0   → q=0
+        //   index = 16 + 36*5 + 6*2 + 0 = 208
+        assert_eq!(
+            Color::Rgb(255, 136, 0).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(208))
+        );
+        // Pure black takes the grayscale fast path (r==g==b<8 → 16).
+        assert_eq!(Color::Rgb(0, 0, 0).downgrade(ColorDepth::Indexed256), Some(Color::Indexed(16)));
+        // Pure white takes the grayscale fast path (r==g==b>248 → 231).
+        assert_eq!(
+            Color::Rgb(255, 255, 255).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(231))
+        );
+    }
+
+    #[test]
+    fn downgrade_rgb_to_basic16_uses_nearest_ansi() {
+        // Pure red (255,0,0) vs ansi_rgb_approx table:
+        //   Red (170,0,0):       d² = 85² = 7225
+        //   BrightRed (255,85,85): d² = 0 + 85² + 85² = 14450
+        // Red wins.
+        assert_eq!(Color::Rgb(255, 0, 0).downgrade(ColorDepth::Basic16), Some(Color::Red));
+        // Pure black → Black (d² = 0).
+        assert_eq!(Color::Rgb(0, 0, 0).downgrade(ColorDepth::Basic16), Some(Color::Black));
+        // Pure white (255,255,255) vs:
+        //   White (170,170,170): d² = 3*85² = 21675
+        //   BrightWhite (255,255,255): d² = 0
+        // BrightWhite wins.
+        assert_eq!(
+            Color::Rgb(255, 255, 255).downgrade(ColorDepth::Basic16),
+            Some(Color::BrightWhite)
+        );
+    }
+
+    #[test]
+    fn downgrade_indexed_to_basic16() {
+        // Standard 0..=15 indexed map directly to ANSI 16.
+        assert_eq!(Color::Indexed(0).downgrade(ColorDepth::Basic16), Some(Color::Black));
+        assert_eq!(Color::Indexed(1).downgrade(ColorDepth::Basic16), Some(Color::Red));
+        assert_eq!(Color::Indexed(9).downgrade(ColorDepth::Basic16), Some(Color::BrightRed));
+        assert_eq!(Color::Indexed(15).downgrade(ColorDepth::Basic16), Some(Color::BrightWhite));
+    }
+
+    #[test]
+    fn downgrade_indexed_keeps_self_at_256() {
+        assert_eq!(
+            Color::Indexed(178).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(178))
+        );
+    }
+
+    #[test]
+    fn downgrade_indexed_above_16_to_basic16_via_cube_roundtrip() {
+        // Indexed(208) is xterm cube index: idx=208-16=192, r=192/36=5, g=(192%36)/6=2, b=192%6=0
+        // → cube_level(5,2,0) = (255, 135, 0).
+        // Distance² against ansi_rgb_approx:
+        //   Yellow   (170,85,0):   (255-170)² + (135-85)² + 0 = 85² + 50² = 7225+2500 = 9725
+        //   BrightRed (255,85,85): 0 + (135-85)² + (0-85)²    = 50² + 85² = 2500+7225 = 9725
+        // Tie at 9725. `nearest_ansi_basic` iterates n ascending and uses strict `<`,
+        // so the first-seen (Yellow at n=3) wins over BrightRed (n=9).
+        assert_eq!(Color::Indexed(208).downgrade(ColorDepth::Basic16), Some(Color::Yellow));
+    }
+
+    #[test]
+    fn downgrade_ansi_basic_passthrough() {
+        for depth in [ColorDepth::Basic16, ColorDepth::Indexed256, ColorDepth::Truecolor] {
+            assert_eq!(Color::Red.downgrade(depth), Some(Color::Red));
+            assert_eq!(Color::BrightYellow.downgrade(depth), Some(Color::BrightYellow));
+        }
+    }
+
+    #[test]
+    fn downgrade_to_none_yields_no_color() {
+        assert_eq!(Color::Red.downgrade(ColorDepth::None), None);
+        assert_eq!(Color::Rgb(1, 2, 3).downgrade(ColorDepth::None), None);
+        assert_eq!(Color::Indexed(178).downgrade(ColorDepth::None), None);
+    }
+
+    #[test]
+    fn style_downgrade_preserves_attributes() {
+        let s = Style {
+            fg: Some(Color::Rgb(255, 136, 0)),
+            bg: None,
+            bold: true,
+            italic: true,
+            underline: false,
+            dim: false,
+        };
+        let d = s.downgrade(ColorDepth::None);
+        assert_eq!(d.fg, None);
+        assert!(d.bold);
+        assert!(d.italic);
+    }
+
+    #[test]
+    fn style_downgrade_maps_both_fg_and_bg() {
+        let s = Style {
+            fg: Some(Color::Rgb(255, 0, 0)),
+            bg: Some(Color::Rgb(0, 0, 0)),
+            ..Style::DEFAULT
+        };
+        let d = s.downgrade(ColorDepth::Basic16);
+        assert_eq!(d.fg, Some(Color::Red));
+        assert_eq!(d.bg, Some(Color::Black));
     }
 }
