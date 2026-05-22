@@ -42,11 +42,18 @@ pub(crate) struct GeneralSection {
     /// awareness lands.
     #[serde(default = "default_true")]
     pub(crate) respect_existing_colors: bool,
+
+    /// Preset theme name applied before user-config rules. `None` means
+    /// "no theme" (built-in defaults verbatim). CLI `--theme` overrides
+    /// this value. Validated by [`crate::themes::load`]; an unknown name
+    /// surfaces as [`crate::Error::Theme`].
+    #[serde(default)]
+    pub(crate) theme: Option<String>,
 }
 
 impl Default for GeneralSection {
     fn default() -> Self {
-        Self { respect_existing_colors: true }
+        Self { respect_existing_colors: true, theme: None }
     }
 }
 
@@ -1055,5 +1062,22 @@ style = { fg = "red" }
         ];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         assert!(err.to_string().to_lowercase().contains("more than once"));
+    }
+
+    #[test]
+    fn parse_picks_up_general_theme() {
+        let src = r#"
+[general]
+theme = "light"
+"#;
+        let cfg = parse("/x", src).unwrap();
+        assert_eq!(cfg.general.theme.as_deref(), Some("light"));
+        assert!(cfg.general.respect_existing_colors, "default preserved");
+    }
+
+    #[test]
+    fn parse_omits_general_theme_defaults_to_none() {
+        let cfg = parse("/x", "").unwrap();
+        assert!(cfg.general.theme.is_none());
     }
 }
