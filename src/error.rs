@@ -41,14 +41,15 @@ pub enum Error {
     /// `Option<NonZeroUsize>` because thiserror's format-string support is
     /// terser this way; the sentinel is constant across the codebase.
     ///
-    /// **Display contract:** the `message` field passes through
+    /// **Display contract:** both the `path` and `message` fields pass through
     /// `sanitize_for_display` in the `Display` impl so that any user-supplied
-    /// content echoed back (e.g. a color string from a config rule) cannot
-    /// smuggle an escape sequence onto the user's terminal — CLAUDE.md §3
-    /// invariant. Callers that read `message` directly (e.g. for structured
-    /// logging) get the raw bytes; format through `Display` or sanitize
-    /// yourself before printing to a terminal.
-    #[error("config error in {path}{}: {}", line_suffix(*line), sanitize_for_display(message))]
+    /// content echoed back (e.g. a color string from a config rule, or a
+    /// hostile `XDG_CONFIG_HOME`) cannot smuggle an escape sequence onto the
+    /// user's terminal — CLAUDE.md §3 invariant. Callers that read these
+    /// fields directly (e.g. for structured logging) get the raw bytes;
+    /// format through `Display` or sanitize yourself before printing to a
+    /// terminal.
+    #[error("config error in {}{}: {}", sanitize_for_display(path), line_suffix(*line), sanitize_for_display(message))]
     Config {
         /// Absolute path to the config file the error originated from.
         path: String,
@@ -279,6 +280,20 @@ mod tests {
         let e2 = Error::Config { path: "/x".into(), line: 0, message: "ok\nfine\there".into() };
         let r2 = e2.to_string();
         assert!(r2.contains("ok\nfine\there"), "safe whitespace must pass: {r2:?}");
+    }
+
+    #[test]
+    fn config_path_escapes_control_bytes_too() {
+        // Sanitization gate must cover `path` symmetrically with `message`.
+        // A hostile XDG_CONFIG_HOME or --config arg could contain ESC.
+        let e = Error::Config {
+            path: "/tmp/\x1b[2J/cfg.toml".into(),
+            line: 0,
+            message: "anything".into(),
+        };
+        let rendered = e.to_string();
+        assert!(!rendered.contains('\x1b'), "raw ESC must not survive in path: {rendered:?}");
+        assert!(rendered.contains("\\x1b"), "ESC must be escaped as \\x1b in path: {rendered:?}");
     }
 
     #[test]

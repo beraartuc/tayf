@@ -275,10 +275,35 @@ style = { fg = "red" }
     }
 
     #[test]
+    fn user_style_bad_bg_color_carries_field_label() {
+        // Mirrors user_style_bad_color_carries_rule_name but exercises the bg
+        // branch of parse_color_field. The "bg:" substring is load-bearing —
+        // a user with both fg and bg set needs to know which field to fix.
+        let us = UserStyle { bg: Some("turquoise".into()), ..UserStyle::default() };
+        let err = us.to_style("/x/cfg.toml", "log_level").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("log_level"), "rule name missing: {msg}");
+        assert!(msg.contains("bg:"), "field label must distinguish bg from fg: {msg}");
+        assert!(msg.contains("turquoise"));
+    }
+
+    #[test]
     fn user_style_attribute_only_is_accepted() {
         let us = UserStyle { bold: true, ..UserStyle::default() };
         let s = us.to_style("/x", "any").unwrap();
         assert_eq!(s, Style { bold: true, ..Style::DEFAULT });
+    }
+
+    #[test]
+    fn user_style_dim_only_is_accepted() {
+        // `dim` is the SGR attribute most likely to be filtered by minimal
+        // terminals, so a rule with only `dim = true` is the legitimate-but-
+        // suspect case. The design intent: a single attribute, even a weak
+        // one, counts as a visible effect — Style::DEFAULT equality is the
+        // sole rejection trigger.
+        let us = UserStyle { dim: true, ..UserStyle::default() };
+        let s = us.to_style("/x", "any").unwrap();
+        assert_eq!(s, Style { dim: true, ..Style::DEFAULT });
     }
 
     #[test]
