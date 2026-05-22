@@ -123,7 +123,6 @@ impl Error {
 
     /// Build a [`Error::Config`] for a regex compile failure inside a named
     /// rule. `line` is 0 unless the caller already knows the source line.
-    #[allow(dead_code)] // reason: first caller lands in Task 8 (Compiled::load).
     #[allow(clippy::needless_pass_by_value)]
     // reason: `regex::Error` is the single-shot return of `Regex::new(..)`;
     // callers move it in directly. Matches the by-value signature established

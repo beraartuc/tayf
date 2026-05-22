@@ -15,10 +15,6 @@ use crate::style::{Color, Style};
 /// `&'static str`) because the filename rule is built dynamically; the cost
 /// of eight heap allocations at startup is negligible.
 pub(crate) struct BuiltinRule {
-    // reason: read by tests (`find_rule`) and by `config::apply_user_rules`
-    // (membership checks and override-in-place); the live compile path
-    // indexes by position so this field is otherwise unread.
-    #[allow(dead_code)]
     pub(crate) name: String,
     pub(crate) pattern: String,
     pub(crate) style: Style,
@@ -307,7 +303,6 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
 }
 
 /// Names of the eight built-in rules. Mirrors the order of [`builtin_rules`].
-#[allow(dead_code)] // reason: first non-test caller lands in Task 8 (Compiled::load wires the merge); the membership set is built from this in apply_user_rules.
 pub(crate) const BUILTIN_NAMES: &[&str] =
     &["ipv4", "ipv6", "mac", "log_level", "http_status", "filename", "fqdn", "duration"];
 
@@ -328,6 +323,7 @@ mod builtin_names_test {
 /// the regex; index `i` of `styles` carries the style to apply. `set` is the
 /// equivalent `RegexSet` populated for v0.4's planned fast-path; v0.1 ignores
 /// it but the storage shape stays stable.
+#[derive(Debug)]
 pub(crate) struct Compiled {
     #[allow(dead_code)]
     // reason: reserved for v0.4 RegexSet fast-path; populated now to keep the shape stable
@@ -337,26 +333,79 @@ pub(crate) struct Compiled {
 }
 
 impl Compiled {
-    /// Compile the eight built-in rules.
+    /// Compile a rule set: built-ins, optionally merged with `config`, with
+    /// colors pre-baked for `depth`.
+    ///
+    /// Each pattern is compiled with `regex::bytes::RegexBuilder::size_limit`
+    /// capped at 1 MiB to bound the memory a single user regex can consume.
+    /// `dfa_size_limit` is similarly capped at 1 MiB so the lazy DFA cache
+    /// cannot grow unboundedly under adversarial input (CLAUDE.md §3).
+    /// User-rule compile errors carry the offending rule's name in the
+    /// surfaced [`crate::Error::Config`].
     ///
     /// # Errors
-    /// Returns `Error::RegexCompile` if any built-in pattern fails to compile.
-    /// In practice this never happens — the patterns are tested.
-    pub(crate) fn load_builtins() -> Result<Self> {
-        let rules = builtin_rules();
+    /// Returns [`crate::Error::Config`] when a user rule fails to compile
+    /// (regex error) or violates validation (missing fields / no visible
+    /// style). Returns [`crate::Error::RegexCompile`] when a *built-in*
+    /// pattern fails to compile — this never happens in practice (built-ins
+    /// are unit-tested) but is preserved so callers don't need to special-case.
+    pub(crate) fn load(
+        config: Option<&crate::config::Config>,
+        config_path: Option<&str>,
+        depth: crate::terminfo::ColorDepth,
+    ) -> Result<Self> {
+        let mut rules = builtin_rules();
+        if let Some(c) = config {
+            // `config_path` flows into Error::Config messages produced inside
+            // apply_user_rules (and any nested UserStyle::to_style call) so
+            // users see `config error in /home/u/.config/tayf/config.toml: ...`
+            // rather than the empty-path sentinel.
+            let path = config_path.unwrap_or("<config>");
+            crate::config::apply_user_rules(path, &mut rules, &c.rules)?;
+        }
+
+        // Bake depth into every style.
+        for rule in &mut rules {
+            rule.style = rule.style.downgrade(depth);
+        }
+
+        // Compile.
         let mut individuals = Vec::with_capacity(rules.len());
         let mut styles = Vec::with_capacity(rules.len());
         let mut sources = Vec::with_capacity(rules.len());
-
         for rule in &rules {
-            individuals.push(Regex::new(&rule.pattern).map_err(Error::from)?);
+            let re = regex::bytes::RegexBuilder::new(&rule.pattern)
+                .size_limit(1 << 20)
+                .dfa_size_limit(1 << 20)
+                .build()
+                .map_err(|e| compile_error_for(&rule.name, config_path, e))?;
+            individuals.push(re);
             styles.push(rule.style);
             sources.push(rule.pattern.clone());
         }
-
         let set = RegexSet::new(&sources).map_err(Error::from)?;
 
         Ok(Compiled { set, individuals, styles })
+    }
+
+    /// Backwards-compatible alias for the bench shim (`__bench__`). Equivalent
+    /// to `Self::load(None, None, ColorDepth::Truecolor)`.
+    ///
+    /// # Errors
+    /// As for [`Self::load`].
+    pub(crate) fn load_builtins() -> Result<Self> {
+        Self::load(None, None, crate::terminfo::ColorDepth::Truecolor)
+    }
+}
+
+/// Map a built-in vs. user-rule regex error: built-ins surface as
+/// [`Error::RegexCompile`]; user rules surface as [`Error::Config`] with the
+/// offending rule name and the user's config path threaded through.
+fn compile_error_for(rule_name: &str, config_path: Option<&str>, source: regex::Error) -> Error {
+    if BUILTIN_NAMES.contains(&rule_name) {
+        Error::from(source)
+    } else {
+        Error::config_regex(config_path.unwrap_or("<config>").to_string(), rule_name, source)
     }
 }
 
@@ -535,5 +584,85 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
         // Blue SGR 34 should appear (no extension to conflict).
         assert!(s.contains("34"), "expected fqdn SGR 34 (blue): {s:?}");
+    }
+
+    #[test]
+    fn load_with_no_config_matches_load_builtins() {
+        use crate::terminfo::ColorDepth;
+        let a = Compiled::load_builtins().unwrap();
+        let b = Compiled::load(None, None, ColorDepth::Truecolor).unwrap();
+        assert_eq!(a.individuals.len(), b.individuals.len());
+        assert_eq!(a.styles, b.styles);
+    }
+
+    #[test]
+    fn load_at_none_depth_strips_colors_but_keeps_attributes() {
+        use crate::terminfo::ColorDepth;
+        let c = Compiled::load(None, None, ColorDepth::None).unwrap();
+        for s in &c.styles {
+            assert_eq!(s.fg, None, "depth=None must strip all fg colors");
+            assert_eq!(s.bg, None, "depth=None must strip all bg colors");
+        }
+        // log_level built-in still has bold:true even when colors are stripped.
+        let log_idx = builtin_rules().iter().position(|r| r.name == "log_level").unwrap();
+        assert!(c.styles[log_idx].bold);
+    }
+
+    #[test]
+    fn load_at_basic16_keeps_ansi_unchanged() {
+        use crate::terminfo::ColorDepth;
+        let c = Compiled::load(None, None, ColorDepth::Basic16).unwrap();
+        let log_idx = builtin_rules().iter().position(|r| r.name == "log_level").unwrap();
+        // Built-in log_level fg is BrightRed (ANSI) — unchanged at Basic16.
+        assert_eq!(c.styles[log_idx].fg, Some(crate::style::Color::BrightRed));
+    }
+
+    #[test]
+    fn load_applies_user_rules_then_bakes_depth() {
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use crate::terminfo::ColorDepth;
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "uuid".into(),
+                pattern: Some(r"\b[0-9a-fA-F]{8}\b".into()),
+                style: Some(UserStyle { fg: Some("#ff8800".into()), ..UserStyle::default() }),
+                enabled: true,
+            }],
+        };
+        // At Basic16 depth, the appended uuid rule's Rgb fg downgrades to an ANSI color.
+        let c = Compiled::load(Some(&cfg), Some("/test/cfg.toml"), ColorDepth::Basic16).unwrap();
+        let last_style = c.styles.last().unwrap();
+        match last_style.fg {
+            Some(crate::style::Color::Rgb(_, _, _)) => panic!("Rgb not downgraded: {last_style:?}"),
+            Some(_) => {}
+            None => panic!("uuid rule should still carry a color at Basic16"),
+        }
+        assert_eq!(c.individuals.len(), 9, "8 built-ins + 1 user rule");
+    }
+
+    #[test]
+    fn load_rejects_pattern_exceeding_size_limit() {
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use crate::terminfo::ColorDepth;
+        // `[01]{4,1000000}` reliably exceeds RegexBuilder::size_limit(1 MiB) on
+        // the v1.x regex crate — the bounded-counted-repetition compiler expands
+        // the upper bound into the NFA representation. If a future regex release
+        // optimises this pattern small enough to fit, swap the fixture for
+        // another known-large regex (`(?:a|b){1,1000000}` is the common backup).
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "huge".into(),
+                pattern: Some("[01]{4,1000000}".into()),
+                style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+                enabled: true,
+            }],
+        };
+        let err = Compiled::load(Some(&cfg), Some("/x"), ColorDepth::Truecolor)
+            .expect_err("regex must exceed RegexBuilder::size_limit(1 MiB)");
+        let msg = err.to_string();
+        assert!(msg.contains("huge"), "expected rule name in error: {err}");
+        assert!(msg.contains("/x"), "expected config path in error: {err}");
     }
 }

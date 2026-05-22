@@ -335,7 +335,6 @@ pub(crate) fn read_capped(path: &Path) -> Result<String> {
 ///   custom) without further inspection of `pattern`/`style`.
 ///
 /// `path` flows into error messages so users see file/rule context.
-#[allow(dead_code)] // reason: first non-test caller lands in Task 8 (Compiled::load wires the merge).
 pub(crate) fn apply_user_rules(
     path: &str,
     builtins: &mut Vec<crate::rules::BuiltinRule>,
