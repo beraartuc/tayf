@@ -107,6 +107,35 @@ pattern = '\b[0-9a-f]{7,40}\b'
 style = { fg = "#888888" }
 ```
 
+### Themes (v0.2.3)
+
+tayf ships two opt-in color themes baked into the binary:
+
+- **`dark`** — explicit defaults, identical to running tayf without a theme. Useful as a starting template if you want to copy and tweak.
+- **`light`** — re-tuned palette for light-background terminals (where the bright_* color family renders washed out and `BrightYellow` / `White` are effectively invisible).
+
+Pick a theme from the CLI:
+
+```sh
+tayf --theme light
+```
+
+Or set a default in your config:
+
+```toml
+# ~/.config/tayf/config.toml
+[general]
+theme = "light"
+```
+
+CLI `--theme` overrides the config field. Your own `[[rules]]` blocks still win over the theme: theme styles are pre-loaded on top of built-in defaults, and your user rules override either layer.
+
+Unknown theme names exit with code 64 (`EX_USAGE`) and list the known themes on stderr.
+
+The theme selection is fixed at startup: changing `[general] theme` in your config does **not** take effect on hot reload, so restart tayf to switch themes. Your `[[rules]]` edits still hot-reload as usual.
+
+Automatic background detection is planned for v0.3; for now, pick a theme manually.
+
 ### Color values
 
 - ANSI names: `"red"`, `"bright_cyan"`, etc. (case-insensitive).
@@ -155,35 +184,6 @@ number when available.
 If `tayf` was launched without a config file, the file watcher is not
 active — but `SIGHUP` still works as a manual reload trigger. If you
 create a config later, send `SIGHUP` to pick it up.
-
-## Themes
-
-tayf ships two opt-in color themes baked into the binary:
-
-- **`dark`** — explicit defaults, identical to running tayf without a theme. Useful as a starting template if you want to copy and tweak.
-- **`light`** — re-tuned palette for light-background terminals (where the bright_* color family renders washed out and `BrightYellow` / `White` are effectively invisible).
-
-Pick a theme from the CLI:
-
-```sh
-tayf --theme light
-```
-
-Or set a default in your config:
-
-```toml
-# ~/.config/tayf/config.toml
-[general]
-theme = "light"
-```
-
-CLI `--theme` overrides the config field. Your own `[[rules]]` blocks still win over the theme: theme styles are pre-loaded on top of built-in defaults, and your user rules override either layer.
-
-Unknown theme names exit with code 64 (`EX_USAGE`) and list the known themes on stderr.
-
-The theme selection is fixed at startup: changing `[general] theme` in your config does **not** take effect on hot reload, so restart tayf to switch themes. Your `[[rules]]` edits still hot-reload as usual.
-
-Automatic background detection is planned for v0.3; for now, pick a theme manually.
 
 ## TUI compatibility
 
