@@ -55,6 +55,7 @@ fn help_flag_prints_usage() {
     assert!(s.contains("--shell"));
     assert!(s.contains("--login"));
     assert!(s.contains("--no-color"));
+    assert!(s.contains("--config"), "--config flag must appear in --help output");
 }
 
 /// The output thread polls the master fd with a 50ms timeout and calls

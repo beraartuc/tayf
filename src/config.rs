@@ -32,7 +32,11 @@ pub(crate) struct Config {
 /// but the field itself is omitted.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // reason: first non-test caller lands in Task 9 (Tayf::run reads general after load).
+// reason: `respect_existing_colors` is parsed and stored but not yet
+// consumed in v0.2.0 — full ANSI awareness lands in v0.3, at which
+// point this field gates the new behavior. Documented as "accepted
+// but ignored" in the field doc-comment below.
+#[allow(dead_code)]
 pub(crate) struct GeneralSection {
     /// Accepted but ignored in v0.2.0 — v0.3 will use it once full ANSI
     /// awareness lands.
