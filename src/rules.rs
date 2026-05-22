@@ -298,6 +298,12 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             is_user_supplied: false,
         },
         BuiltinRule {
+            name: "url".into(),
+            pattern: r#"\b(?:https?|ssh|ftp)://[^\s<>"\\^`{|}]+"#.into(),
+            style: Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT },
+            is_user_supplied: false,
+        },
+        BuiltinRule {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
@@ -358,6 +364,7 @@ pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "permission",
     "timestamp",
     "uuid",
+    "url",
     "ipv4",
     "ipv6",
     "mac",
@@ -629,7 +636,7 @@ mod tests {
         assert_eq!(c.individuals.len(), n);
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
-        assert_eq!(n, 11, "v0.2.2 work-in-progress: + permission, timestamp, uuid");
+        assert_eq!(n, 12, "v0.2.2 work-in-progress: + permission, timestamp, uuid, url");
     }
 
     #[test]
@@ -723,7 +730,7 @@ mod tests {
             Some(_) => {}
             None => panic!("user rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 12, "11 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 13, "12 built-ins + 1 user rule");
     }
 
     #[test]
@@ -864,6 +871,24 @@ mod tests {
         assert!(!matches("uuid", "ggggggggg-eeee-eeee-eeee-eeeeeeeeeeee"));
         // No hyphens
         assert!(!matches("uuid", "550e8400e29b41d4a716446655440000"));
+    }
+
+    #[test]
+    fn url_matches_supported_schemes() {
+        assert!(matches("url", "visit https://example.com today"));
+        assert!(matches("url", "see http://example.com/path?q=1"));
+        assert!(matches("url", "api at https://example.com:8080/v1"));
+        assert!(matches("url", "rsync from ssh://user@host/path"));
+        assert!(matches("url", "download ftp://files.example.com/file.zip"));
+    }
+
+    #[test]
+    fn url_rejects_unsupported_schemes() {
+        // v0.2.2 scope: https?://, ssh://, ftp://. git@host:path deferred to v0.3.
+        assert!(!matches("url", "git@github.com:user/repo.git"));
+        assert!(!matches("url", "no scheme example.com/path"));
+        // Scheme alone without "://" doesn't match
+        assert!(!matches("url", "talk about https in general"));
     }
 
     #[test]
