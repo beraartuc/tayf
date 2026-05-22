@@ -70,7 +70,7 @@ impl Tayf {
         // Note: the `depth != None` short-circuit here is for *performance*
         // — `runtime::run` uses `apply_colors == false` to bypass the
         // `Pipeline` entirely and stream raw PTY bytes to stdout. The
-        // pre-bake (`Compiled::load(_, _, ColorDepth::None)`) already
+        // pre-bake (`Compiled::load_with_theme(_, _, _, ColorDepth::None)`) already
         // guarantees empty SGR output for correctness, so a future
         // maintainer simplifying this gate should preserve the runtime
         // bypass separately, not just delete the depth check here.
