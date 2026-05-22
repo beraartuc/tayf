@@ -30,8 +30,10 @@ name = "tayf"
 path = "src/lib.rs"
 
 [dependencies]
+arc-swap = "1.9"
 clap = { version = "4.6", features = ["derive"] }
 nix = { version = "0.28", features = ["term", "signal", "user", "fs", "poll"] }
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
 portable-pty = "0.9"
 regex = "1.12"
 serde = { version = "1", features = ["derive"] }
