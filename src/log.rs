@@ -37,8 +37,9 @@ pub(crate) fn init_from_env() {
     init_from_env_with(raw.as_deref().unwrap_or(""));
 }
 
-/// Internal init taking the level string directly. Used by tests and by
-/// [`init_from_env`].
+/// Internal init taking the level string directly. Called only by
+/// [`init_from_env`]; kept `pub(crate)` so future test scaffolding can
+/// drive the latch without touching the process environment.
 pub(crate) fn init_from_env_with(s: &str) {
     INIT.call_once(|| {
         let lvl = parse_level(s).unwrap_or(LogLevel::Off);
@@ -50,7 +51,7 @@ pub(crate) fn init_from_env_with(s: &str) {
 #[allow(dead_code)]
 // reason: exposed for future diagnostic call sites and parity with the
 // previous `tracing`-based API; the lib does not currently consult the
-// level outside of the `enabled` gate inside `_emit`.
+// level outside of the `enabled` gate inside `emit`.
 pub(crate) fn current_level() -> LogLevel {
     match LEVEL.load(Ordering::Relaxed) {
         0 => LogLevel::Off,
@@ -129,7 +130,7 @@ mod tests {
 
     #[test]
     fn enabled_is_monotonic() {
-        // The level comparison logic the `_emit` gate depends on:
+        // The level comparison logic the `emit` gate depends on:
         // a more-verbose level must compare greater than a less-verbose one.
         // Direct value comparison avoids touching the global `Once`.
         assert!((LogLevel::Off as u8) < (LogLevel::Warn as u8));
