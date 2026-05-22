@@ -279,12 +279,12 @@ fn rgb_to_xterm_256(r: u8, g: u8, b: u8) -> u8 {
         if r < 8 {
             return 16;
         }
-        if r > 248 {
+        if r > 246 {
             return 231;
         }
         // u16 conversion avoids any overflow.
         let level = (u16::from(r) - 8) / 10;
-        // 0..=23 + 232 = 232..=255; truncation safe by bound.
+        // level ∈ 0..=23 by `if r > 246` guard above; 232 + level ∈ 232..=255 fits u8.
         #[allow(clippy::cast_possible_truncation)] // reason: bounded 0..=23
         return 232 + level as u8;
     }
@@ -673,6 +673,47 @@ mod tests {
         // Pure black takes the grayscale fast path (r==g==b<8 → 16).
         assert_eq!(Color::Rgb(0, 0, 0).downgrade(ColorDepth::Indexed256), Some(Color::Indexed(16)));
         // Pure white takes the grayscale fast path (r==g==b>248 → 231).
+        assert_eq!(
+            Color::Rgb(255, 255, 255).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(231))
+        );
+    }
+
+    #[test]
+    fn downgrade_grayscale_ramp_boundaries() {
+        // The xterm grayscale ramp covers indices 232..=255 with formula
+        // RGB = (i - 232) * 10 + 8; cube white at 231 covers (255,255,255).
+        // The nearest-neighbor cutoff between ramp top (238,238,238) and cube
+        // white (255,255,255) sits at r=246.5, so r<=246 routes to ramp, r>=247
+        // to cube white. Regression guard for the r=248 overflow bug (commit
+        // c195d59 pre-fix would panic in debug / miscolor in release).
+
+        // Black side of the ramp.
+        assert_eq!(Color::Rgb(7, 7, 7).downgrade(ColorDepth::Indexed256), Some(Color::Indexed(16)));
+        assert_eq!(
+            Color::Rgb(8, 8, 8).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(232))
+        );
+
+        // Top of the ramp — boundary that triggered the overflow.
+        assert_eq!(
+            Color::Rgb(238, 238, 238).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(255))
+        );
+        assert_eq!(
+            Color::Rgb(246, 246, 246).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(255))
+        );
+
+        // Crossing the cutoff — cube white wins from here on, with no panic.
+        assert_eq!(
+            Color::Rgb(247, 247, 247).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(231))
+        );
+        assert_eq!(
+            Color::Rgb(248, 248, 248).downgrade(ColorDepth::Indexed256),
+            Some(Color::Indexed(231))
+        );
         assert_eq!(
             Color::Rgb(255, 255, 255).downgrade(ColorDepth::Indexed256),
             Some(Color::Indexed(231))
