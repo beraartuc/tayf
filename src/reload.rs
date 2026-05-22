@@ -13,9 +13,11 @@
 /// diagnostic logging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-// reason: scaffold-only in this task — the watcher (Task 5) and signals
-// path (Task 6) wire the producers, and the orchestrator thread (Task 7)
-// wires the consumer. Allow is removed at first non-test use site.
+// reason: variants are constructed only in tests until Task 9 wires the
+// watcher (FileChanged) and signal handler (SignalHup) producers. The
+// orchestrator consumes the enum via `{req:?}` Debug formatting, which
+// clippy intentionally ignores for dead-code analysis. Allow is removed
+// at that point.
 pub(crate) enum ReloadRequest {
     /// The file watcher observed a change to the config path.
     FileChanged,
@@ -43,9 +45,6 @@ use crate::terminfo::ColorDepth;
 /// # Errors
 /// Returns any error surfaced by [`crate::config::load`] (with the
 /// caller's explicit `path`) or [`crate::rules::Compiled::load`].
-#[allow(dead_code)]
-// reason: tested in this task, wired to the orchestrator thread in
-// Task 6. Allow is removed at that first non-test use site.
 pub(crate) fn reload_once(
     handle: &ArcSwap<Compiled>,
     path: Option<&Path>,
@@ -61,6 +60,66 @@ pub(crate) fn reload_once(
     let compiled = Compiled::load(cfg, path_str.as_deref(), depth)?;
     handle.store(Arc::new(compiled));
     Ok(())
+}
+
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::thread::{self, JoinHandle};
+
+/// Owns the reload thread. Drop joins the thread; the thread exits
+/// when its `Receiver` returns `Err` (sender side closed).
+pub(crate) struct ReloadOrchestrator {
+    handle: Option<JoinHandle<()>>,
+}
+
+#[allow(dead_code)]
+// reason: no non-test caller until Task 9 wires the orchestrator into
+// runtime startup. Allow covers the `impl` block (struct + spawn) and
+// is removed when Task 9 lands.
+impl ReloadOrchestrator {
+    /// Spawn the orchestrator thread.
+    ///
+    /// `rules_handle` is shared with `Pipeline` (read side) and is the
+    /// target of all `store` operations performed here.
+    /// `config_path` is the path resolved at startup; it is re-used on
+    /// every reload (we do NOT re-walk XDG fallbacks at runtime —
+    /// avoids env-race surprises mid-session).
+    pub(crate) fn spawn(
+        rules_handle: Arc<ArcSwap<Compiled>>,
+        config_path: Option<PathBuf>,
+        depth: ColorDepth,
+        rx: Receiver<ReloadRequest>,
+    ) -> Self {
+        // reason: thread::Builder::spawn fails only on OS resource
+        // exhaustion. As with the runtime threads (see
+        // src/runtime.rs::spawn_output_thread), we accept the panic
+        // on that path; the TtyGuard's Drop restores the terminal
+        // during unwind.
+        let handle = thread::Builder::new()
+            .name("tayf-reload".into())
+            .spawn(move || {
+                while let Ok(req) = rx.recv() {
+                    if let Err(e) = reload_once(&rules_handle, config_path.as_deref(), depth) {
+                        crate::log::warn_msg!(
+                            "config reload failed ({req:?}): {e}; keeping previous rule set"
+                        );
+                    } else {
+                        crate::log::info_msg!("config reloaded ({req:?})");
+                    }
+                }
+                // Sender side closed — exit cleanly.
+            })
+            .expect("reload thread must spawn");
+        ReloadOrchestrator { handle: Some(handle) }
+    }
+}
+
+impl Drop for ReloadOrchestrator {
+    fn drop(&mut self) {
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -137,4 +196,69 @@ style = { fg = "yellow", bold = true }
     // rationale (the test would be host-dependent on $XDG_CONFIG_HOME and
     // $HOME). The production code path always passes Some(path) when a
     // config was loaded at startup.
+
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn orchestrator_swaps_on_file_changed_event() {
+        let handle = Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().unwrap()));
+        let before = handle.load_full();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            &dir,
+            r#"
+[[rules]]
+name = "log_level"
+style = { fg = "yellow" }
+"#,
+        );
+
+        let (tx, rx) = mpsc::channel::<super::ReloadRequest>();
+        let _orchestrator = super::ReloadOrchestrator::spawn(
+            Arc::clone(&handle),
+            Some(path.clone()),
+            ColorDepth::Truecolor,
+            rx,
+        );
+
+        tx.send(super::ReloadRequest::FileChanged).unwrap();
+        // 200ms is generous; the actual work is reading a tiny file +
+        // compiling one regex.
+        std::thread::sleep(Duration::from_millis(200));
+
+        let after = handle.load_full();
+        assert!(!Arc::ptr_eq(&before, &after));
+
+        drop(tx); // lets orchestrator's recv return Err on next iteration
+    }
+
+    #[test]
+    fn orchestrator_preserves_old_arc_on_bad_config() {
+        let handle = Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().unwrap()));
+        let before = handle.load_full();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "broken toml = = =\n");
+
+        let (tx, rx) = mpsc::channel::<super::ReloadRequest>();
+        let _orchestrator = super::ReloadOrchestrator::spawn(
+            Arc::clone(&handle),
+            Some(path),
+            ColorDepth::Truecolor,
+            rx,
+        );
+
+        tx.send(super::ReloadRequest::SignalHup).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let after = handle.load_full();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "orchestrator must keep the old Arc when reload_once fails"
+        );
+
+        drop(tx);
+    }
 }

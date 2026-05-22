@@ -116,18 +116,12 @@ pub(crate) use warn_msg;
 /// `info` is the level used by the hot-reload orchestrator
 /// (`src/reload.rs`) to announce a successful reload. Default behavior
 /// (no `TAYF_LOG` set) is silent — users opt in with `TAYF_LOG=info`.
-#[allow(unused_macros)]
-// reason: first production call site lands in Task 6 (ReloadOrchestrator);
-// the macro is exercised by the in-module test today.
 macro_rules! info_msg {
     ($($arg:tt)*) => {
         $crate::log::emit($crate::log::LogLevel::Info, format_args!($($arg)*))
     };
 }
 
-#[allow(unused_imports)]
-// reason: paired with the `unused_macros` allow above; removed when Task 6
-// adds the first non-test caller.
 pub(crate) use info_msg;
 
 #[cfg(test)]
