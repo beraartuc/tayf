@@ -197,15 +197,25 @@ pub(crate) fn resolve_path(
         return Ok(Some(p.to_path_buf()));
     }
 
+    // XDG Base Directory spec: "If $XDG_CONFIG_HOME is either not set or
+    // empty, a default equal to $HOME/.config should be used." The empty-OS-
+    // string check covers shells that imperatively clear the var via
+    // `export XDG_CONFIG_HOME=""` rather than `unset`; without this guard,
+    // an empty base would join to a CWD-relative `tayf/config.toml`. The
+    // same rule is applied to `$HOME` for defense in depth.
     if let Some(base) = xdg() {
-        if let Some(p) = check_default_path(&base.join("tayf"))? {
-            return Ok(Some(p));
+        if !base.as_os_str().is_empty() {
+            if let Some(p) = check_default_path(&base.join("tayf"))? {
+                return Ok(Some(p));
+            }
         }
     }
 
     if let Some(home) = home() {
-        if let Some(p) = check_default_path(&home.join(".config").join("tayf"))? {
-            return Ok(Some(p));
+        if !home.as_os_str().is_empty() {
+            if let Some(p) = check_default_path(&home.join(".config").join("tayf"))? {
+                return Ok(Some(p));
+            }
         }
     }
 
@@ -232,6 +242,22 @@ fn check_default_path(base: &Path) -> Result<Option<std::path::PathBuf>> {
         line: 0,
         message: format!("cannot canonicalize config path: {e}"),
     })?;
+    // The check is deliberately one-sided: only the CANONICAL target of
+    // config.toml is constrained to live under the canonical base.
+    //
+    // - If `~/.config/tayf` itself is a symlink to `/elsewhere`, both
+    //   sides resolve into `/elsewhere/` and the file is accepted. The
+    //   user redirected the entire base, which is unambiguous opt-in
+    //   (matches the --config escape-hatch philosophy).
+    // - If `~/.config/tayf/config.toml` is a symlink to `/elsewhere/x`,
+    //   the file's canonical target is outside the base and is rejected.
+    //
+    // TOCTOU note: the gap between canonicalize and File::open is
+    // intentionally not closed. An attacker who can swap files inside
+    // `~/.config/tayf/` already has write access there and can put
+    // adversarial content directly; symlink games gain them nothing.
+    // Cross-user attacks would require shared HOME/XDG, which is outside
+    // the single-user threat model (CLAUDE.md §3).
     let canonical_base = std::fs::canonicalize(base).map_err(|e| Error::Config {
         path: base.display().to_string(),
         line: 0,
@@ -245,6 +271,23 @@ fn check_default_path(base: &Path) -> Result<Option<std::path::PathBuf>> {
                 "config file must live under {base}; symlinks pointing outside are rejected. Use --config <PATH> if you intentionally want a file outside this directory.",
                 base = canonical_base.display()
             ),
+        });
+    }
+    // Mirror the explicit-path branch: verify the target is a regular file.
+    // Without this check, a symlink-to-directory under the base would pass
+    // the whitelist, then `File::open` + `read_to_end` would surface a less
+    // helpful EISDIR diagnostic than the upfront `is_file` check used by
+    // `--config <PATH>`.
+    let meta = std::fs::metadata(&canonical_file).map_err(|e| Error::Config {
+        path: candidate.display().to_string(),
+        line: 0,
+        message: format!("cannot stat config target: {e}"),
+    })?;
+    if !meta.is_file() {
+        return Err(Error::Config {
+            path: candidate.display().to_string(),
+            line: 0,
+            message: "config path is not a regular file".into(),
         });
     }
     Ok(Some(candidate))
@@ -522,6 +565,26 @@ style = { fg = "red" }
     }
 
     #[test]
+    fn resolve_treats_empty_xdg_as_unset_per_xdg_spec() {
+        // XDG Base Directory spec: "If $XDG_CONFIG_HOME is either not set or
+        // empty, a default equal to $HOME/.config should be used." Tayf's own
+        // design doc (tayf-tasarim.md §3) inherits this rule. Regression guard
+        // for a foot-gun where `export XDG_CONFIG_HOME=""` would otherwise
+        // route to a CWD-relative `tayf/config.toml` lookup.
+        let dir = tmp();
+        let tayf_dir = dir.path().join(".config").join("tayf");
+        fs::create_dir_all(&tayf_dir).unwrap();
+        let path = write_config(&tayf_dir, "");
+        let resolved = resolve_path(
+            None,
+            || Some(std::path::PathBuf::new()), // empty path simulates empty XDG_CONFIG_HOME
+            || Some(dir.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(resolved.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
     #[cfg(unix)]
     fn resolve_rejects_default_path_symlinked_outside_base() {
         use std::os::unix::fs::symlink;
@@ -564,6 +627,29 @@ style = { fg = "red" }
 
         let resolved = resolve_path(None, || Some(dir.path().to_path_buf()), || None).unwrap();
         assert!(resolved.is_some());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_rejects_default_path_symlinked_to_directory() {
+        use std::os::unix::fs::symlink;
+        // Mirror of the explicit-path "not a regular file" guard for the
+        // default-path branch. Without it the user would see EISDIR via the
+        // subsequent read; this fails upfront with the same diagnostic shape.
+        let dir = tmp();
+        let tayf_dir = dir.path().join("tayf");
+        fs::create_dir(&tayf_dir).unwrap();
+        let target_dir = tayf_dir.join("real_dir");
+        fs::create_dir(&target_dir).unwrap();
+        let link = tayf_dir.join("config.toml");
+        symlink(&target_dir, &link).unwrap();
+
+        let err = resolve_path(None, || Some(dir.path().to_path_buf()), || None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not a regular file") || msg.contains("regular file"),
+            "expected regular-file diagnostic: {msg}"
+        );
     }
 
     #[test]
