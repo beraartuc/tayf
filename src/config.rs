@@ -343,8 +343,42 @@ pub(crate) fn apply_user_rules(
 ) -> Result<()> {
     let known: std::collections::HashSet<&str> =
         crate::rules::BUILTIN_NAMES.iter().copied().collect();
+    let mut seen: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(user.len());
 
     for ur in user {
+        // Validate rule name shape before anything else — silent acceptance
+        // of empty/whitespace names is the worst footgun in this loop.
+        if ur.name.trim().is_empty() {
+            return Err(Error::Config {
+                path: path.into(),
+                line: 0,
+                message: "rule name must not be empty".into(),
+            });
+        }
+        if ur.name != ur.name.trim() {
+            return Err(Error::Config {
+                path: path.into(),
+                line: 0,
+                message: format!(
+                    "rule '{n}': name has leading/trailing whitespace; did you mean '{t}'?",
+                    n = ur.name,
+                    t = ur.name.trim()
+                ),
+            });
+        }
+
+        if !seen.insert(ur.name.as_str()) {
+            return Err(Error::Config {
+                path: path.into(),
+                line: 0,
+                message: format!(
+                    "rule '{n}': defined more than once; merge the entries into a single `[[rules]]` block",
+                    n = ur.name
+                ),
+            });
+        }
+
         let is_builtin = known.contains(ur.name.as_str());
 
         if !ur.enabled {
@@ -935,5 +969,83 @@ style = { fg = "red" }
         let msg = err.to_string();
         assert!(msg.contains("log_level"));
         assert!(msg.contains("turquoise"));
+    }
+
+    #[test]
+    fn empty_rule_name_is_rejected() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: String::new(),
+            pattern: Some("X".into()),
+            style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.to_lowercase().contains("empty"), "expected empty-name diagnostic: {msg}");
+    }
+
+    #[test]
+    fn whitespace_rule_name_is_rejected_with_hint() {
+        let mut rules = builtin_rules();
+        let user = vec![UserRule {
+            name: " ipv4 ".into(),
+            pattern: None,
+            style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+            enabled: true,
+        }];
+        let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("' ipv4 '"), "must echo the bad name: {msg}");
+        assert!(msg.contains("'ipv4'"), "must suggest the trimmed form: {msg}");
+    }
+
+    #[test]
+    fn duplicate_user_rule_name_is_rejected() {
+        let mut rules = builtin_rules();
+        let user = vec![
+            UserRule {
+                name: "uuid".into(),
+                pattern: Some("X".into()),
+                style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+                enabled: true,
+            },
+            UserRule {
+                name: "uuid".into(),
+                pattern: Some("Y".into()),
+                style: Some(UserStyle { fg: Some("blue".into()), ..UserStyle::default() }),
+                enabled: true,
+            },
+        ];
+        let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("uuid"), "must name the duplicate: {msg}");
+        assert!(
+            msg.to_lowercase().contains("more than once")
+                || msg.to_lowercase().contains("duplicate"),
+            "must say duplicate: {msg}"
+        );
+    }
+
+    #[test]
+    fn duplicate_builtin_override_is_rejected() {
+        // Same protection applies to overriding a built-in twice.
+        let mut rules = builtin_rules();
+        let user = vec![
+            UserRule {
+                name: "log_level".into(),
+                pattern: None,
+                style: Some(UserStyle { fg: Some("yellow".into()), ..UserStyle::default() }),
+                enabled: true,
+            },
+            UserRule {
+                name: "log_level".into(),
+                pattern: None,
+                style: Some(UserStyle { fg: Some("cyan".into()), ..UserStyle::default() }),
+                enabled: true,
+            },
+        ];
+        let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("more than once"));
     }
 }
