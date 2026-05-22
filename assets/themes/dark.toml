@@ -1,0 +1,61 @@
+# tayf — dark-background preset theme.
+#
+# Spells out the 13 built-in styles explicitly so users can copy this file
+# as a starting template. Applying `--theme dark` is a no-op compared to
+# running tayf with no theme: every style here matches the built-in default.
+#
+# Schema is a subset of the user config: only [[rules]] blocks with
+# `name` and `style`. `pattern` and `enabled = false` are rejected at
+# load time (themes only override colors, never patterns).
+
+[[rules]]
+name = "permission"
+style = { fg = "white", dim = true }
+
+[[rules]]
+name = "timestamp"
+style = { fg = "bright_black" }
+
+[[rules]]
+name = "uuid"
+style = { fg = "bright_magenta" }
+
+[[rules]]
+name = "url"
+style = { fg = "bright_blue", underline = true }
+
+[[rules]]
+name = "email"
+style = { fg = "bright_green" }
+
+[[rules]]
+name = "ipv4"
+style = { fg = "yellow", bold = true }
+
+[[rules]]
+name = "ipv6"
+style = { fg = "bright_yellow" }
+
+[[rules]]
+name = "mac"
+style = { fg = "cyan" }
+
+[[rules]]
+name = "log_level"
+style = { fg = "bright_red", bold = true }
+
+[[rules]]
+name = "http_status"
+style = { fg = "magenta" }
+
+[[rules]]
+name = "filename"
+style = { fg = "bright_cyan" }
+
+[[rules]]
+name = "fqdn"
+style = { fg = "blue" }
+
+[[rules]]
+name = "duration"
+style = { fg = "green" }
