@@ -56,7 +56,68 @@ The filename rule covers a curated catalog of common extensions — archives
 configuration (`json`, `yaml`, `toml`, ...), documents (`pdf`, `md`, ...),
 media, and binary formats. See `src/rules.rs` for the full list.
 
-Configuration via TOML and user-defined patterns are slated for v0.2.
+## Configuration (v0.2)
+
+`tayf` reads an optional TOML config from
+`$XDG_CONFIG_HOME/tayf/config.toml` (falling back to
+`~/.config/tayf/config.toml`). Pass `--config <path>` to use a different
+file. Without a config file, `tayf` behaves exactly as v0.1: the eight
+built-in rules described above are active.
+
+```toml
+# ~/.config/tayf/config.toml
+
+# Override a built-in: change the log_level color to yellow (loses the
+# built-in's bold attribute — style overrides REPLACE wholesale).
+[[rules]]
+name = "log_level"
+style = { fg = "yellow", bold = true }
+
+# Disable a built-in by name.
+[[rules]]
+name = "fqdn"
+enabled = false
+
+# Append a new custom rule.
+[[rules]]
+name = "uuid"
+pattern = '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
+style = { fg = "#888888" }
+
+[[rules]]
+name = "kubernetes-pod"
+pattern = '\b[a-z][a-z0-9-]+-[a-z0-9]{5}-[a-z0-9]{5}\b'
+style = { fg = "magenta", italic = true }
+```
+
+### Color values
+
+- ANSI names: `"red"`, `"bright_cyan"`, etc. (case-insensitive).
+- 256-color palette: `"color(178)"`.
+- 24-bit hex: `"#ff8800"` (six digits).
+- 24-bit functional: `"rgb(255, 136, 0)"`.
+
+When the terminal cannot display a requested color depth (`TERM=dumb`,
+no `COLORTERM=truecolor`, etc.) `tayf` automatically downgrades — Rgb
+values collapse to the closest 256-indexed or ANSI 16 entry, attributes
+like `bold` and `italic` are preserved.
+
+### Style fields
+
+`style = { fg, bg, bold, italic, underline, dim }`. Every field is
+optional, but a rule whose style would produce no visible effect is
+rejected at load time — use `enabled = false` to disable a rule instead.
+
+### Built-in rule names
+
+The eight names you can override or disable: `ipv4`, `ipv6`, `mac`,
+`log_level`, `http_status`, `filename`, `fqdn`, `duration`.
+
+### Errors
+
+Malformed configs exit with code `64` (`EX_USAGE`) and print a friendly
+diagnostic to stderr that includes the file path and the offending line
+number when available.
 
 ## TUI compatibility
 
