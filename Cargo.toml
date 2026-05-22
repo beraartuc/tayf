@@ -42,7 +42,7 @@ thiserror = "2.0"
 # bheisler, used only by `benches/throughput.rs` to record v0.1 baseline
 # throughput numbers (spec §7). No `unsafe` is introduced in our bench
 # code; criterion itself uses minimal `unsafe` (well-audited).
-criterion = "0.5"
+criterion = "0.8"
 tempfile = "3.27"
 
 [[bench]]

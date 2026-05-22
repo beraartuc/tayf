@@ -21,9 +21,10 @@
 //!
 //! and record the numbers in `benches/BASELINE.md`.
 
+use std::hint::black_box;
 use std::io::{Cursor, Write};
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 
 use tayf::__bench__::{apply_rules, load_builtin_rules};
 
