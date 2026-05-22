@@ -532,6 +532,13 @@ impl Compiled {
 /// Map a built-in vs. user-rule regex error: built-ins surface as
 /// [`Error::RegexCompile`]; user rules surface as [`Error::Config`] with the
 /// offending rule name and the user's config path threaded through.
+///
+/// "User rule" covers both user-config `[[rules]]` and theme TOML rules —
+/// once a theme has passed [`crate::themes::validate_theme_rules`] it is
+/// merged via the same [`crate::config::apply_user_rules`] path as user
+/// config, and `is_user_supplied` is set for both. Theme-supplied rules
+/// flow `config_path` = `<embedded:theme/{name}>` (the synthetic path)
+/// so the diagnostic still points at the right source.
 fn compile_error_for(
     is_user_supplied: bool,
     rule_name: &str,
