@@ -10,6 +10,10 @@ use regex::bytes::{Regex, RegexSet};
 use crate::error::{Error, Result};
 use crate::style::{Color, Style};
 
+/// 1 MiB cap shared by NFA compile size and lazy DFA cache growth. Both
+/// must be bounded to defend against `ReDoS` — see CLAUDE.md §3.
+const REGEX_SIZE_LIMIT_BYTES: usize = 1 << 20;
+
 /// One built-in rule: a name (for diagnostics), a regex pattern source, and
 /// the style applied to each match. The pattern is owned `String` (not
 /// `&'static str`) because the filename rule is built dynamically; the cost
@@ -18,6 +22,12 @@ pub(crate) struct BuiltinRule {
     pub(crate) name: String,
     pub(crate) pattern: String,
     pub(crate) style: Style,
+    /// `true` if `pattern` came from a user TOML config (either an appended
+    /// custom rule OR an override of a built-in's pattern). `false` for the
+    /// canonical built-in patterns shipped by tayf. Drives error routing in
+    /// `compile_error_for`: built-in compile failures are `RegexCompile` (a
+    /// tayf bug), user-supplied compile failures are `Config` (user error).
+    pub(crate) is_user_supplied: bool,
 }
 
 /// File extensions colored by the `filename` built-in rule. See spec §3.8 for
@@ -258,36 +268,43 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "ipv6".into(),
             pattern: r"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}|::[0-9A-Fa-f]{1,4}|::1".into(),
             style: Style { fg: Some(Color::BrightYellow), ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "mac".into(),
             pattern: r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b".into(),
             style: Style { fg: Some(Color::Cyan), ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "log_level".into(),
             pattern: r"\b(?:ERROR|FAIL|FATAL|CRITICAL|WARN|WARNING|INFO|DEBUG|TRACE)\b".into(),
             style: Style { fg: Some(Color::BrightRed), bold: true, ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "http_status".into(),
             pattern: r"(?:^|[\s/:])([1-5]\d{2})\b".into(),
             style: Style { fg: Some(Color::Magenta), ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "filename".into(),
             pattern: build_filename_pattern(),
             style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "fqdn".into(),
             pattern: r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.){1,}[A-Za-z]{2,24}\b".into(),
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
+            is_user_supplied: false,
         },
         BuiltinRule {
             name: "duration".into(),
@@ -298,6 +315,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             // arrives in v0.3 to allow the bare units back safely.
             pattern: r"\b\d+(?:\.\d+)?\s?(?:ns|us|μs|ms)\b".into(),
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
+            is_user_supplied: false,
         },
     ]
 }
@@ -323,6 +341,9 @@ mod builtin_names_test {
 /// the regex; index `i` of `styles` carries the style to apply. `set` is the
 /// equivalent `RegexSet` populated for v0.4's planned fast-path; v0.1 ignores
 /// it but the storage shape stays stable.
+// reason: required by `.expect_err()` in tests. Do NOT log a `Compiled`
+// instance directly — `Regex`'s Debug output echoes the pattern source,
+// which may include user-supplied patterns (mild info-leak surface).
 #[derive(Debug)]
 pub(crate) struct Compiled {
     #[allow(dead_code)]
@@ -360,7 +381,7 @@ impl Compiled {
             // apply_user_rules (and any nested UserStyle::to_style call) so
             // users see `config error in /home/u/.config/tayf/config.toml: ...`
             // rather than the empty-path sentinel.
-            let path = config_path.unwrap_or("<config>");
+            let path = config_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
             crate::config::apply_user_rules(path, &mut rules, &c.rules)?;
         }
 
@@ -375,14 +396,20 @@ impl Compiled {
         let mut sources = Vec::with_capacity(rules.len());
         for rule in &rules {
             let re = regex::bytes::RegexBuilder::new(&rule.pattern)
-                .size_limit(1 << 20)
-                .dfa_size_limit(1 << 20)
+                .size_limit(REGEX_SIZE_LIMIT_BYTES)
+                .dfa_size_limit(REGEX_SIZE_LIMIT_BYTES)
                 .build()
-                .map_err(|e| compile_error_for(&rule.name, config_path, e))?;
+                .map_err(|e| {
+                    compile_error_for(rule.is_user_supplied, &rule.name, config_path, e)
+                })?;
             individuals.push(re);
             styles.push(rule.style);
             sources.push(rule.pattern.clone());
         }
+        // `sources` are the same patterns we just compiled individually — RegexSet
+        // over the same set cannot raise a syntax error, and tayf's per-rule
+        // size_limit keeps the aggregate well under RegexSet's default cap. The
+        // error path is preserved for forward-compat (e.g. larger rule sets in v0.4).
         let set = RegexSet::new(&sources).map_err(Error::from)?;
 
         Ok(Compiled { set, individuals, styles })
@@ -401,11 +428,17 @@ impl Compiled {
 /// Map a built-in vs. user-rule regex error: built-ins surface as
 /// [`Error::RegexCompile`]; user rules surface as [`Error::Config`] with the
 /// offending rule name and the user's config path threaded through.
-fn compile_error_for(rule_name: &str, config_path: Option<&str>, source: regex::Error) -> Error {
-    if BUILTIN_NAMES.contains(&rule_name) {
-        Error::from(source)
+fn compile_error_for(
+    is_user_supplied: bool,
+    rule_name: &str,
+    config_path: Option<&str>,
+    source: regex::Error,
+) -> Error {
+    if is_user_supplied {
+        let path = config_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
+        Error::config_regex(path.to_string(), rule_name, source)
     } else {
-        Error::config_regex(config_path.unwrap_or("<config>").to_string(), rule_name, source)
+        Error::from(source)
     }
 }
 
@@ -639,6 +672,73 @@ mod tests {
             None => panic!("uuid rule should still carry a color at Basic16"),
         }
         assert_eq!(c.individuals.len(), 9, "8 built-ins + 1 user rule");
+    }
+
+    #[test]
+    fn override_of_builtin_pattern_with_bad_regex_surfaces_as_config_error() {
+        // Regression for the misrouted-error bug found in code review of Task 8:
+        // user override of a built-in's pattern with an invalid regex must
+        // produce Error::Config (EX_USAGE), not Error::RegexCompile (EX_SOFTWARE).
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use crate::terminfo::ColorDepth;
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "ipv4".into(),
+                pattern: Some("(unclosed".into()),
+                style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+                enabled: true,
+            }],
+        };
+        let err = Compiled::load(Some(&cfg), Some("/x/cfg.toml"), ColorDepth::Truecolor)
+            .expect_err("invalid regex must fail to compile");
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("config error in /x/cfg.toml"),
+            "must be a Config error with path, got: {msg}"
+        );
+        assert!(msg.contains("ipv4"), "must name the rule: {msg}");
+    }
+
+    #[test]
+    fn new_user_rule_with_bad_regex_surfaces_as_config_error() {
+        // Parallel test: user-only rule (not a built-in override) with bad regex.
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use crate::terminfo::ColorDepth;
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "my_rule".into(),
+                pattern: Some("(also-unclosed".into()),
+                style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
+                enabled: true,
+            }],
+        };
+        let err = Compiled::load(Some(&cfg), Some("/x/cfg.toml"), ColorDepth::Truecolor)
+            .expect_err("invalid regex must fail to compile");
+        let msg = err.to_string();
+        assert!(msg.starts_with("config error in /x/cfg.toml"));
+        assert!(msg.contains("my_rule"));
+    }
+
+    #[test]
+    fn load_with_all_builtins_disabled_yields_passthrough() {
+        // Edge case flagged in code review: empty rule set after merge must
+        // produce a valid (empty) Compiled, which makes apply_rules a no-op
+        // (effective passthrough).
+        use crate::config::{Config, GeneralSection, UserRule};
+        use crate::terminfo::ColorDepth;
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: BUILTIN_NAMES
+                .iter()
+                .map(|n| UserRule { name: (*n).into(), pattern: None, style: None, enabled: false })
+                .collect(),
+        };
+        let c = Compiled::load(Some(&cfg), Some("/x"), ColorDepth::Truecolor).unwrap();
+        assert_eq!(c.individuals.len(), 0);
+        assert_eq!(c.styles.len(), 0);
+        assert_eq!(c.set.len(), 0);
     }
 
     #[test]

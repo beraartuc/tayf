@@ -403,6 +403,7 @@ pub(crate) fn apply_user_rules(
             };
             if let Some(p) = &ur.pattern {
                 existing.pattern.clone_from(p);
+                existing.is_user_supplied = true;
             }
             if let Some(s) = &ur.style {
                 existing.style = s.to_style(path, &ur.name)?;
@@ -430,7 +431,12 @@ pub(crate) fn apply_user_rules(
                 });
             };
             let style = user_style.to_style(path, &ur.name)?;
-            builtins.push(crate::rules::BuiltinRule { name: ur.name.clone(), pattern, style });
+            builtins.push(crate::rules::BuiltinRule {
+                name: ur.name.clone(),
+                pattern,
+                style,
+                is_user_supplied: true,
+            });
         }
     }
 
