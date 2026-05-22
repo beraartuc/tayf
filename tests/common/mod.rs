@@ -8,6 +8,10 @@
 // Tests under `tests/` are not part of the library's production surface, but
 // the crate-wide `clippy::pedantic` lint group still applies.
 #![allow(clippy::expect_used)]
+// reason: each integration-test binary compiles `common/mod.rs` independently
+// and only sees the helpers it uses, so unused-fn warnings here are a
+// false-positive of `tests/common` being shared.
+#![allow(dead_code)]
 
 use std::time::Duration;
 
@@ -47,4 +51,26 @@ pub fn spawn_capture(cmd: &str, args: &[&str], timeout: Duration) -> Vec<u8> {
     }
     let _ = child.kill();
     out
+}
+
+/// Spawn `cmd` inside a PTY and return the master plus the child handle so
+/// the caller can write to stdin, read from stdout, send signals, and
+/// observe exit. Caller is responsible for killing the child on test
+/// failure paths.
+pub fn spawn_for_interaction(
+    cmd: &str,
+    args: &[&str],
+    size: portable_pty::PtySize,
+) -> (Box<dyn portable_pty::MasterPty + Send>, Box<dyn portable_pty::Child + Send + Sync>) {
+    let pty_system = portable_pty::native_pty_system();
+    let pair = pty_system.openpty(size).expect("openpty");
+
+    let mut builder = portable_pty::CommandBuilder::new(cmd);
+    for a in args {
+        builder.arg(a);
+    }
+    let child = pair.slave.spawn_command(builder).expect("spawn");
+    drop(pair.slave);
+
+    (pair.master, child)
 }
