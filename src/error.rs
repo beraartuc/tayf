@@ -60,6 +60,12 @@ pub enum Error {
         message: String,
     },
 
+    /// Returned when `--theme <NAME>` or `[general] theme = "..."` names a theme
+    /// that is not in the embedded registry. The available list is computed
+    /// from [`crate::themes::names`] at construction time.
+    #[error("theme {:?} not found; available: {}. Run with --theme <name>.", name, available.join(", "))]
+    Theme { name: String, available: Vec<String> },
+
     /// File-watcher operation failed (start, register path, event channel).
     ///
     /// Uses `#[source]` rather than `#[from]` so call sites in the watcher
@@ -323,5 +329,15 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("file watcher error"));
         assert!(msg.contains("permission denied"));
+    }
+
+    #[test]
+    fn theme_display_shows_name_and_alternatives() {
+        let e = Error::Theme { name: "foo".into(), available: vec!["dark".into(), "light".into()] };
+        let s = e.to_string();
+        assert!(s.contains("\"foo\""), "should quote unknown name; got: {s}");
+        assert!(s.contains("dark"), "should list 'dark'; got: {s}");
+        assert!(s.contains("light"), "should list 'light'; got: {s}");
+        assert!(s.contains("--theme"), "should suggest --theme; got: {s}");
     }
 }
