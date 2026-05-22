@@ -13,7 +13,6 @@ use crate::error::{Error, Result};
 /// Top-level config shape.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // reason: first non-test caller lands in Task 6 (config::load returning Config).
 pub(crate) struct Config {
     #[serde(default)]
     pub(crate) general: GeneralSection,
@@ -45,7 +44,6 @@ impl Default for GeneralSection {
     }
 }
 
-#[allow(dead_code)] // reason: consumed by `#[serde(default = "default_true")]` at macro-expansion time; rustc's dead-code pass can't see through that.
 fn default_true() -> bool {
     true
 }
