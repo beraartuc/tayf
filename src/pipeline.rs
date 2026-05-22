@@ -9,7 +9,10 @@
 //! line buffering or rule application.
 
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Instant;
+
+use arc_swap::ArcSwap;
 
 use crate::error::Error;
 use crate::line_buffer::{LineBuffer, FLUSH_TIMEOUT};
@@ -115,9 +118,15 @@ impl TuiModeSm {
 /// are dropped. Conflict resolution as configurable priority lands in v0.5.
 pub(crate) fn apply_rules<W: Write>(
     line: &[u8],
-    compiled: &Compiled,
+    compiled_handle: &ArcSwap<Compiled>,
     out: &mut W,
 ) -> std::io::Result<()> {
+    // Snapshot the rule set for the duration of this line. Reloads landing
+    // mid-line take effect on the NEXT line, never split the current one.
+    // The `Arc` clone behind `load_full` is a single AcqRel atomic — cheap.
+    let snapshot: Arc<Compiled> = compiled_handle.load_full();
+    let compiled: &Compiled = snapshot.as_ref();
+
     // Collect (start, end, style) spans without overlapping.
     let mut spans: Vec<(usize, usize, &Style)> = Vec::new();
 
@@ -150,15 +159,19 @@ pub(crate) fn apply_rules<W: Write>(
     Ok(())
 }
 
-/// Output pipeline. Owns the TUI-mode SM, line buffer, and rule set.
+/// Output pipeline. Owns the TUI-mode SM, line buffer, and an
+/// `ArcSwap` handle to the rule set. The handle is shared with whoever
+/// owns the other end (the hot-reload orchestrator in subsequent work);
+/// `apply_rules` snapshots it once per line so reloads landing mid-call
+/// never split a line.
 pub(crate) struct Pipeline {
     sm: TuiModeSm,
     buffer: LineBuffer,
-    rules: Compiled,
+    rules: Arc<ArcSwap<Compiled>>,
 }
 
 impl Pipeline {
-    pub(crate) fn new(rules: Compiled) -> Self {
+    pub(crate) fn new(rules: Arc<ArcSwap<Compiled>>) -> Self {
         Pipeline { sm: TuiModeSm::new(), buffer: LineBuffer::new(), rules }
     }
 
@@ -353,12 +366,14 @@ mod tui_mode_tests {
 #[cfg(test)]
 mod rule_tests {
     use super::*;
+    use arc_swap::ArcSwap;
 
     #[test]
     fn ipv4_in_line_gets_sgr_wrapping() {
         let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
         let mut out = Vec::new();
-        apply_rules(b"connect to 192.168.1.1 now\n", &compiled, &mut out).unwrap();
+        apply_rules(b"connect to 192.168.1.1 now\n", &rules, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("\x1b["), "expected SGR introducer in: {s:?}");
         assert!(s.contains("192.168.1.1"));
@@ -368,8 +383,9 @@ mod rule_tests {
     #[test]
     fn no_match_passes_through_unchanged() {
         let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
         let mut out = Vec::new();
-        apply_rules(b"plain text line\n", &compiled, &mut out).unwrap();
+        apply_rules(b"plain text line\n", &rules, &mut out).unwrap();
         assert_eq!(out, b"plain text line\n");
     }
 }
@@ -377,11 +393,14 @@ mod rule_tests {
 #[cfg(test)]
 mod pipeline_tests {
     use super::*;
+    use arc_swap::ArcSwap;
+    use std::sync::Arc;
 
     #[test]
     fn alt_screen_toggle_forwarded_and_content_bypasses_rules() {
         let compiled = Compiled::load_builtins().unwrap();
-        let mut pipe = Pipeline::new(compiled);
+        let rules = Arc::new(ArcSwap::from_pointee(compiled));
+        let mut pipe = Pipeline::new(rules);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?1049h", &mut out).unwrap();
         pipe.feed(b"192.168.1.1\n", &mut out).unwrap();
@@ -402,7 +421,8 @@ mod pipeline_tests {
     #[test]
     fn bracketed_paste_toggle_forwarded_and_bypasses_rules() {
         let compiled = Compiled::load_builtins().unwrap();
-        let mut pipe = Pipeline::new(compiled);
+        let rules = Arc::new(ArcSwap::from_pointee(compiled));
+        let mut pipe = Pipeline::new(rules);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?2004h", &mut out).unwrap();
         pipe.feed(b"claude.md\n", &mut out).unwrap();
@@ -420,7 +440,8 @@ mod pipeline_tests {
     #[test]
     fn mouse_toggle_forwarded_and_bypasses_rules() {
         let compiled = Compiled::load_builtins().unwrap();
-        let mut pipe = Pipeline::new(compiled);
+        let rules = Arc::new(ArcSwap::from_pointee(compiled));
+        let mut pipe = Pipeline::new(rules);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?1000h", &mut out).unwrap();
         pipe.feed(b"server 10.0.0.1 ready\n", &mut out).unwrap();
@@ -438,7 +459,8 @@ mod pipeline_tests {
     #[test]
     fn toggle_and_content_in_single_chunk() {
         let compiled = Compiled::load_builtins().unwrap();
-        let mut pipe = Pipeline::new(compiled);
+        let rules = Arc::new(ArcSwap::from_pointee(compiled));
+        let mut pipe = Pipeline::new(rules);
         let mut out = Vec::new();
         // One chunk containing both the alt-screen enter and the content.
         pipe.feed(b"\x1b[?1049hfile.md content\n", &mut out).unwrap();
@@ -457,7 +479,8 @@ mod pipeline_tests {
     #[test]
     fn exit_passthrough_returns_to_rule_application() {
         let compiled = Compiled::load_builtins().unwrap();
-        let mut pipe = Pipeline::new(compiled);
+        let rules = Arc::new(ArcSwap::from_pointee(compiled));
+        let mut pipe = Pipeline::new(rules);
         let mut out = Vec::new();
         pipe.feed(b"\x1b[?1049hinside vim\n\x1b[?1049lback to shell file.md\n", &mut out).unwrap();
 

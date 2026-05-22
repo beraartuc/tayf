@@ -530,12 +530,14 @@ mod tests {
         // when scanned as raw bytes — otherwise apply_rules will inject an
         // escape mid-sequence and break Powerlevel10k-style prompts.
         use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
         let inputs: &[&[u8]] =
             &[b"\x1b[0m", b"\x1b[49m", b"\x1b[1;39m", b"prefix \x1b[44m text \x1b[0m suffix"];
         for input in inputs {
             let mut out = Vec::new();
-            apply_rules(input, &compiled, &mut out).unwrap();
+            apply_rules(input, &rules, &mut out).unwrap();
             // Output must equal input — no SGR injection inside escape sequences.
             assert_eq!(
                 out,
@@ -589,9 +591,11 @@ mod tests {
     #[test]
     fn filename_wins_over_fqdn_for_known_extensions() {
         use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
         let mut out = Vec::new();
-        apply_rules(b"edit claude.md please\n", &compiled, &mut out).unwrap();
+        apply_rules(b"edit claude.md please\n", &rules, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // BrightCyan fg = SGR 96; Blue fg = SGR 34. Verify the filename style wins.
         assert!(s.contains("96"), "expected filename SGR 96 (bright cyan), got: {s:?}");
@@ -601,9 +605,11 @@ mod tests {
     #[test]
     fn filename_wins_for_rust_source() {
         use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
         let mut out = Vec::new();
-        apply_rules(b"vim src/main.rs and tests.rs\n", &compiled, &mut out).unwrap();
+        apply_rules(b"vim src/main.rs and tests.rs\n", &rules, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("96"), "expected bright cyan: {s:?}");
     }
@@ -611,9 +617,11 @@ mod tests {
     #[test]
     fn fqdn_still_matches_when_no_filename_competes() {
         use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
         let mut out = Vec::new();
-        apply_rules(b"visit api.example.org today\n", &compiled, &mut out).unwrap();
+        apply_rules(b"visit api.example.org today\n", &rules, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // Blue SGR 34 should appear (no extension to conflict).
         assert!(s.contains("34"), "expected fqdn SGR 34 (blue): {s:?}");

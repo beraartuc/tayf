@@ -37,6 +37,9 @@ pub use cli::Args;
 pub use error::{Error, Result};
 
 use std::process::ExitCode;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 
 /// Top-level facade. Wires logging, shell discovery, TTY guard, PTY spawn,
 /// signal handling, and the I/O loop into a single entry point.
@@ -90,7 +93,8 @@ impl Tayf {
         // `config::apply_user_rules`; surfacing those errors before the
         // guard keeps the terminal in cooked mode and lets `Command::output`
         // callers (integration tests) observe exit code 64 cleanly.
-        let rules = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
+        let compiled = rules::Compiled::load(config_ref, config_path.as_deref(), effective_depth)?;
+        let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
 
         let guard = tty_guard::TtyGuard::engage()?;
 
@@ -100,7 +104,7 @@ impl Tayf {
 
         let _signal_guard = signals::spawn_handler(resizer, child_pid)?;
 
-        let exit_code = runtime::run(reader, writer, child, rules, apply_colors)?;
+        let exit_code = runtime::run(reader, writer, child, Arc::clone(&rules), apply_colors)?;
 
         drop(guard); // explicit; Drop would handle it but make ordering clear
 
@@ -124,7 +128,7 @@ pub mod __bench__ {
 
     /// Opaque newtype carrying the compiled built-in rule set. Constructed
     /// via [`load_builtin_rules`] and passed back into [`apply_rules`].
-    pub struct CompiledRules(crate::rules::Compiled);
+    pub struct CompiledRules(std::sync::Arc<arc_swap::ArcSwap<crate::rules::Compiled>>);
 
     /// Compile the v0.1 built-in rule set (same path the production runtime
     /// uses). See `src/rules.rs::Compiled::load_builtins`.
@@ -133,7 +137,8 @@ pub mod __bench__ {
     /// Returns [`crate::Error::RegexCompile`] if any built-in pattern fails
     /// to compile. In practice this never fires — the patterns are tested.
     pub fn load_builtin_rules() -> crate::Result<CompiledRules> {
-        crate::rules::Compiled::load_builtins().map(CompiledRules)
+        crate::rules::Compiled::load_builtins()
+            .map(|c| CompiledRules(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(c))))
     }
 
     /// Run the per-line rule scanner against `line`, emitting the SGR-wrapped

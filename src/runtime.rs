@@ -20,8 +20,10 @@
 
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
+use arc_swap::ArcSwap;
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 
 use crate::error::{Error, Result};
@@ -56,7 +58,7 @@ pub(crate) fn run(
     reader: Reader,
     writer: Writer,
     mut child: ChildHandle,
-    rules: Compiled,
+    rules: Arc<ArcSwap<Compiled>>,
     apply_colors: bool,
 ) -> Result<i32> {
     let pipeline = Pipeline::new(rules);
