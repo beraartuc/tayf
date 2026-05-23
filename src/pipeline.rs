@@ -124,59 +124,76 @@ impl Pipeline {
             if self.sm.tui_mode_active() {
                 // Path 1: TUI mode active — verbatim passthrough.
                 out.write_all(&[byte])?;
-                let _ = self.sm.step(byte);
+                let event = self.sm.step(byte);
+                if matches!(event, crate::ansi::StepEvent::ForceStringTerminate) {
+                    // tmux running inside tayf can emit large OSC 52 payloads while
+                    // alt-screen is held by tmux — cap-fire mid-OSC even in TUI mode.
+                    // Emit synthetic ST so terminal doesn't keep eating shell output.
+                    // No re-step: byte was already written to stdout above. See spec §4.4.
+                    out.write_all(b"\x1b\\")?;
+                }
                 continue;
             }
             let event = self.sm.step(byte);
-            match event {
-                crate::ansi::StepEvent::Data => {
-                    debug_assert!(self.sequence_scratch.is_empty());
-                    if let Some(line) = self.buffer.feed_byte_with_overflow(byte) {
-                        self.apply_or_passthrough(&line, out)?;
-                        // `feed_byte_with_overflow` strips the trailing `\n`
-                        // from newline-terminated lines (see line_buffer.rs);
-                        // restore it here so byte-for-byte fidelity holds.
-                        // The slice-API path (used for scratch drains below)
-                        // keeps `\n` in the line, so it does not need this.
-                        if byte == b'\n' {
-                            out.write_all(b"\n")?;
-                        }
+            if let crate::ansi::StepEvent::ForceStringTerminate = event {
+                out.write_all(b"\x1b\\")?;
+                // SM has reset to Ground; re-step the byte for fresh classification.
+                let event = self.sm.step(byte);
+                debug_assert!(
+                    !matches!(event, crate::ansi::StepEvent::ForceStringTerminate),
+                    "ForceStringTerminate must not recur after re-step"
+                );
+                self.dispatch_classification_event(event, byte, out)?;
+                continue;
+            }
+            self.dispatch_classification_event(event, byte, out)?;
+        }
+        Ok(())
+    }
+
+    /// Per-byte event dispatch. Routes `Data`, `SequenceByte`,
+    /// `StringPayloadByte`, and `SequenceCompleted` to their existing
+    /// handlers. `ForceStringTerminate` must NOT reach this dispatch —
+    /// `feed` writes the synthetic ST and re-steps before calling here.
+    /// See spec §4.3.
+    fn dispatch_classification_event<W: Write>(
+        &mut self,
+        event: crate::ansi::StepEvent,
+        byte: u8,
+        out: &mut W,
+    ) -> std::io::Result<()> {
+        use crate::ansi::StepEvent;
+        match event {
+            StepEvent::Data => {
+                debug_assert!(self.sequence_scratch.is_empty());
+                if let Some(line) = self.buffer.feed_byte_with_overflow(byte) {
+                    self.apply_or_passthrough(&line, out)?;
+                    if byte == b'\n' {
+                        out.write_all(b"\n")?;
                     }
                 }
-                crate::ansi::StepEvent::SequenceByte => {
-                    self.sequence_scratch.push(byte);
+            }
+            StepEvent::SequenceByte => {
+                self.sequence_scratch.push(byte);
+            }
+            StepEvent::StringPayloadByte => {
+                let partial = self.buffer.drain();
+                if !partial.is_empty() {
+                    out.write_all(&partial)?;
                 }
-                crate::ansi::StepEvent::StringPayloadByte => {
-                    // Path 3: OSC/DCS-passthrough/PM/APC payload byte. To
-                    // preserve byte ordering with any pre-OSC content sitting
-                    // in the line buffer, drain the buffer's partial line to
-                    // stdout *verbatim* first; then flush any pending scratch
-                    // (introducer bytes) and write the payload byte direct.
-                    //
-                    // Decision: a line that contains OSC/DCS/PM/APC cannot be
-                    // rule-applied (the pre-OSC portion is already on the
-                    // wire). Mark `line_has_string_payload` so the post-OSC
-                    // remainder also passes verbatim at `\n`. This keeps
-                    // hyperlinks (`\e]8;;URL\aLABEL\e]8;;\a`) byte-intact
-                    // and avoids regex inside URL payloads. Spec §4.1.
-                    let partial = self.buffer.drain();
-                    if !partial.is_empty() {
-                        out.write_all(&partial)?;
-                    }
-                    if !self.sequence_scratch.is_empty() {
-                        out.write_all(&self.sequence_scratch)?;
-                        self.sequence_scratch.clear();
-                    }
-                    out.write_all(&[byte])?;
-                    self.line_has_string_payload = true;
+                if !self.sequence_scratch.is_empty() {
+                    out.write_all(&self.sequence_scratch)?;
+                    self.sequence_scratch.clear();
                 }
-                crate::ansi::StepEvent::SequenceCompleted(kind) => {
-                    self.sequence_scratch.push(byte);
-                    self.dispatch_completed_sequence(kind, out)?;
-                }
-                crate::ansi::StepEvent::ForceStringTerminate => {
-                    unreachable!("ForceStringTerminate is not yet emitted; introduced in Task 12")
-                }
+                out.write_all(&[byte])?;
+                self.line_has_string_payload = true;
+            }
+            StepEvent::SequenceCompleted(kind) => {
+                self.sequence_scratch.push(byte);
+                self.dispatch_completed_sequence(kind, out)?;
+            }
+            StepEvent::ForceStringTerminate => {
+                unreachable!("ForceStringTerminate is handled in feed before reaching dispatch");
             }
         }
         Ok(())
