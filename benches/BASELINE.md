@@ -54,3 +54,20 @@ the `cat`-equivalent denominator for the spec §7 overhead target.
   the per-line cost roughly an order of magnitude on inputs where most
   rules miss; the synthetic input here hits the worst-case path
   (three rules match) and so improvements will be smaller.
+
+## v0.2.4 baseline (recorded 2026-05-23)
+
+Source: HEAD = 1de4cb50e4ec4976abfdf9d1fe4136eeaffba818
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64), Bera-MacBook-Pro.local
+
+Criterion output excerpt:
+
+```
+apply_rules/ipv4-heavy  time:   [7.6697 ms 7.6786 ms 7.6881 ms]
+                        thrpt:  [8.3110 MiB/s 8.3213 MiB/s 8.3309 MiB/s]
+
+passthrough/write_all   time:   [1.1473 µs 1.1492 µs 1.1515 µs]
+                        thrpt:  [54.190 GiB/s 54.299 GiB/s 54.387 GiB/s]
+```
+
+These numbers anchor the v0.3.0 < 20% regression budget per spec §7.4.
