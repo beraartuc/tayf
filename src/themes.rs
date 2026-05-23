@@ -84,6 +84,79 @@ fn name_is_valid(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Resolve `<base>/themes/<name>.toml` if it exists, validating the
+/// symlink chain and file type. Returns `Ok(None)` cleanly if the file
+/// doesn't exist (themes dir or specific theme not present is non-fatal
+/// — caller falls back to the built-in registry).
+///
+/// `base` is the already-resolved config base directory (e.g.
+/// `$XDG_CONFIG_HOME/tayf`); caller obtains it via
+/// [`crate::config::config_base`]. This function constructs
+/// `<base>/themes/` internally.
+///
+/// **TOCTOU rationale (Rev2 I-12, mirrors `config::check_default_path`):**
+/// The gap between `canonicalize` and the subsequent `read_capped` open
+/// is intentionally not closed. tayf operates under a single-user threat
+/// model (CLAUDE.md §3): an attacker who can swap files inside
+/// `<base>/themes/` already has write access there and can put
+/// adversarial content directly; symlink games gain them nothing.
+/// Cross-user attacks would require shared `HOME`/`XDG`, which is
+/// outside the threat model.
+///
+/// Only the CANONICAL target of `<name>.toml` is constrained to live
+/// under the canonical themes base; if `<base>/themes` itself is a
+/// symlink to `/elsewhere/themes`, both sides resolve into `/elsewhere/`
+/// and the file is accepted (user intentionally redirected the entire
+/// directory).
+#[allow(dead_code)]
+// reason: consumed by Task 14 (themes::load rewrite); tests in the
+// same module exercise it but clippy's dead_code lint fires on lib
+// builds because the production call site lands in the next commit.
+fn resolve_disk_path_in_base(
+    name: &str,
+    base: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>> {
+    let themes_dir = base.join("themes");
+    let candidate = themes_dir.join(format!("{name}.toml"));
+    if !candidate.exists() {
+        return Ok(None);
+    }
+    let canonical_file = std::fs::canonicalize(&candidate).map_err(|e| Error::Config {
+        path: candidate.display().to_string(),
+        line: 0,
+        message: format!("cannot canonicalize theme path: {e}"),
+    })?;
+    let canonical_base = std::fs::canonicalize(&themes_dir).map_err(|e| Error::Config {
+        path: themes_dir.display().to_string(),
+        line: 0,
+        message: format!("cannot canonicalize themes directory: {e}"),
+    })?;
+    if !canonical_file.starts_with(&canonical_base) {
+        return Err(Error::Config {
+            path: candidate.display().to_string(),
+            line: 0,
+            message: format!(
+                "theme file must live under {base}; symlinks pointing outside are rejected. \
+                 Move the file under {base} or remove the symlink.",
+                base = canonical_base.display()
+            ),
+        });
+    }
+    let meta = std::fs::metadata(&canonical_file).map_err(|e| Error::Config {
+        path: candidate.display().to_string(),
+        line: 0,
+        message: format!("cannot stat theme target: {e}"),
+    })?;
+    if !meta.is_file() {
+        return Err(Error::Config {
+            path: candidate.display().to_string(),
+            line: 0,
+            message: "theme path is not a regular file".into(),
+        });
+    }
+    Ok(Some(candidate))
+}
+
 const DARK_SRC: &str = include_str!("../assets/themes/dark.toml");
 const LIGHT_SRC: &str = include_str!("../assets/themes/light.toml");
 
@@ -476,5 +549,102 @@ mod tests {
         assert!(!name_is_valid("my theme"));
         assert!(!name_is_valid("\tindent"));
         assert!(!name_is_valid(" leading"));
+    }
+
+    use std::fs;
+    use std::path::Path;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("create tmpdir")
+    }
+
+    fn write_theme(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        let themes = dir.join("themes");
+        fs::create_dir_all(&themes).expect("create themes dir");
+        let p = themes.join(format!("{name}.toml"));
+        fs::write(&p, body).expect("write theme");
+        p
+    }
+
+    #[test]
+    fn resolve_disk_path_returns_none_when_file_missing() {
+        let dir = tmp();
+        let resolved = resolve_disk_path_in_base("foo", dir.path()).unwrap();
+        assert!(resolved.is_none(), "no file => Ok(None)");
+    }
+
+    #[test]
+    fn resolve_disk_path_returns_some_for_regular_file() {
+        let dir = tmp();
+        let path = write_theme(dir.path(), "mine", "");
+        let resolved = resolve_disk_path_in_base("mine", dir.path()).unwrap();
+        assert_eq!(resolved.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_disk_path_rejects_symlink_outside_base() {
+        use std::os::unix::fs::symlink;
+        let dir = tmp();
+        let evil_dir = dir.path().join("evil");
+        fs::create_dir(&evil_dir).unwrap();
+        let evil_target = evil_dir.join("mine.toml");
+        fs::write(&evil_target, "# attacker payload\n").unwrap();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        let link = themes_dir.join("mine.toml");
+        symlink(&evil_target, &link).unwrap();
+
+        let err =
+            resolve_disk_path_in_base("mine", dir.path()).expect_err("symlink out must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symlink") || msg.contains("outside") || msg.contains("must live under"),
+            "expected symlink-out diagnostic: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_disk_path_accepts_symlink_inside_base() {
+        use std::os::unix::fs::symlink;
+        let dir = tmp();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        let real = themes_dir.join("shared.toml");
+        fs::write(&real, "").unwrap();
+        let link = themes_dir.join("mine.toml");
+        symlink(&real, &link).unwrap();
+
+        let resolved = resolve_disk_path_in_base("mine", dir.path()).unwrap();
+        assert!(resolved.is_some());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_disk_path_rejects_path_pointing_to_directory() {
+        use std::os::unix::fs::symlink;
+        let dir = tmp();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        let target_dir = themes_dir.join("real_dir");
+        fs::create_dir(&target_dir).unwrap();
+        let link = themes_dir.join("mine.toml");
+        symlink(&target_dir, &link).unwrap();
+
+        let err = resolve_disk_path_in_base("mine", dir.path())
+            .expect_err("symlink-to-directory must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not a regular file") || msg.contains("regular file"),
+            "expected regular-file diagnostic: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_disk_path_returns_none_when_themes_dir_missing() {
+        let dir = tmp();
+        let resolved = resolve_disk_path_in_base("any", dir.path()).unwrap();
+        assert!(resolved.is_none());
     }
 }
