@@ -12,9 +12,12 @@
 //! - **`SequenceByte`**: byte that is part of a CSI/ESC sequence whose
 //!   destination (stdout or `line_buffer`) is decided when the sequence
 //!   completes. `Pipeline` accumulates these in a scratch buffer.
-//! - **`StringPayloadByte`**: byte that is part of an OSC/DCS/PM/APC payload;
-//!   goes direct to stdout. The `line_buffer` keeps any pre-existing partial
-//!   line across the entire string sequence.
+//! - **`StringPayloadByte`**: byte that is part of an OSC/DCS/PM/APC payload
+//!   (or its introducer or terminator). `Pipeline` routes the byte direct to
+//!   stdout. `Pipeline`'s policy on the surrounding line is to flush any
+//!   partial pre-string buffer verbatim to stdout and treat the rest of the
+//!   line as verbatim too; the SM does not enforce this — it only classifies
+//!   bytes.
 //! - **`SequenceCompleted(kind)`**: terminal event for a CSI/ESC sequence.
 //!   `kind` tells `Pipeline` where the accumulated scratch goes.
 //!
