@@ -177,11 +177,14 @@ fn parse_osc11_response(bytes: &[u8]) -> Option<BgTheme> {
     Some(luminance_to_theme(r, g, b))
 }
 
-use std::os::fd::{BorrowedFd, RawFd};
+use std::fs::OpenOptions;
+use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
+use nix::unistd::{read, write};
 
 #[allow(dead_code)]
 // reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
@@ -288,6 +291,118 @@ fn install_panic_hook(fd: RawFd, original: Termios) {
             prev(info);
         }));
     });
+}
+
+/// Open the controlling terminal as read+write. Unlike `stdin`, `/dev/tty`
+/// reliably refers to the process's controlling terminal even if stdin is
+/// redirected (`tayf < file`).
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+fn open_dev_tty() -> std::io::Result<std::fs::File> {
+    OpenOptions::new().read(true).write(true).open("/dev/tty")
+}
+
+/// Block until the fd is writable or the timeout elapses, then write all
+/// bytes. Returns `Err` on poll error, timeout, or partial write.
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+fn write_all_with_timeout(fd: RawFd, bytes: &[u8], timeout: Duration) -> std::io::Result<()> {
+    // SAFETY: caller holds the owning `File` for `fd` for the duration of
+    // this call; we only borrow the fd for poll/write syscalls.
+    // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments;
+    // allow is scoped to the single borrow.
+    #[allow(unsafe_code)]
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    let mut pollfds = [PollFd::new(borrowed, PollFlags::POLLOUT)];
+    let timeout_arg = poll_timeout_from_duration(timeout);
+    let ready = nix::poll::poll(&mut pollfds, timeout_arg)
+        .map_err(|e| std::io::Error::other(format!("poll write: {e}")))?;
+    if ready == 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"));
+    }
+    let mut written = 0usize;
+    while written < bytes.len() {
+        let n = write(borrowed, &bytes[written..])
+            .map_err(|e| std::io::Error::other(format!("write: {e}")))?;
+        if n == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "write returned 0"));
+        }
+        written += n;
+    }
+    Ok(())
+}
+
+/// Loop-read from the fd up to `OSC11_RESPONSE_CAP` bytes, stopping when:
+/// - A terminator byte (BEL/ESC/0x9C) is observed, OR
+/// - The buffer reaches `OSC11_RESPONSE_CAP`, OR
+/// - The overall timeout elapses.
+///
+/// Returns the bytes read on success. Returns `Err` on poll/read failure
+/// or timeout-with-empty-buffer.
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+fn read_until_terminator(fd: RawFd, timeout: Duration) -> std::io::Result<Vec<u8>> {
+    let deadline = Instant::now() + timeout;
+    let mut buf: Vec<u8> = Vec::with_capacity(64);
+    // SAFETY: caller holds the owning `File` for `fd` for the duration of
+    // this call; we only borrow the fd for poll/read syscalls.
+    // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments;
+    // allow is scoped to the single borrow.
+    #[allow(unsafe_code)]
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            if buf.is_empty() {
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "read timeout"));
+            }
+            return Ok(buf);
+        }
+        let remaining = deadline - now;
+        let mut pollfds = [PollFd::new(borrowed, PollFlags::POLLIN)];
+        let timeout_arg = poll_timeout_from_duration(remaining);
+        let ready = nix::poll::poll(&mut pollfds, timeout_arg)
+            .map_err(|e| std::io::Error::other(format!("poll read: {e}")))?;
+        if ready == 0 {
+            if buf.is_empty() {
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "read timeout"));
+            }
+            return Ok(buf);
+        }
+        let mut chunk = [0u8; 64];
+        let n = read(borrowed.as_raw_fd(), &mut chunk)
+            .map_err(|e| std::io::Error::other(format!("read: {e}")))?;
+        if n == 0 {
+            return Ok(buf);
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.iter().any(|&b| matches!(b, 0x07 | 0x1B | 0x9C)) {
+            return Ok(buf);
+        }
+        if buf.len() >= OSC11_RESPONSE_CAP {
+            return Ok(buf);
+        }
+    }
+}
+
+/// `Duration` → `i32` millisecond count saturated at `i32::MAX` for the
+/// `nix::poll::poll` API.
+#[allow(dead_code)]
+// reason: consumed by `poll_timeout_from_duration` and indirectly by
+// detect_from_osc11 in a subsequent v0.3.1 task.
+fn duration_millis_i32(d: Duration) -> i32 {
+    d.as_millis().try_into().unwrap_or(i32::MAX)
+}
+
+/// `Duration` → `PollTimeout`, saturating at `PollTimeout::MAX` for any
+/// overflow. nix 0.28's `poll` accepts `Into<PollTimeout>`; `i32` only has
+/// `TryFrom`, so we wrap here to keep the call sites clean.
+#[allow(dead_code)]
+// reason: consumed by `write_all_with_timeout` / `read_until_terminator`,
+// which themselves are consumed by detect_from_osc11 in a subsequent task.
+fn poll_timeout_from_duration(d: Duration) -> PollTimeout {
+    let millis = duration_millis_i32(d);
+    PollTimeout::try_from(millis).unwrap_or(PollTimeout::MAX)
 }
 
 #[cfg(test)]
