@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — TBD
+
+### Added
+
+- `url` built-in now matches `git@host:path` SSH-form Git URLs alongside the existing `https://`, `ssh://`, and `ftp://` schemes. Host class is label-aware (start and end alphanumeric; `.` and `-` allowed in the middle). Path segment shares the URL trim semantics below. Resolves the v0.2.2 deferral.
+- `duration` built-in now matches bare-suffix durations (`5s`, `30m`, `2h`, `7d`) AND compound forms (`2d3h`, `1h30m20s`) as single spans. Compound coverage picks up `kubectl get pods` AGE columns and `docker ps` STATUS columns directly. Bare-unit forms require no whitespace between digit and unit (`5m` matches, `5 m` does not — false-positive guard for prose).
+- `TAYF_DISABLE_BG_DETECT` environment variable. When set to `1`, `true`, or `yes` (case-insensitive), `bg_detect::resolve()` short-circuits to `BgTheme::Dark` before any `/dev/tty` I/O. Documented as **test-only** — production users should rely on automatic detection or pin a theme via `--theme` / `[general] theme`. Exists for CI environments where `/dev/tty` is a `portable-pty` slave that cannot respond to OSC 11.
+
+### Changed
+
+- `url` built-in no longer includes trailing sentence punctuation (`.`, `,`, `;`, `:`, `!`, `?`) at the end of a match. Closing brackets (`)`, `]`) **stay** in matches to preserve Wikipedia/MDN URLs ending in `)` (e.g. `Foo_(disambig)`) and IPv6 literal hosts (e.g. `https://[::1]`). Trade-off: a URL wrapped in parens (`(https://example.com)`) keeps the trailing `)` in the match — most click-to-open terminals tolerate this; users can override via `[[rules]]`.
+- `respect_existing_colors=true` (the v0.3.0 default) remains the recommended configuration. Users who set `respect_existing_colors=false` opt into v0.1-class SGR collision with bare-unit duration matches (e.g. `49m` inside `\x1b[49m`). The default is structurally safe; the opt-out trade-off is explicit. Pinned by the new `bare_units_collide_with_sgr_when_respect_existing_colors_is_false` unit test.
+
+### Fixed
+
+- `watch::drop_stops_debounce_thread` no longer flakes on macOS CI under load. The test now drains in-flight events from the initial write before asserting, then polls for `mpsc::TryRecvError::Disconnected` with a 5-second overall budget. Tolerates the 100–500 ms FSEvents runloop shutdown that previously blew through the prior 500 ms `recv_timeout` budget.
+- OSC 11 background-detection hang on macOS `portable-pty` subprocesses not isolated to a single root cause within the v0.3.2 investigation budget. The diagnostic example (`examples/repro_osc11_hang`, mirrors `detect_from_osc11`'s 10 phases) when spawned under `portable-pty` on macOS with `COLORFGBG` scrubbed never flushes any stderr to the master within 15 seconds — total silence prevents phase-level localisation, which ruled out responsible Senaryo 1 (per-phase fix) and Senaryo 2 (kqueue) paths. Added `TAYF_DISABLE_BG_DETECT` env-var bypass (see Added) and replaced the v0.3.1 CI `COLORFGBG=15;15` workaround with `TAYF_DISABLE_BG_DETECT=1`. Production behavior unchanged. Further investigation deferred.
+
+### Notes
+
+- No new dependencies. No public API changes; no config schema changes; no CLI flag changes. v0.3.1 (and v0.2.x) config files remain shimless backward-compatible.
+- New repo artifact: `examples/repro_osc11_hang.rs` — standalone diagnostic tool for the `bg_detect` OSC 11 path, mirroring the production function's 10 phases with per-phase wall-clock timing on stderr. Reusable for future regression triage.
+- `tests/integration_bg_detect.rs` pins the `TAYF_DISABLE_BG_DETECT` bypass against future regression (scrubs `COLORFGBG` to prove the bypass — not the env-var fast path — is what completes startup within budget).
+
+[0.3.2]: https://github.com/beraartuc/tayf/releases/tag/v0.3.2
+
 ## [0.3.1] — 2026-05-23
 
 ### Added
