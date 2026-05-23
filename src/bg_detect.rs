@@ -150,6 +150,33 @@ fn luminance_to_theme(r: f32, g: f32, b: f32) -> BgTheme {
     }
 }
 
+/// Parse OSC 11 response: `\e]11;rgb:RRRR/GGGG/BBBB<terminator>` or
+/// `\e]11;rgb:RR/GG/BB<terminator>`. Terminator is one of BEL (0x07),
+/// 7-bit ST start (ESC = 0x1B), or 8-bit C1 ST (0x9C).
+///
+/// Some terminals (notably tmux relays) strip the leading ESC — we accept
+/// both forms by looking for the byte sequence `]11;rgb:`. Byte-wise
+/// throughout — no `str::from_utf8` over the whole input, so 0x9C is fine.
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task; landed
+// alongside the helper trio so each parser has a focused TDD commit.
+fn parse_osc11_response(bytes: &[u8]) -> Option<BgTheme> {
+    let prefix = b"]11;rgb:";
+    let i = bytes.windows(prefix.len()).position(|w| w == prefix)?;
+    let payload = &bytes[i + prefix.len()..];
+    let end =
+        payload.iter().position(|&b| matches!(b, 0x07 | 0x1B | 0x9C)).unwrap_or(payload.len());
+    let triple = &payload[..end];
+    let mut parts = triple.split(|&b| b == b'/');
+    let r = parse_hex_channel(parts.next()?)?;
+    let g = parse_hex_channel(parts.next()?)?;
+    let b = parse_hex_channel(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(luminance_to_theme(r, g, b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +256,47 @@ mod tests {
     #[test]
     fn luminance_dark_gray_below_threshold() {
         assert_eq!(luminance_to_theme(0.2, 0.2, 0.2), BgTheme::Dark);
+    }
+
+    #[test]
+    fn parse_osc11_four_digit_hex_dark() {
+        let bytes = b"\x1b]11;rgb:0000/0000/0000\x1b\\";
+        assert_eq!(parse_osc11_response(bytes), Some(BgTheme::Dark));
+    }
+
+    #[test]
+    fn parse_osc11_four_digit_hex_light() {
+        let bytes = b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\";
+        assert_eq!(parse_osc11_response(bytes), Some(BgTheme::Light));
+    }
+
+    #[test]
+    fn parse_osc11_two_digit_hex_with_bel() {
+        let bytes = b"\x1b]11;rgb:ff/ff/ff\x07";
+        assert_eq!(parse_osc11_response(bytes), Some(BgTheme::Light));
+    }
+
+    #[test]
+    fn parse_osc11_eight_bit_c1_st_terminator() {
+        // 0x9C alone is invalid UTF-8 — byte-wise parser must accept it.
+        let bytes = b"\x1b]11;rgb:ffff/ffff/ffff\x9c";
+        assert_eq!(parse_osc11_response(bytes), Some(BgTheme::Light));
+    }
+
+    #[test]
+    fn parse_osc11_missing_terminator_still_parses() {
+        let bytes = b"\x1b]11;rgb:0000/0000/0000";
+        assert_eq!(parse_osc11_response(bytes), Some(BgTheme::Dark));
+    }
+
+    #[test]
+    fn parse_osc11_malformed_returns_none() {
+        assert_eq!(parse_osc11_response(b"garbage"), None);
+        // Non-hex channel:
+        assert_eq!(parse_osc11_response(b"\x1b]11;rgb:zz/zz/zz\x07"), None);
+        // Missing field:
+        assert_eq!(parse_osc11_response(b"\x1b]11;rgb:ff/ff\x07"), None);
+        // Extra field:
+        assert_eq!(parse_osc11_response(b"\x1b]11;rgb:ff/ff/ff/ff\x07"), None);
     }
 }
