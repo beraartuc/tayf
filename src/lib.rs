@@ -22,6 +22,7 @@ pub(crate) mod error;
 pub(crate) mod style;
 pub(crate) mod version;
 
+pub(crate) mod ansi;
 pub(crate) mod line_buffer;
 pub(crate) mod log;
 pub(crate) mod pipeline;
