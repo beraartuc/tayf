@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — YYYY-MM-DD
+
+### Added
+
+- Automatic terminal background detection at startup (best-effort). When you haven't pinned a theme via `--theme` or `[general] theme`, tayf tries `COLORFGBG` first, then an OSC 11 query against `/dev/tty` with a 100 ms timeout, then falls back to `dark`. The matching preset (`light` or `dark`) is applied automatically. tmux is supported; tmux ≥3.3 requires `set -g allow-passthrough on`. GNU screen is not supported. Detection is also skipped when stdout is not a TTY, when `--no-color` is set, or when `TERM=dumb`. **Detection is a starting point, not authoritative** — modern terminals have dozens of light/dark variants and binary detection can't match all of them. README "Themes" section documents limitations and the custom-palette path.
+
+### Fixed
+
+- **I4 (deferred from v0.3.0):** when the ANSI state machine's 4 KiB sequence cap fires while in a string state (OSC / DCS / PM / APC), `Pipeline` now emits a synthetic 7-bit ST (`\e\\`) to stdout to close the unterminated string sequence on the terminal side. Prevents the terminal from absorbing subsequent shell output as part of the never-terminated sequence when fed an adversarial unterminated string payload (>4 KiB OSC, etc.).
+
+### Notes
+
+- No public API changes; no new dependencies. v0.3.0 config files are shimless backward-compatible.
+- The new `src/bg_detect.rs` module manages its own short-lived termios snapshot and process-wide panic hook (parallel to `tty_guard`), necessary because release builds use `panic = "abort"` and `Drop` does not run on panic.
+
+[0.3.1]: https://github.com/beraartuc/tayf/releases/tag/v0.3.1
+
 ## [0.3.0] — 2026-05-23
 
 ### Changed

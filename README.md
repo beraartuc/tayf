@@ -134,7 +134,21 @@ Unknown theme names exit with code 64 (`EX_USAGE`) and list the known themes on 
 
 The theme selection is fixed at startup: changing `[general] theme` in your config does **not** take effect on hot reload, so restart tayf to switch themes. Your `[[rules]]` edits still hot-reload as usual.
 
-Automatic background detection is planned for v0.3; for now, pick a theme manually.
+### Automatic background detection (best-effort, v0.3.1)
+
+When you haven't pinned a theme via `--theme <name>` or `[general] theme`, tayf tries to detect your terminal's background color at startup and apply the matching preset:
+
+1. `COLORFGBG` env var (rxvt/urxvt; some xterm configs).
+2. OSC 11 query against `/dev/tty` with a 100 ms timeout (xterm, iTerm2, kitty, Alacritty, foot, WezTerm, modern tmux with `set -g allow-passthrough on`).
+3. Fallback: `dark`.
+
+**Limitations.** Modern terminals have dozens of light/dark variants — Solarized, Nord, Gruvbox, Dracula, Tokyo Night, Catppuccin, and many more. tayf's built-in `dark` and `light` presets give reasonable contrast for "default-ish" terminals; they don't claim to match every specific palette. **This detection is a starting point, not an authoritative choice.**
+
+**Opt-out.** Pin a theme explicitly with `--theme dark` (or `light`) on the CLI, or set `[general] theme = "dark"` in your config. Explicit choices always win over detection.
+
+**Custom palettes.** For fine-grained matching to a specific terminal palette, override rule styles in your config under `[[rules]]`. Full custom themes loaded from `~/.config/tayf/themes/<name>.toml` are on the roadmap (v0.3.4).
+
+**Multiplexers.** tmux is supported when passthrough is enabled — tmux ≤3.2 enables it by default; tmux ≥3.3 requires `set -g allow-passthrough on`. GNU screen is not supported (the OSC 11 path is skipped and tayf falls back to `dark`). Detection is also skipped when stdout is not a TTY, when `--no-color` is set, or when `TERM=dumb`.
 
 ### Color values
 
