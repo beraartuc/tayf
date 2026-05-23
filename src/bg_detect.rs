@@ -35,6 +35,15 @@ impl BgTheme {
     }
 }
 
+/// Truthy env-var values: "1", "true", "yes" (case-insensitive). Used by the
+/// `TAYF_DISABLE_BG_DETECT` escape hatch — test-only; production users should
+/// rely on detection or explicit `--theme`.
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 /// Resolve the effective background theme by trying detection paths in
 /// order. Never panics. Falls back to `BgTheme::Dark` on any failure.
 ///
@@ -43,7 +52,15 @@ impl BgTheme {
 ///
 /// Side effects: may briefly toggle termios on `/dev/tty` if it reaches
 /// the OSC 11 path. All paths restore termios on return (including panic).
+///
+/// Escape hatch: when `TAYF_DISABLE_BG_DETECT` is set to a truthy value
+/// ("1"/"true"/"yes", case-insensitive), short-circuits to `BgTheme::Dark`
+/// before any I/O. Test-only — see spec §4.4 (D-3 fallback).
 pub(crate) fn resolve() -> BgTheme {
+    if env_truthy("TAYF_DISABLE_BG_DETECT") {
+        debug_log(format_args!("bg_detect: TAYF_DISABLE_BG_DETECT set -> Dark"));
+        return BgTheme::Dark;
+    }
     if let Some(t) = detect_from_colorfgbg() {
         debug_log(format_args!("bg_detect: colorfgbg -> {t:?}"));
         return t;
@@ -564,5 +581,33 @@ mod tests {
         assert_eq!(parse_osc11_response(b"\x1b]11;rgb:ff/ff\x07"), None);
         // Extra field:
         assert_eq!(parse_osc11_response(b"\x1b]11;rgb:ff/ff/ff/ff\x07"), None);
+    }
+
+    #[test]
+    fn env_truthy_recognizes_canonical_truthy_values() {
+        // Use unique env var names per test to avoid parallel-test pollution.
+        std::env::set_var("TAYF_TEST_TRUTHY_1", "1");
+        assert!(env_truthy("TAYF_TEST_TRUTHY_1"));
+        std::env::remove_var("TAYF_TEST_TRUTHY_1");
+
+        std::env::set_var("TAYF_TEST_TRUTHY_2", "TRUE");
+        assert!(env_truthy("TAYF_TEST_TRUTHY_2"));
+        std::env::remove_var("TAYF_TEST_TRUTHY_2");
+
+        std::env::set_var("TAYF_TEST_TRUTHY_3", "yes");
+        assert!(env_truthy("TAYF_TEST_TRUTHY_3"));
+        std::env::remove_var("TAYF_TEST_TRUTHY_3");
+    }
+
+    #[test]
+    fn env_truthy_rejects_unset_and_other_values() {
+        assert!(!env_truthy("TAYF_TEST_UNSET_VAR"));
+        std::env::set_var("TAYF_TEST_FALSY", "0");
+        assert!(!env_truthy("TAYF_TEST_FALSY"));
+        std::env::remove_var("TAYF_TEST_FALSY");
+
+        std::env::set_var("TAYF_TEST_GARBAGE", "garbage");
+        assert!(!env_truthy("TAYF_TEST_GARBAGE"));
+        std::env::remove_var("TAYF_TEST_GARBAGE");
     }
 }

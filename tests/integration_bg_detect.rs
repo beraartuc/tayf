@@ -1,19 +1,15 @@
-//! Regression coverage for the v0.3.1 macOS portable-pty OSC 11 hang.
+//! Regression coverage for the TAYF_DISABLE_BG_DETECT bypass.
 //!
-//! Spawns the tayf binary inside a portable-pty subprocess WITHOUT the
-//! v0.3.1 COLORFGBG=15;15 workaround and asserts that the binary's bg_detect
-//! startup path completes within a generous 2-second budget. On macOS in the
-//! v0.3.1 state this test hangs/times out — that failure is the v0.3.2 entry
-//! point to either fix the root cause (Senaryo 1 or 2) or ship the
-//! TAYF_DISABLE_BG_DETECT env-var bypass (Senaryo 3).
+//! Spawns the tayf binary inside a portable-pty subprocess with the
+//! TAYF_DISABLE_BG_DETECT=1 env var set (and COLORFGBG scrubbed to prove
+//! the bypass — not the env-var fast path — is what completes startup).
+//! Asserts that bg_detect short-circuits to BgTheme::Dark and the binary
+//! completes happy-path startup within a 2-second budget.
 //!
-//! NOTE: The test below is `#[ignore]`d. With COLORFGBG scrubbed from the
-//! child env, the test genuinely reaches the OSC 11 path that hangs
-//! indefinitely on macOS — `child.wait()` blocks forever after `child.kill()`,
-//! which would wedge CI for the full 6-hour GitHub Actions timeout. Un-ignore
-//! as part of Task 7 (D-3) once the root-cause fix or the
-//! TAYF_DISABLE_BG_DETECT bypass lands. To reproduce locally on macOS:
-//! `cargo test --test integration_bg_detect -- --ignored`.
+//! The underlying v0.3.1 portable-pty OSC 11 hang on macOS is NOT fixed
+//! in v0.3.2; the bypass is the documented escape hatch for test/CI
+//! environments. Real RC investigation deferred — see CHANGELOG [0.3.2]
+//! Fixed section and the D-2 diagnostic note for the reasoning.
 //!
 //! See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.6, §4.4.
 
@@ -26,21 +22,16 @@ fn tayf_bin() -> &'static str {
     env!("CARGO_BIN_EXE_tayf")
 }
 
-#[ignore = "exposes v0.3.1 OSC 11 hang on macOS; un-ignore in Task 7 D-3 fix/fallback"]
 #[test]
-fn bg_detect_does_not_hang_in_portable_pty_subprocess() {
+fn bg_detect_with_disable_env_var_does_not_hang() {
     // Spawn tayf with /bin/sh and immediately send `exit` so the binary's
-    // happy-path shutdown sequence runs. The metric we care about is total
-    // wall-clock time from spawn to child exit: bg_detect runs once at
-    // startup, BEFORE TtyGuard::engage. If the OSC 11 path hangs, child
-    // exit takes far longer than the 100 ms OSC11_READ_TIMEOUT.
+    // happy-path shutdown sequence runs. The bypass should make bg_detect
+    // a no-op (returns BgTheme::Dark before opening /dev/tty), so total
+    // wall-clock should be well under the 2-second budget.
     //
-    // CRITICAL: We must scrub COLORFGBG AND TAYF_DISABLE_BG_DETECT from the
-    // inherited env. Many developer terminals (iTerm2 in particular) set
-    // COLORFGBG automatically, which would short-circuit bg_detect via the
-    // env-var path and silently skip the OSC 11 code this test exists to
-    // cover. The v0.3.1 CI hack set COLORFGBG=15;15 to force the same
-    // shortcut; v0.3.2's whole purpose is to test the path WITHOUT it.
+    // COLORFGBG is scrubbed from the child env so the env-var fast path
+    // in detect_from_colorfgbg is NOT what gets us past bg_detect — only
+    // the TAYF_DISABLE_BG_DETECT short-circuit makes this pass.
     let pty_system = portable_pty::native_pty_system();
     let pair = pty_system
         .openpty(portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
@@ -50,7 +41,7 @@ fn bg_detect_does_not_hang_in_portable_pty_subprocess() {
     builder.arg("--shell");
     builder.arg("/bin/sh");
     builder.env_remove("COLORFGBG");
-    builder.env_remove("TAYF_DISABLE_BG_DETECT");
+    builder.env("TAYF_DISABLE_BG_DETECT", "1");
 
     let mut child = pair.slave.spawn_command(builder).expect("spawn");
     drop(pair.slave);
@@ -58,7 +49,7 @@ fn bg_detect_does_not_hang_in_portable_pty_subprocess() {
 
     let start = Instant::now();
 
-    // Give tayf a moment for bg_detect + signal handler install.
+    // Give tayf a moment for the (bypassed) bg_detect + signal handler install.
     std::thread::sleep(Duration::from_millis(300));
     let mut writer = master.take_writer().expect("take writer");
     writer.write_all(b"exit\n").expect("write exit");
@@ -82,7 +73,6 @@ fn bg_detect_does_not_hang_in_portable_pty_subprocess() {
     assert!(
         exited,
         "tayf did not exit within {budget:?} (elapsed {elapsed:?}); \
-         bg_detect OSC 11 hang likely. Spawn examples/repro_osc11_hang via \
-         portable-pty to isolate which phase stalls (spec §4.4)."
+         TAYF_DISABLE_BG_DETECT bypass should have made bg_detect a no-op."
     );
 }
