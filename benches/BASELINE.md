@@ -83,3 +83,57 @@ Notes on the v0.1.1 → v0.2.4 delta:
   the passthrough path between v0.1.1 and v0.2.4.
 
 These numbers anchor the v0.3.0 < 20% regression budget per spec §7.4.
+
+## v0.3.0 measurement (recorded 2026-05-23)
+
+Source: HEAD = 18b63c424e2da4337e4d0f65f172569533b3950c
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64) (same as v0.2.4 baseline)
+Input: identical to v0.2.4 (and v0.1.1) above.
+Profile: release (`cargo bench`).
+
+Criterion output excerpt:
+
+```
+apply_rules/ipv4-heavy  time:   [7.6973 ms 7.7261 ms 7.7737 ms]
+                        thrpt:  [8.2196 MiB/s 8.2702 MiB/s 8.3011 MiB/s]
+                 change: time:   [+0.1974% +0.6182% +1.2049%] (p = 0.01 < 0.05)
+                        thrpt:  [−1.1906% −0.6144% −0.1970%]
+                        Change within noise threshold.
+
+passthrough/write_all   time:   [1.1869 µs 1.2109 µs 1.2366 µs]
+                        thrpt:  [50.461 GiB/s 51.529 GiB/s 52.571 GiB/s]
+                 change: time:   [+3.5068% +5.6576% +8.3184%] (p = 0.00 < 0.05)
+                        thrpt:  [−7.6796% −5.3547% −3.3879%]
+                        Performance has regressed.
+```
+
+### Regression check vs v0.2.4 baseline
+
+| Bench group | v0.2.4 | v0.3.0 | Delta |
+|---|---|---|---|
+| `apply_rules/ipv4-heavy` | 7.6786 ms (8.3213 MiB/s) | 7.7261 ms (8.2702 MiB/s) | +0.62% time / −0.61% thrpt |
+| `passthrough/write_all` | 1.1492 µs (54.299 GiB/s) | 1.2109 µs (51.529 GiB/s) | +5.37% time / −5.10% thrpt |
+
+Spec budget per §7.4: < 20% regression. Status: PASS on both bench groups
+(both deltas well inside the 20% ceiling).
+
+Notes on the v0.2.4 → v0.3.0 delta:
+
+- `apply_rules/ipv4-heavy` ~0.6% slower (effectively run-to-run noise; criterion
+  flags "Change within noise threshold"). The Pipeline.feed hot path now routes
+  every byte through `AnsiSm::step` and matches on a `StepEvent` enum, but on
+  the synthetic ASCII-only input every byte produces `StepEvent::Print`, so the
+  per-byte overhead is one enum tag dispatch on top of the previous direct push.
+  Negligible at this resolution.
+- `passthrough/write_all` ~5.4% slower (~1.15 µs → ~1.21 µs, 54.30 → 51.53 GiB/s).
+  Criterion flags this as a statistically-significant regression but it is still
+  well inside the < 20% spec ceiling. The TUI-mode passthrough fast-path now
+  feeds bytes through `AnsiSm::step` first to detect mode toggles instead of
+  the older direct-write `TuiModeSm`; that adds a per-byte state machine step
+  even when the result is "passthrough". Acceptable cost for the v0.3.0
+  semantic upgrade (correct DECSET/DECRST handling, multi-toggle sequences,
+  byte-for-byte verbatim alt-screen / bracketed-paste / mouse passthrough).
+- 17% outliers on `passthrough/write_all` likely reflect macOS scheduler jitter
+  on a sub-µs measurement; same pattern showed up in v0.2.4 (1 mild outlier on
+  a similarly tiny per-iter time).
