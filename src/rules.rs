@@ -433,6 +433,31 @@ pub(crate) struct Compiled {
 }
 
 impl Compiled {
+    /// Empty rule set — no patterns, no styles. Used by bypass mode
+    /// (`--bypass` / `TAYF_DISABLE`) to satisfy `runtime::run`'s
+    /// `Arc<ArcSwap<Compiled>>` signature without compiling any rules.
+    ///
+    /// The Pipeline is constructed in `runtime::run` (unconditional,
+    /// `src/runtime.rs:64`), but bypass mode passes `apply_colors = false`,
+    /// which short-circuits all `feed`/`tick`/`drain` calls in the output
+    /// thread (`runtime.rs:196, 211, 229`). So `individuals` and `styles`
+    /// are constructed but never iterated.
+    ///
+    /// Precedent: `load_with_all_builtins_disabled_yields_passthrough`
+    /// exercises this same empty-Compiled shape via the user-config
+    /// path, proving the Pipeline tolerates an empty rule set without
+    /// panic.
+    #[allow(dead_code)]
+    // reason: consumed by lib.rs bypass branching in Task 7 of v0.3.3 plan
+    pub(crate) fn empty() -> Self {
+        Self {
+            set: RegexSet::empty(),
+            individuals: Vec::new(),
+            styles: Vec::new(),
+            respect_existing_colors: true,
+        }
+    }
+
     /// Compile a rule set with an optional preset theme layered between the
     /// built-in defaults and the user config.
     ///
@@ -1504,5 +1529,14 @@ mod tests {
                 .expect("compile");
         let expected = crate::config::GeneralSection::default().respect_existing_colors;
         assert_eq!(compiled.respect_existing_colors, expected);
+    }
+
+    #[test]
+    fn empty_compiled_has_zero_rules() {
+        let c = Compiled::empty();
+        assert_eq!(c.individuals.len(), 0);
+        assert_eq!(c.styles.len(), 0);
+        assert_eq!(c.set.len(), 0);
+        assert!(c.respect_existing_colors, "empty should default to v0.3 safe default");
     }
 }
