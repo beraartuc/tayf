@@ -177,6 +177,119 @@ fn parse_osc11_response(bytes: &[u8]) -> Option<BgTheme> {
     Some(luminance_to_theme(r, g, b))
 }
 
+use std::os::fd::{BorrowedFd, RawFd};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
+
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+const OSC11_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+const OSC11_READ_TIMEOUT: Duration = Duration::from_millis(100);
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+const OSC11_RESPONSE_CAP: usize = 128;
+
+/// Process-wide slot consulted by the bg-detect panic hook to restore
+/// `/dev/tty`'s termios. Parallel to `tty_guard::PANIC_RESTORE_STATE`
+/// (which restores stdin). Each guard populates its own slot on engage
+/// and clears on drop.
+static PANIC_RESTORE_STATE: OnceLock<Mutex<Option<(RawFd, Termios)>>> = OnceLock::new();
+
+/// Short-lived raw-mode guard for the bg-detect OSC 11 path. Runs BEFORE
+/// the main `tty_guard::TtyGuard` engages, so it manages its own termios
+/// snapshot AND its own panic hook (necessary because release builds use
+/// `panic = "abort"` — Drop does NOT run on panic).
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+struct TtyRawGuard {
+    fd: RawFd,
+    original: Termios,
+}
+
+impl TtyRawGuard {
+    #[allow(dead_code)]
+    // reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
+    fn engage(fd: RawFd) -> crate::error::Result<Self> {
+        // SAFETY: caller holds the owning `File` for `fd` for the duration
+        // of the guard; we only borrow the fd for the termios syscalls.
+        // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY
+        // comments; allow is scoped to the single borrow.
+        #[allow(unsafe_code)]
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        let original = tcgetattr(borrowed)?;
+
+        install_panic_hook(fd, original.clone());
+
+        let mut raw = original.clone();
+        cfmakeraw(&mut raw);
+        tcsetattr(borrowed, SetArg::TCSANOW, &raw)?;
+
+        Ok(TtyRawGuard { fd, original })
+    }
+}
+
+impl Drop for TtyRawGuard {
+    fn drop(&mut self) {
+        // Best-effort restore. Matches `tty_guard::TtyGuard::Drop` pattern:
+        // if `tcsetattr` fails on restore the terminal is already lost.
+        // SAFETY: while Drop runs, the owning `File` for `self.fd` is still
+        // alive in the calling scope (drop order: locals dropped LIFO,
+        // guard before File).
+        // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY
+        // comments; allow is scoped to the single borrow.
+        #[allow(unsafe_code)]
+        let borrowed = unsafe { BorrowedFd::borrow_raw(self.fd) };
+        let _ = tcsetattr(borrowed, SetArg::TCSANOW, &self.original);
+
+        // Clear the panic-hook slot so a later panic does not re-apply a
+        // stale termios from this guard's lifetime.
+        if let Some(mux) = PANIC_RESTORE_STATE.get() {
+            if let Ok(mut g) = mux.lock() {
+                *g = None;
+            }
+        }
+    }
+}
+
+/// Install (once per process) a panic hook that restores `/dev/tty`'s
+/// termios when any thread panics while a bg-detect guard is alive.
+/// Subsequent calls only update the shared slot; the hook itself is
+/// registered exactly once.
+fn install_panic_hook(fd: RawFd, original: Termios) {
+    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
+
+    let mux = PANIC_RESTORE_STATE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut g) = mux.lock() {
+        *g = Some((fd, original));
+    }
+
+    HOOK_INSTALLED.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some(mux) = PANIC_RESTORE_STATE.get() {
+                if let Ok(g) = mux.lock() {
+                    if let Some((fd, ref original)) = *g {
+                        // SAFETY: the slot is populated only while a
+                        // `TtyRawGuard` owns this fd via the calling `File`;
+                        // panics during that window mean the `File` is
+                        // still alive on the panicking thread's stack.
+                        // reason: crate-wide policy is `warn(unsafe_code)`
+                        // with SAFETY comments; allow scoped to the borrow.
+                        #[allow(unsafe_code)]
+                        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+                        let _ = tcsetattr(borrowed, SetArg::TCSANOW, original);
+                    }
+                }
+            }
+            prev(info);
+        }));
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
