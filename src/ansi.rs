@@ -1,11 +1,11 @@
 //! ANSI byte-stream state machine.
 //!
 //! Implements a 16-state subset of Paul Williams' VT500 ANSI parser
-//! (14 logical states from the canonical reference, plus two peek-ahead
-//! states — `DcsEsc` and `SosPmApcEsc` — that resolve the 7-bit ST
-//! terminator `\e\\` lookahead)
-//! (<https://vt100.net/emu/dec_ansi_parser>) scoped to tayf's classification
-//! needs. The SM does not interpret payloads; it classifies each byte by
+//! (<https://vt100.net/emu/dec_ansi_parser>). The 16 = 13 canonical
+//! Williams states refactored to use three explicit ST-peek states —
+//! `OscEsc`, `DcsEsc`, `SosPmApcEsc` — that resolve the 7-bit ST
+//! terminator `\e\\` lookahead for OSC/DCS/PM/APC strings.
+//! Scoped to tayf's classification needs. The SM does not interpret payloads; it classifies each byte by
 //! what `Pipeline` should do with it:
 //!
 //! - **Data**: normal text byte, line-buffered for rule application.
@@ -27,7 +27,7 @@
 //! folding their transitions in. See spec §3.4 (the locked transition
 //! table) before extending.
 
-/// 16-state Williams VT500 subset (14 canonical + 2 ST peek-ahead).
+/// 16-state Williams VT500 subset (13 canonical + 3 ST peek-ahead).
 /// See spec §3.2 for the canonical states and §3.4 for the peek-ahead
 /// transitions on `OscEsc` / `DcsEsc` / `SosPmApcEsc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

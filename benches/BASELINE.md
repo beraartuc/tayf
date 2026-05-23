@@ -123,7 +123,7 @@ Notes on the v0.2.4 → v0.3.0 delta:
 - `apply_rules/ipv4-heavy` ~0.6% slower (effectively run-to-run noise; criterion
   flags "Change within noise threshold"). The Pipeline.feed hot path now routes
   every byte through `AnsiSm::step` and matches on a `StepEvent` enum, but on
-  the synthetic ASCII-only input every byte produces `StepEvent::Print`, so the
+  the synthetic ASCII-only input every byte produces `StepEvent::Data`, so the
   per-byte overhead is one enum tag dispatch on top of the previous direct push.
   Negligible at this resolution.
 - `passthrough/write_all` ~5.4% slower (~1.15 µs → ~1.21 µs, 54.30 → 51.53 GiB/s).

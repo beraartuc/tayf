@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Internal
 
-- New module `src/ansi.rs` (~580 lines including 47 unit tests) implementing a 16-state subset of the Paul Williams VT500 ANSI parser (https://vt100.net/emu/dec_ansi_parser). Replaces the manual `TuiModeSm` that lived in `src/pipeline.rs` since v0.1.
+- New module `src/ansi.rs` (47 unit tests) implementing a 16-state subset of the Paul Williams VT500 ANSI parser (https://vt100.net/emu/dec_ansi_parser). Replaces the manual `TuiModeSm` that lived in `src/pipeline.rs` since v0.1.
 - `Pipeline::feed` rewritten with a three-path architecture (TUI passthrough / sequence accumulation in scratch / OSC-payload direct-to-stdout). Existing callers unchanged.
 - New 4 KiB internal cap on unterminated CSI/ESC byte accumulation. Defense against malicious input keeping the parser in a non-Ground state forever.
 - `Compiled` struct gains a `respect_existing_colors: bool` field. Hot-reload-aware via the existing `ArcSwap<Compiled>` (snapshotted at every line boundary).

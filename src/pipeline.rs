@@ -189,7 +189,15 @@ impl Pipeline {
         use crate::ansi::SequenceKind;
         match kind {
             SequenceKind::TuiToggleOn | SequenceKind::TuiToggleOff => {
-                // Trigger sequence goes verbatim to stdout — terminal needs it.
+                // Flush any partial line that was in buffer BEFORE the trigger.
+                // The trigger sequence will switch us into TUI passthrough mode;
+                // subsequent bytes bypass line_buffer entirely, so any orphaned
+                // partial would be stuck until shutdown drain — wrong stdout order.
+                let partial = self.buffer.drain();
+                if !partial.is_empty() {
+                    out.write_all(&partial)?;
+                }
+                // Now write the trigger sequence so terminal sees it.
                 out.write_all(&self.sequence_scratch)?;
             }
             SequenceKind::Sgr => {
@@ -244,16 +252,13 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Drain any in-flight `sequence_scratch` into the line buffer + emit
-    /// completed lines. Called by `tick` (on idle) and `drain` (on shutdown)
-    /// to ensure unterminated CSI/ESC bytes do not get stuck forever.
+    /// Drain any in-flight sequence scratch directly to stdout (NOT into
+    /// `line_buffer`; rule application must never see raw ESC/CSI bytes).
+    /// Called by tick (on idle) and drain (on shutdown).
     fn flush_partial<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
         if !self.sequence_scratch.is_empty() {
-            let drained = std::mem::take(&mut self.sequence_scratch);
-            let (lines, _) = self.buffer.feed_with_overflow(&drained);
-            for line in lines {
-                self.apply_or_passthrough(&line, out)?;
-            }
+            out.write_all(&self.sequence_scratch)?;
+            self.sequence_scratch.clear();
         }
         Ok(())
     }
@@ -460,6 +465,48 @@ mod pipeline_tests {
             "OSC sequence must appear in output; got: {:?}",
             String::from_utf8_lossy(&out)
         );
+    }
+
+    #[test]
+    fn partial_line_then_alt_screen_toggle_preserves_byte_order() {
+        // C1 regression: when normal data sits in line_buffer and an
+        // alt-screen toggle completes in the same chunk, the partial line
+        // must reach stdout BEFORE the toggle sequence.
+        use crate::rules::Compiled;
+        let compiled =
+            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .unwrap();
+        let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
+        let mut pipeline = Pipeline::new(handle);
+        let mut out = Vec::new();
+        pipeline.feed(b"abc\x1b[?1049h", &mut out).unwrap();
+        // Order must be: "abc" first (partial line), then trigger sequence.
+        assert_eq!(
+            out,
+            b"abc\x1b[?1049h",
+            "partial line must precede toggle; got {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    #[test]
+    fn partial_sgr_then_alt_screen_toggle_preserves_byte_order() {
+        // C1 regression: an SGR completion + trailing data + TUI toggle
+        // in one chunk. SGR bytes + text must reach stdout before toggle.
+        use crate::rules::Compiled;
+        let compiled =
+            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .unwrap();
+        let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
+        let mut pipeline = Pipeline::new(handle);
+        let mut out = Vec::new();
+        pipeline.feed(b"\x1b[31mERR\x1b[?1049hX", &mut out).unwrap();
+        // The SGR bytes + "ERR" should appear in output before \x1b[?1049h.
+        // After toggle, "X" goes verbatim.
+        let s = String::from_utf8_lossy(&out);
+        let toggle_pos = s.find("\x1b[?1049h").expect("toggle in output");
+        let err_pos = s.find("ERR").expect("ERR in output");
+        assert!(err_pos < toggle_pos, "ERR must appear before toggle; got: {s:?}");
     }
 
     #[test]
