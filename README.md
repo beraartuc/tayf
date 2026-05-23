@@ -199,6 +199,14 @@ If `tayf` was launched without a config file, the file watcher is not
 active — but `SIGHUP` still works as a manual reload trigger. If you
 create a config later, send `SIGHUP` to pick it up.
 
+**Behavior change in v0.3.3:** `SIGHUP` is now forwarded to the child
+process group in every configuration, mirroring `SIGINT` / `SIGTERM`.
+Previously (v0.2.1 through v0.3.2), `SIGHUP` was silently dropped
+when the hot-reload pipeline wasn't wired, orphaning child processes
+on tmux detach. Most interactive shells trap `SIGHUP` and tolerate it
+cleanly. If you have a script that relies on `tayf` swallowing
+`SIGHUP`, install your own trap (`trap '' HUP`) in the child shell.
+
 ### Respecting existing colors (v0.3.0)
 
 If your input already contains ANSI color sequences (`git log --color=always`, `journalctl` with colors, colored compiler output piped through tayf), you can tell tayf to leave those lines alone:
@@ -214,6 +222,86 @@ When `true`, any line containing at least one SGR sequence (`\e[…m`) is writte
 The default is `true` — this is a behavior change from v0.2, where the field was parsed but never honored. If you want the v0.2 effective behavior (rules run on every line regardless of pre-existing color), set `respect_existing_colors = false`.
 
 Caveat: line-level only. A multi-line color block (e.g. `git log` with `\e[31m` on one line and `\e[0m` later) is honored per SGR-bearing line, but rules may still run on intermediate plain lines. Segment-level support is planned for v0.4.
+
+## Escape hatches (v0.3.3)
+
+### `--bypass` / `TAYF_DISABLE`
+
+When you need tayf to *get out of the way* — a noisy program you're
+debugging, an output stream whose patterns conflict with tayf's
+built-ins, or a CI invocation where you want raw passthrough — set
+either the CLI flag or the env var. CLI takes precedence.
+
+```sh
+# One-shot:
+TAYF_DISABLE=1 my-tool
+
+# Conditional wrap in ~/.zshrc:
+[[ -n "$TAYF_DISABLE" ]] || exec tayf
+```
+
+`TAYF_DISABLE` accepts `1`, `true`, or `yes` (case-insensitive). Any
+other value (including unset) means bypass is off.
+
+In bypass mode tayf still:
+- Wraps the PTY (your child shell still has a controlling terminal).
+- Forwards `SIGWINCH`, `SIGINT`, `SIGTERM`, `SIGHUP` to the child
+  process group (so `Ctrl-C` and tmux detach still work).
+- Protects the terminal via its raw-mode RAII guard (Ctrl-C / panic
+  cleanup is still safe).
+
+Bypass mode does NOT:
+- Match patterns or inject SGR.
+- Detect the terminal background (`bg_detect` is skipped — zero
+  startup latency).
+- Spawn the file watcher or reload orchestrator threads (so
+  `--no-hot-reload` is redundant under `--bypass`, but not an error).
+- Read your config file (so `--config <path>` is silently ignored
+  under `--bypass`).
+
+**Note:** `TAYF_DISABLE` is **different** from `TAYF_DISABLE_BG_DETECT`
+(v0.3.2 — test-only OSC 11 bypass, do not use in production).
+
+### `--no-hot-reload`
+
+Skip the file watcher and the reload orchestrator. Config is still
+loaded at startup; only *re*-loading is off.
+
+```sh
+tayf --no-hot-reload
+```
+
+With no config file present, `--no-hot-reload` is a no-op — no watcher
+would have spawned anyway. `SIGHUP` is forwarded to the child process
+group regardless of this flag (see "Hot reload" section above for the
+v0.3.3 BEHAVIOR CHANGE).
+
+### `[general] show_reload_banner` (opt-in)
+
+When set, tayf writes a one-line dim banner to `/dev/tty` after each
+successful hot reload:
+
+```
+tayf: config reloaded
+```
+
+```toml
+[general]
+show_reload_banner = true
+```
+
+Default: `false` (opt-in). The banner is wrapped in cursor save/restore
+(DECSC/DECRC) so most multi-line shell prompts (zsh ZLE, `RPROMPT`)
+keep their visual cursor position. Exotic prompt frameworks
+(Powerlevel10k transient prompt) may show small redraw artifacts;
+press `Ctrl-L` to clean up.
+
+When you're inside `vim` / `less` / any program using the alt-screen,
+the banner is drawn into the alt-screen buffer and vanishes when the
+program exits. Alt-screen-aware queueing is planned for v0.4.
+
+Banner is suppressed on reload **failures** — those still surface via
+the existing `TAYF_LOG=warn` stderr line.
 
 ## TUI compatibility
 
