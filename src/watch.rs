@@ -237,8 +237,33 @@ mod tests {
             let _watcher =
                 ConfigWatcher::spawn_with_window(&path, tx, TEST_DEBOUNCE_WINDOW).unwrap();
             warmup_watcher();
+            // Drain in-flight events from the initial write before testing Drop.
+            // macOS FSEvents can emit a CREATE for the initial file write that
+            // arrives after warmup; the assertion loop must not panic on it.
+            while rx.try_recv().is_ok() {}
         }
-        // The orchestrator-side rx should now error (no more senders).
-        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+
+        // After both senders (watcher's raw_tx and debounce_loop's tx) drop, rx
+        // must observe Disconnected. macOS FSEvents RecommendedWatcher::Drop
+        // runloop join can take 100-500 ms under CI load; budget generously and
+        // poll for the terminal state. Mirrors the resilient try_recv idiom used
+        // by burst_of_edits_coalesces_to_bounded_event_count.
+        let start = Instant::now();
+        let max = Duration::from_secs(5);
+        loop {
+            match rx.try_recv() {
+                Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {
+                    assert!(
+                        start.elapsed() < max,
+                        "watcher Drop did not disconnect channel within {max:?}"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                // Tolerate in-flight events from FSEvents shutdown; only
+                // Disconnected is the terminal state we care about.
+                Ok(_) => {}
+            }
+        }
     }
 }
