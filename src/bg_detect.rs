@@ -27,9 +27,6 @@ pub(crate) enum BgTheme {
 
 impl BgTheme {
     /// String identifier matching `themes::load` registry. Stable.
-    #[allow(dead_code)]
-    // reason: subsequent v0.3.1 tasks wire this into the theme resolution
-    // path in `lib.rs`; the skeleton commit lands the API surface first.
     pub(crate) fn as_theme_name(self) -> &'static str {
         match self {
             BgTheme::Light => "light",
@@ -46,10 +43,6 @@ impl BgTheme {
 ///
 /// Side effects: may briefly toggle termios on `/dev/tty` if it reaches
 /// the OSC 11 path. All paths restore termios on return (including panic).
-#[allow(dead_code)]
-// reason: wired into `Tayf::run` by a subsequent v0.3.1 task; this commit
-// lands only the module skeleton so the API surface is reviewable in
-// isolation.
 pub(crate) fn resolve() -> BgTheme {
     if let Some(t) = detect_from_colorfgbg() {
         debug_log(format_args!("bg_detect: colorfgbg -> {t:?}"));

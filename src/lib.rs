@@ -95,8 +95,21 @@ impl Tayf {
         // Resolve the effective theme: CLI `--theme` wins over `[general] theme`;
         // both may be absent. Threaded through compile + reload so config edits
         // don't silently drop the active theme.
-        let effective_theme: Option<String> =
+        let explicit_theme: Option<String> =
             args.theme.clone().or_else(|| config_ref.and_then(|c| c.general.theme.clone()));
+
+        // Resolve background theme automatically when the user hasn't pinned one
+        // AND we're going to emit color. Skips when:
+        // - explicit CLI `--theme` or config `[general] theme` set
+        // - `--no-color`, non-TTY stdout, or `TERM=dumb` (apply_colors == false)
+        // Spec §3.6.
+        let effective_theme: Option<String> = explicit_theme.or_else(|| {
+            if apply_colors {
+                Some(bg_detect::resolve().as_theme_name().to_owned())
+            } else {
+                None
+            }
+        });
 
         // Compile rules BEFORE engaging the TTY guard. Rule validation
         // (missing pattern, missing style, bad regex, duplicate names,
