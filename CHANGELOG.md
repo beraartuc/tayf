@@ -27,6 +27,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - No new dependency. No public CLI / config schema change.
 - Cross-line SGR state is not tracked: a multi-line color block (e.g. `git log --color=always` with prompts that span lines) is honored on each SGR-bearing line, but rules may still run on intermediate lines that have no SGR themselves. Segment-level semantics are planned for v0.4.
+- Known limitation: when the 4 KiB unterminated-sequence cap fires while the state machine is mid-OSC / DCS / PM / APC, the partial payload bytes already on stdout are unterminated. Modern terminals will keep absorbing subsequent bytes as payload until they see their own terminator (or hit their own cap). Mitigation lands in v0.3.1 — the state machine will emit a synthetic ST (`\e\\`) on cap-fire-in-string-state so the terminal closes the sequence promptly.
 
 [0.3.0]: https://github.com/beraartuc/tayf/releases/tag/v0.3.0
 
