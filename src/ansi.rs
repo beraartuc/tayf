@@ -25,8 +25,8 @@
 //! table) before extending.
 
 #![allow(dead_code)]
-// reason: Tasks 3-7 wire `step` to emit each event variant; until then,
-// the stubbed step only returns `Data`. Remove this allow when Task 7 lands.
+// reason: AnsiSm is feature-complete after Task 7 but unused until Task 8
+// wires it into Pipeline. Remove this allow when Task 8 lands.
 
 /// 16-state Williams VT500 subset (14 canonical + 2 ST peek-ahead).
 /// See spec §3.2 for the canonical states and §3.4 for the peek-ahead
@@ -184,6 +184,19 @@ impl AnsiSm {
             self.private_mode = false;
             self.sequence_bytes_seen = 1;
             return StepEvent::SequenceByte;
+        }
+
+        // Defense-in-depth: refuse to accumulate sequence bytes past
+        // SEQUENCE_BYTES_CAP (4 KiB). Catches malicious unterminated CSI/ESC
+        // inputs (spec §7.1). On hit, SM resets to Ground; the offending
+        // byte is consumed as a Data event so the byte stream stays in sync
+        // (it was inside a sequence so visually noise anyway).
+        if self.sequence_bytes_seen >= SEQUENCE_BYTES_CAP {
+            self.state = SmState::Ground;
+            self.accum = 0;
+            self.private_mode = false;
+            self.sequence_bytes_seen = 0;
+            return StepEvent::Data;
         }
 
         match self.state {
@@ -918,5 +931,81 @@ mod ansi_tests {
         let after = sm.step(b'X');
         assert_eq!(after, StepEvent::Data);
         assert_eq!(events[1], StepEvent::StringPayloadByte);
+    }
+
+    #[test]
+    fn accum_overflow_does_not_corrupt_state() {
+        let mut sm = AnsiSm::new();
+        // \e[?<40 nines>h
+        let mut seq = vec![0x1b, b'[', b'?'];
+        seq.extend(std::iter::repeat(b'9').take(40));
+        seq.push(b'h');
+        let events = step_all(&mut sm, &seq);
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::OtherCsi))
+        ));
+        assert!(!sm.tui_mode_active());
+    }
+
+    #[test]
+    fn interleaved_esc_resyncs_correctly() {
+        let mut sm = AnsiSm::new();
+        // \e\e[?1049h — double ESC at start; second \e re-initiates.
+        let events = step_all(&mut sm, b"\x1b\x1b[?1049h");
+        let last = events.last().expect("events");
+        assert!(matches!(last, StepEvent::SequenceCompleted(SequenceKind::TuiToggleOn)));
+        assert!(sm.tui_mode_active());
+    }
+
+    #[test]
+    fn interrupted_csi_at_eof_does_not_corrupt() {
+        let mut sm = AnsiSm::new();
+        let _ = step_all(&mut sm, b"\x1b[?1049");
+        assert!(!sm.tui_mode_active());
+        // Next byte: send something that wouldn't be a CSI final.
+        let _ = sm.step(b'\n');
+        // Just verify no panic / state corruption.
+    }
+
+    #[test]
+    fn eight_bit_c1_st_not_recognized() {
+        // \e]2;foo\x9c — 8-bit C1 ST per Karar 6 treated as data, not ST.
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b]2;foo\x9c");
+        let last = events.last().expect("events");
+        assert!(matches!(last, StepEvent::StringPayloadByte));
+        // Send BEL to terminate the OSC properly.
+        let after_bel = sm.step(0x07);
+        assert_eq!(after_bel, StepEvent::StringPayloadByte);
+        let after_ground = sm.step(b'X');
+        assert_eq!(after_ground, StepEvent::Data);
+    }
+
+    #[test]
+    fn scratch_cap_exceeded_drops_sequence() {
+        let mut sm = AnsiSm::new();
+        sm.step(0x1b);
+        sm.step(b'[');
+        for _ in 0..5000 {
+            let _ = sm.step(b'9');
+        }
+        // After cap exceeded, SM should have dropped back to Ground.
+        // Probe with a Data byte.
+        let probe = sm.step(b'A');
+        assert_eq!(
+            probe,
+            StepEvent::Data,
+            "expected Ground state after cap exceeded, got {probe:?}"
+        );
+    }
+
+    #[test]
+    fn osc_no_terminator_then_eof_keeps_payload_event_stream() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b]2;title");
+        // Last byte should emit StringPayloadByte — payload passes through
+        // even though sequence is unterminated. Drain is Pipeline's job.
+        assert_eq!(events.last(), Some(&StepEvent::StringPayloadByte));
     }
 }
