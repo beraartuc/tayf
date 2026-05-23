@@ -7,6 +7,74 @@
 use std::fmt::Write as _;
 use std::io;
 
+/// A single violation in a theme's `[[rules]]` list. Bundled into
+/// [`Error::ThemeValidation::errors`] when one or more issues are found.
+///
+/// Surfaced from [`crate::themes::validate_theme_rules`]. The `Display`
+/// impl on [`Error::ThemeValidation`] composes multi-line output from
+/// these; for structured access (e.g. machine-readable diagnostics),
+/// pattern-match on `Error::ThemeValidation { errors, .. }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+// reason: introduced ahead of Task 3 (Error::ThemeValidation variant) and
+// Task 8 (themes::validate_theme_rules consumer) of the v0.3.4 plan. The
+// allow is removed when those tasks land in the same release branch.
+pub struct ThemeRuleError {
+    /// The offending rule's `name` field, copied verbatim from the TOML.
+    /// For the `[general]` section violation the sentinel `"<general>"`
+    /// is used (angle brackets are rejected by `themes::name_is_valid`,
+    /// so this cannot collide with a user rule name).
+    pub rule_name: String,
+    /// What's wrong.
+    pub kind: ThemeRuleErrorKind,
+}
+
+/// Classification of a [`ThemeRuleError`]. One variant per validation
+/// rule enforced by [`crate::themes::validate_theme_rules`].
+///
+/// `#[non_exhaustive]` so v0.4+ can add new validation rules (e.g.
+/// `RuleNameWhitespace`) without a major version bump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[allow(dead_code)]
+// reason: introduced ahead of Task 3 (Error::ThemeValidation variant) and
+// Task 8 (themes::validate_theme_rules consumer) of the v0.3.4 plan. The
+// allow is removed when those tasks land in the same release branch.
+pub enum ThemeRuleErrorKind {
+    /// `name` does not match any entry in [`crate::rules::BUILTIN_NAMES`].
+    UnknownName,
+    /// `pattern` is set — disallowed (themes only override style).
+    PatternForbidden,
+    /// `enabled = false` is set — disallowed (themes only override style;
+    /// use a `[[rules]]` block in the user config to disable a built-in).
+    EnabledFalseForbidden,
+    /// The theme TOML carries a `[general]` section. Themes only override
+    /// style; `[general]` fields belong in the user config. The
+    /// accompanying [`ThemeRuleError::rule_name`] is set to the sentinel
+    /// `"<general>"`.
+    GeneralSectionForbidden,
+}
+
+impl std::fmt::Display for ThemeRuleErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownName => {
+                f.write_str("not a built-in name; themes may only override built-ins")
+            }
+            Self::PatternForbidden => {
+                f.write_str("must not set 'pattern' (themes only override style)")
+            }
+            Self::EnabledFalseForbidden => {
+                f.write_str("must not set 'enabled = false' (themes only override style)")
+            }
+            Self::GeneralSectionForbidden => f.write_str(
+                "themes must not set [general] (themes only override style; \
+                 use the user config for [general] fields)",
+            ),
+        }
+    }
+}
+
 /// All recoverable errors produced by tayf.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -353,5 +421,39 @@ mod tests {
         let s = e.to_string();
         assert!(!s.contains('\x1b'), "raw ESC must not survive Display; got: {s:?}");
         assert!(s.contains("\\x1b"), "ESC must appear as \\x1b escape; got: {s:?}");
+    }
+
+    #[test]
+    fn theme_rule_error_kind_display_unknown_name() {
+        let s = ThemeRuleErrorKind::UnknownName.to_string();
+        assert!(s.contains("not a built-in name"), "got: {s}");
+        assert!(s.contains("themes may only override"), "got: {s}");
+    }
+
+    #[test]
+    fn theme_rule_error_kind_display_pattern_forbidden() {
+        let s = ThemeRuleErrorKind::PatternForbidden.to_string();
+        assert!(s.contains("must not set 'pattern'"), "got: {s}");
+        assert!(s.contains("themes only override style"), "got: {s}");
+    }
+
+    #[test]
+    fn theme_rule_error_kind_display_enabled_false_forbidden() {
+        let s = ThemeRuleErrorKind::EnabledFalseForbidden.to_string();
+        assert!(s.contains("must not set 'enabled = false'"), "got: {s}");
+    }
+
+    #[test]
+    fn theme_rule_error_kind_display_general_section_forbidden() {
+        let s = ThemeRuleErrorKind::GeneralSectionForbidden.to_string();
+        assert!(s.contains("themes must not set [general]"), "got: {s}");
+        assert!(s.contains("use the user config"), "got: {s}");
+    }
+
+    #[test]
+    fn theme_rule_error_kind_is_copy() {
+        // Compile-time check: if `Copy` were removed, this would not compile.
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<ThemeRuleErrorKind>();
     }
 }
