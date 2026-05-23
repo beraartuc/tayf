@@ -41,6 +41,18 @@ pub(crate) mod watch;
 pub use cli::Args;
 pub use error::{Error, Result};
 
+/// Truthy env-var values: "1", "true", "yes" (case-insensitive). Shared by:
+/// - `bg_detect::resolve` (`TAYF_DISABLE_BG_DETECT` test-only bypass, v0.3.2)
+/// - `Tayf::run` (`TAYF_DISABLE` whole-binary bypass, v0.3.3)
+///
+/// Single-source utility — duplicated parsing would risk semantic drift
+/// between the two escape hatches.
+pub(crate) fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 use std::process::ExitCode;
 use std::sync::Arc;
 
