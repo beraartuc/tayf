@@ -202,12 +202,6 @@ pub(crate) fn load_with(
 /// [`crate::themes::load_with`] (which appends `themes/<name>.toml`).
 /// Empty-OS-string handling follows the XDG spec: empty
 /// `$XDG_CONFIG_HOME` is treated as unset and falls through to `$HOME`.
-// reason: introduced ahead of its first non-test caller. The very next
-// commit refactors `resolve_path` to delegate here, removing this
-// `#[allow]`. Split into two commits per the v0.3.4 plan so the
-// "extract helper" and "wire helper into existing code" diffs read
-// independently in review.
-#[allow(dead_code)]
 pub(crate) fn config_base(
     xdg: impl FnOnce() -> Option<std::path::PathBuf>,
     home: impl FnOnce() -> Option<std::path::PathBuf>,
@@ -251,20 +245,12 @@ pub(crate) fn resolve_path(
     // string check covers shells that imperatively clear the var via
     // `export XDG_CONFIG_HOME=""` rather than `unset`; without this guard,
     // an empty base would join to a CWD-relative `tayf/config.toml`. The
-    // same rule is applied to `$HOME` for defense in depth.
-    if let Some(base) = xdg() {
-        if !base.as_os_str().is_empty() {
-            if let Some(p) = check_default_path(&base.join("tayf"))? {
-                return Ok(Some(p));
-            }
-        }
-    }
-
-    if let Some(home) = home() {
-        if !home.as_os_str().is_empty() {
-            if let Some(p) = check_default_path(&home.join(".config").join("tayf"))? {
-                return Ok(Some(p));
-            }
+    // same rule is applied to `$HOME` for defense in depth. Both branches
+    // live inside [`config_base`], which is also shared with the themes
+    // resolver so the two stay in lockstep.
+    if let Some(base) = config_base(xdg, home) {
+        if let Some(p) = check_default_path(&base)? {
+            return Ok(Some(p));
         }
     }
 
