@@ -193,6 +193,38 @@ pub(crate) fn load_with(
     Ok(Some((cfg, path)))
 }
 
+/// Resolve the tayf config base directory using XDG Base Directory rules.
+/// Returns `<xdg_config_home>/tayf` if `$XDG_CONFIG_HOME` is set and
+/// non-empty, otherwise `<home>/.config/tayf` if `$HOME` is set and
+/// non-empty, otherwise `None`.
+///
+/// Shared by [`resolve_path`] (which appends `config.toml`) and
+/// [`crate::themes::load_with`] (which appends `themes/<name>.toml`).
+/// Empty-OS-string handling follows the XDG spec: empty
+/// `$XDG_CONFIG_HOME` is treated as unset and falls through to `$HOME`.
+// reason: introduced ahead of its first non-test caller. The very next
+// commit refactors `resolve_path` to delegate here, removing this
+// `#[allow]`. Split into two commits per the v0.3.4 plan so the
+// "extract helper" and "wire helper into existing code" diffs read
+// independently in review.
+#[allow(dead_code)]
+pub(crate) fn config_base(
+    xdg: impl FnOnce() -> Option<std::path::PathBuf>,
+    home: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if let Some(b) = xdg() {
+        if !b.as_os_str().is_empty() {
+            return Some(b.join("tayf"));
+        }
+    }
+    if let Some(h) = home() {
+        if !h.as_os_str().is_empty() {
+            return Some(h.join(".config").join("tayf"));
+        }
+    }
+    None
+}
+
 pub(crate) fn resolve_path(
     explicit: Option<&Path>,
     xdg: impl FnOnce() -> Option<std::path::PathBuf>,
@@ -1120,5 +1152,38 @@ theme = "light"
     fn show_reload_banner_unknown_typo_rejected() {
         let err = parse("test", "[general]\nreload_banner = true\n").unwrap_err();
         assert!(matches!(err, crate::error::Error::Config { .. }));
+    }
+
+    #[test]
+    fn config_base_returns_some_when_xdg_set() {
+        let base = config_base(|| Some(std::path::PathBuf::from("/tmp/cfg")), || None);
+        assert_eq!(base, Some(std::path::PathBuf::from("/tmp/cfg/tayf")));
+    }
+
+    #[test]
+    fn config_base_falls_back_to_home_when_xdg_unset() {
+        let base = config_base(|| None, || Some(std::path::PathBuf::from("/home/u")));
+        assert_eq!(base, Some(std::path::PathBuf::from("/home/u/.config/tayf")));
+    }
+
+    #[test]
+    fn config_base_treats_empty_xdg_as_unset() {
+        let base = config_base(
+            || Some(std::path::PathBuf::new()), // empty
+            || Some(std::path::PathBuf::from("/home/u")),
+        );
+        assert_eq!(base, Some(std::path::PathBuf::from("/home/u/.config/tayf")));
+    }
+
+    #[test]
+    fn config_base_returns_none_when_neither_set() {
+        let base = config_base(|| None, || None);
+        assert!(base.is_none());
+    }
+
+    #[test]
+    fn config_base_treats_empty_home_as_unset() {
+        let base = config_base(|| None, || Some(std::path::PathBuf::new()));
+        assert!(base.is_none());
     }
 }
