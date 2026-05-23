@@ -179,21 +179,53 @@ impl AnsiSm {
 
             SmState::Escape => {
                 self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
-                // Task 3 only routes `[` into CSI. Tasks 4-6 will add arms for
-                // `]` (OSC), `P` (DCS), `X`/`^`/`_` (SOS/PM/APC), `(`/`#`
-                // (EscIntermediate), and ESC direct finals. Keeping a match
-                // here makes the eventual expansion a one-line addition.
-                #[allow(clippy::single_match_else)]
-                // reason: see comment above — Tasks 4-6 add more arms.
                 match byte {
                     b'[' => {
                         self.state = SmState::CsiEntry;
                         StepEvent::SequenceByte
                     }
+                    // String introducers (Tasks 5-6): for Task 4, treat as
+                    // single-byte ESC finals so we have a meaningful event;
+                    // Tasks 5 (OSC) and 6 (DCS/PM/APC) override these.
+                    b']' | b'P' | b'X' | b'^' | b'_' => {
+                        self.state = SmState::Ground;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::SequenceCompleted(SequenceKind::EscFinal)
+                    }
+                    // INTERMEDIATE: \e ( B, \e # 8, etc.
+                    0x20..=0x2F => {
+                        self.state = SmState::EscapeIntermediate;
+                        StepEvent::SequenceByte
+                    }
+                    // Single-byte ESC final: \e=, \eM, \e7, \e8, \ec, \eD, ...
+                    // Williams range 0x30..=0x7E minus introducers handled above.
+                    0x30..=0x7E => {
+                        self.state = SmState::Ground;
+                        self.accum = 0;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::SequenceCompleted(SequenceKind::EscFinal)
+                    }
+                    // C0 control / DEL: treat as inert noise, complete with EscFinal.
                     _ => {
                         self.state = SmState::Ground;
                         self.sequence_bytes_seen = 0;
-                        StepEvent::SequenceByte
+                        StepEvent::SequenceCompleted(SequenceKind::EscFinal)
+                    }
+                }
+            }
+
+            SmState::EscapeIntermediate => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                #[allow(clippy::single_match_else)]
+                // reason: matching on the 0x20..=0x2F range with a multi-line
+                // wildcard reads as Williams' transition table verbatim; the
+                // `if let` rewrite hides the range semantics.
+                match byte {
+                    0x20..=0x2F => StepEvent::SequenceByte, // intermediate chain
+                    _ => {
+                        self.state = SmState::Ground;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::SequenceCompleted(SequenceKind::EscIntermediateFinal)
                     }
                 }
             }
@@ -506,6 +538,91 @@ mod ansi_tests {
         assert!(matches!(
             events.last(),
             Some(StepEvent::SequenceCompleted(SequenceKind::OtherCsi))
+        ));
+    }
+
+    #[test]
+    fn esc_equals_emits_esc_final() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b=");
+        assert!(
+            matches!(events.last(), Some(StepEvent::SequenceCompleted(SequenceKind::EscFinal))),
+            "expected EscFinal for \\e=, got {:?}",
+            events.last()
+        );
+    }
+
+    #[test]
+    fn esc_m_ri_emits_esc_final() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1bM");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::EscFinal))
+        ));
+    }
+
+    #[test]
+    fn esc_7_decsc_emits_esc_final() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b7");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::EscFinal))
+        ));
+    }
+
+    #[test]
+    fn esc_8_decrc_emits_esc_final() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b8");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::EscFinal))
+        ));
+    }
+
+    #[test]
+    fn esc_c_ris_emits_esc_final() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1bc");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::EscFinal))
+        ));
+    }
+
+    #[test]
+    fn esc_paren_b_g0_designate_emits_esc_intermediate_final() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b(B");
+        assert!(
+            matches!(
+                events.last(),
+                Some(StepEvent::SequenceCompleted(SequenceKind::EscIntermediateFinal))
+            ),
+            "expected EscIntermediateFinal for \\e(B, got {:?}",
+            events.last()
+        );
+    }
+
+    #[test]
+    fn esc_hash_8_dec_alignment_test() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b#8");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::EscIntermediateFinal))
+        ));
+    }
+
+    #[test]
+    fn esc_intermediate_chain() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b $@");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::EscIntermediateFinal))
         ));
     }
 }
