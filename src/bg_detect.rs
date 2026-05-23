@@ -74,8 +74,6 @@ fn debug_log(args: std::fmt::Arguments<'_>) {
     }
 }
 
-// Subsequent tasks fill in `detect_from_osc11` and its helpers. Stub it
-// with `None` so this module compiles cleanly until that task lands.
 fn detect_from_colorfgbg() -> Option<BgTheme> {
     let raw = std::env::var("COLORFGBG").ok()?;
     parse_colorfgbg(&raw)
@@ -104,15 +102,42 @@ fn parse_colorfgbg(s: &str) -> Option<BgTheme> {
     }
 }
 
+/// Try OSC 11 background-color query. See spec §3.4 for the full algorithm
+/// and timing budget. Returns None if not applicable (no TTY, $STY set,
+/// /dev/tty unavailable) or on any I/O / timeout / parse failure.
 fn detect_from_osc11() -> Option<BgTheme> {
-    None
+    if std::env::var_os("STY").is_some() {
+        return None;
+    }
+    if !crate::terminfo::stdout_is_tty() {
+        return None;
+    }
+
+    let query: &[u8] = if std::env::var_os("TMUX").is_some() {
+        // tmux passthrough wrapper. Requires `allow-passthrough on` in
+        // tmux 3.3+ (off by default); tmux ≤3.2 enables it by default.
+        // When disabled, the wrapped query is silently dropped → read
+        // times out → fallback dark (safe).
+        //
+        // Format: \e P t m u x ; <inner-with-each-ESC-doubled> \e \\
+        // Inner: \e]11;?\e\\  →  doubled-ESC form: \e\e]11;?\e\e\\
+        b"\x1bPtmux;\x1b\x1b]11;?\x1b\x1b\\\x1b\\"
+    } else {
+        b"\x1b]11;?\x1b\\"
+    };
+
+    let tty = open_dev_tty().ok()?;
+    let fd = tty.as_raw_fd();
+    let _guard = TtyRawGuard::engage(fd).ok()?;
+    write_all_with_timeout(fd, query, OSC11_WRITE_TIMEOUT).ok()?;
+    let response = read_until_terminator(fd, OSC11_READ_TIMEOUT).ok()?;
+    drain_remaining(fd);
+    suppress_query_echo(fd);
+    parse_osc11_response(&response)
 }
 
 /// Parse a hex channel of 1..=4 ASCII hex nibbles to a 0.0..=1.0 float.
 /// `RR` → 0xRR / 0xFF; `RRRR` → 0xRRRR / 0xFFFF. Both forms scale to [0,1].
-#[allow(dead_code)]
-// reason: consumed by the OSC 11 parser in a subsequent v0.3.1 task; landed
-// alongside `luminance_to_theme` so each helper has a focused TDD commit.
 fn parse_hex_channel(bytes: &[u8]) -> Option<f32> {
     let len = bytes.len();
     if !(1..=4).contains(&len) {
@@ -138,9 +163,6 @@ fn parse_hex_channel(bytes: &[u8]) -> Option<f32> {
 /// Rec. 601 weighted luminance with threshold 0.5 (inclusive → Light).
 /// Boundary direction (`>=` not `>`) ensures deterministic mapping when
 /// float arithmetic lands exactly on 0.5.
-#[allow(dead_code)]
-// reason: consumed by the OSC 11 parser in a subsequent v0.3.1 task; landed
-// alongside `parse_hex_channel` so each helper has a focused TDD commit.
 fn luminance_to_theme(r: f32, g: f32, b: f32) -> BgTheme {
     let y = 0.299 * r + 0.587 * g + 0.114 * b;
     if y >= 0.5 {
@@ -157,9 +179,6 @@ fn luminance_to_theme(r: f32, g: f32, b: f32) -> BgTheme {
 /// Some terminals (notably tmux relays) strip the leading ESC — we accept
 /// both forms by looking for the byte sequence `]11;rgb:`. Byte-wise
 /// throughout — no `str::from_utf8` over the whole input, so 0x9C is fine.
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task; landed
-// alongside the helper trio so each parser has a focused TDD commit.
 fn parse_osc11_response(bytes: &[u8]) -> Option<BgTheme> {
     let prefix = b"]11;rgb:";
     let i = bytes.windows(prefix.len()).position(|w| w == prefix)?;
@@ -187,14 +206,8 @@ use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 use nix::unistd::{read, write};
 
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 const OSC11_WRITE_TIMEOUT: Duration = Duration::from_millis(50);
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 const OSC11_READ_TIMEOUT: Duration = Duration::from_millis(100);
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 const OSC11_RESPONSE_CAP: usize = 128;
 
 /// Process-wide slot consulted by the bg-detect panic hook to restore
@@ -207,16 +220,12 @@ static PANIC_RESTORE_STATE: OnceLock<Mutex<Option<(RawFd, Termios)>>> = OnceLock
 /// the main `tty_guard::TtyGuard` engages, so it manages its own termios
 /// snapshot AND its own panic hook (necessary because release builds use
 /// `panic = "abort"` — Drop does NOT run on panic).
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 struct TtyRawGuard {
     fd: RawFd,
     original: Termios,
 }
 
 impl TtyRawGuard {
-    #[allow(dead_code)]
-    // reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
     fn engage(fd: RawFd) -> crate::error::Result<Self> {
         // SAFETY: caller holds the owning `File` for `fd` for the duration
         // of the guard; we only borrow the fd for the termios syscalls.
@@ -297,16 +306,12 @@ fn install_panic_hook(fd: RawFd, original: Termios) {
 /// Open the controlling terminal as read+write. Unlike `stdin`, `/dev/tty`
 /// reliably refers to the process's controlling terminal even if stdin is
 /// redirected (`tayf < file`).
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 fn open_dev_tty() -> std::io::Result<std::fs::File> {
     OpenOptions::new().read(true).write(true).open("/dev/tty")
 }
 
 /// Block until the fd is writable or the timeout elapses, then write all
 /// bytes. Returns `Err` on poll error, timeout, or partial write.
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 fn write_all_with_timeout(fd: RawFd, bytes: &[u8], timeout: Duration) -> std::io::Result<()> {
     // SAFETY: caller holds the owning `File` for `fd` for the duration of
     // this call; we only borrow the fd for poll/write syscalls.
@@ -340,8 +345,6 @@ fn write_all_with_timeout(fd: RawFd, bytes: &[u8], timeout: Duration) -> std::io
 ///
 /// Returns the bytes read on success. Returns `Err` on poll/read failure
 /// or timeout-with-empty-buffer.
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in a subsequent v0.3.1 task.
 fn read_until_terminator(fd: RawFd, timeout: Duration) -> std::io::Result<Vec<u8>> {
     let deadline = Instant::now() + timeout;
     let mut buf: Vec<u8> = Vec::with_capacity(64);
@@ -388,9 +391,6 @@ fn read_until_terminator(fd: RawFd, timeout: Duration) -> std::io::Result<Vec<u8
 
 /// `Duration` → `i32` millisecond count saturated at `i32::MAX` for the
 /// `nix::poll::poll` API.
-#[allow(dead_code)]
-// reason: consumed by `poll_timeout_from_duration` and indirectly by
-// detect_from_osc11 in a subsequent v0.3.1 task.
 fn duration_millis_i32(d: Duration) -> i32 {
     d.as_millis().try_into().unwrap_or(i32::MAX)
 }
@@ -398,9 +398,6 @@ fn duration_millis_i32(d: Duration) -> i32 {
 /// `Duration` → `PollTimeout`, saturating at `PollTimeout::MAX` for any
 /// overflow. nix 0.28's `poll` accepts `Into<PollTimeout>`; `i32` only has
 /// `TryFrom`, so we wrap here to keep the call sites clean.
-#[allow(dead_code)]
-// reason: consumed by `write_all_with_timeout` / `read_until_terminator`,
-// which themselves are consumed by detect_from_osc11 in a subsequent task.
 fn poll_timeout_from_duration(d: Duration) -> PollTimeout {
     let millis = duration_millis_i32(d);
     PollTimeout::try_from(millis).unwrap_or(PollTimeout::MAX)
@@ -412,8 +409,6 @@ fn poll_timeout_from_duration(d: Duration) -> PollTimeout {
 ///
 /// Caller guarantees the OSC 11 read returned Ok before invoking drain —
 /// otherwise we would risk swallowing pre-typed user keystrokes.
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in Task 8.
 fn drain_remaining(fd: RawFd) {
     // SAFETY: caller still owns the underlying File for `fd`; we only
     // borrow the fd for the fcntl/read syscalls below.
@@ -445,8 +440,6 @@ fn drain_remaining(fd: RawFd) {
 /// Write `\r\e[K` (CR + `EraseInLine`) to `/dev/tty` to wipe any literal
 /// echo of the OSC 11 query by terminals that don't recognize OSC 11.
 /// Best-effort; ignores write errors.
-#[allow(dead_code)]
-// reason: consumed by detect_from_osc11 in Task 8.
 fn suppress_query_echo(fd: RawFd) {
     // SAFETY: caller still owns the underlying File for `fd`; we only
     // borrow the fd for the single write syscall.
