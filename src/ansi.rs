@@ -166,7 +166,21 @@ impl AnsiSm {
     // code; splitting state arms into helpers obscures Williams §3.4. The
     // shape stays here verbatim and grows linearly with new states.
     pub(crate) fn step(&mut self, byte: u8) -> StepEvent {
-        if byte == 0x1b {
+        // ESC normally aborts any in-progress sequence and restarts at Escape.
+        // String-payload states are the exception: their per-state arms peek
+        // ahead one byte to resolve the 7-bit ST terminator `\e\\`, so we
+        // must route 0x1b through the match for them. See spec §3.4.
+        if byte == 0x1b
+            && !matches!(
+                self.state,
+                SmState::OscString
+                    | SmState::OscEsc
+                    | SmState::DcsPassthrough
+                    | SmState::DcsEsc
+                    | SmState::SosPmApcString
+                    | SmState::SosPmApcEsc
+            )
+        {
             self.state = SmState::Escape;
             self.accum = 0;
             self.private_mode = false;
@@ -184,10 +198,18 @@ impl AnsiSm {
                         self.state = SmState::CsiEntry;
                         StepEvent::SequenceByte
                     }
-                    // String introducers (Tasks 5-6): for Task 4, treat as
-                    // single-byte ESC finals so we have a meaningful event;
-                    // Tasks 5 (OSC) and 6 (DCS/PM/APC) override these.
-                    b']' | b'P' | b'X' | b'^' | b'_' => {
+                    b']' => {
+                        // OSC string sequence start. The `]` byte transitions
+                        // us into OscString; Pipeline reads StringPayloadByte
+                        // and flushes the leading `\e` from scratch + writes `]`
+                        // to stdout. Subsequent payload bytes also StringPayloadByte.
+                        self.state = SmState::OscString;
+                        StepEvent::StringPayloadByte
+                    }
+                    // String introducers handled by Task 6 (DCS/PM/APC): for
+                    // Task 5, treat as single-byte ESC finals so we still emit
+                    // a meaningful event.
+                    b'P' | b'X' | b'^' | b'_' => {
                         self.state = SmState::Ground;
                         self.sequence_bytes_seen = 0;
                         StepEvent::SequenceCompleted(SequenceKind::EscFinal)
@@ -315,7 +337,56 @@ impl AnsiSm {
                 }
             }
 
-            // Tasks 4-7 will wire these states. Task 3 stub: emit Data.
+            SmState::OscString => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    0x07 => {
+                        // BEL terminator. Emit StringPayloadByte for the BEL,
+                        // transition to Ground for next byte.
+                        self.state = SmState::Ground;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::StringPayloadByte
+                    }
+                    0x1b => {
+                        // Peek-ahead for ST. Don't emit data event yet —
+                        // OscEsc state decides on next byte.
+                        self.state = SmState::OscEsc;
+                        StepEvent::StringPayloadByte
+                    }
+                    _ => StepEvent::StringPayloadByte,
+                }
+            }
+
+            SmState::OscEsc => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    b'\\' => {
+                        // ST completed.
+                        self.state = SmState::Ground;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::StringPayloadByte
+                    }
+                    0x1b => {
+                        // Double ESC in OSC — abort, restart Escape.
+                        self.state = SmState::Escape;
+                        self.accum = 0;
+                        self.private_mode = false;
+                        self.sequence_bytes_seen = 1;
+                        StepEvent::SequenceByte
+                    }
+                    _ => {
+                        // OSC aborted; byte starts new sequence from Escape state.
+                        // Safe recursion: Escape arm never re-enters OscEsc.
+                        self.state = SmState::Escape;
+                        self.accum = 0;
+                        self.private_mode = false;
+                        self.sequence_bytes_seen = 1;
+                        self.step(byte)
+                    }
+                }
+            }
+
+            // Tasks 6-7 will wire these states. Task 5 stub: emit Data.
             _ => StepEvent::Data,
         }
     }
@@ -624,5 +695,92 @@ mod ansi_tests {
             events.last(),
             Some(StepEvent::SequenceCompleted(SequenceKind::EscIntermediateFinal))
         ));
+    }
+
+    #[test]
+    fn osc_2_title_emits_payload_events_until_bel() {
+        let mut sm = AnsiSm::new();
+        // \e ] 2 ; t i t l e \a — 10 bytes.
+        let events = step_all(&mut sm, b"\x1b]2;title\x07");
+        assert_eq!(events.len(), 10);
+        // First byte (\e) is SequenceByte; second (]) is StringPayloadByte;
+        // all subsequent up to and including \a are StringPayloadByte.
+        assert_eq!(events[0], StepEvent::SequenceByte);
+        for (i, e) in events.iter().enumerate().skip(1) {
+            assert!(
+                matches!(e, StepEvent::StringPayloadByte),
+                "byte {i}: expected StringPayloadByte, got {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn osc_8_hyperlink_through_two_sequences() {
+        let mut sm = AnsiSm::new();
+        let bytes = b"\x1b]8;;https://example.com\x07click\x1b]8;;\x07";
+        let events = step_all(&mut sm, bytes);
+        // The "click" word between the two OSCs should emit Data events.
+        let click_start = bytes.windows(5).position(|w| w == b"click").expect("click substring");
+        for i in click_start..click_start + 5 {
+            assert_eq!(
+                events[i],
+                StepEvent::Data,
+                "byte {i} ({:?}) expected Data",
+                bytes[i] as char
+            );
+        }
+    }
+
+    #[test]
+    fn osc_with_st_terminator() {
+        let mut sm = AnsiSm::new();
+        // \e]0;foo\e\\ — 9 bytes including ST.
+        let events = step_all(&mut sm, b"\x1b]0;foo\x1b\\");
+        let last = events.last().expect("events");
+        assert_eq!(*last, StepEvent::StringPayloadByte);
+        let after = sm.step(b'X');
+        assert_eq!(after, StepEvent::Data);
+    }
+
+    #[test]
+    fn osc_with_bel_terminator_ends_payload() {
+        let mut sm = AnsiSm::new();
+        let _ = step_all(&mut sm, b"\x1b]2;t\x07");
+        let after = sm.step(b'a');
+        assert_eq!(after, StepEvent::Data);
+    }
+
+    #[test]
+    fn osc_133_prompt_marker_intact() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b]133;A\x07");
+        assert_eq!(events[0], StepEvent::SequenceByte);
+        for e in &events[1..] {
+            assert!(matches!(e, StepEvent::StringPayloadByte));
+        }
+    }
+
+    #[test]
+    fn osc_lone_esc_followed_by_non_backslash_aborts_string() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b]2;abc\x1b[31m");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::Sgr)),
+            "expected new CSI Sgr after OSC abort, got {last:?}"
+        );
+    }
+
+    #[test]
+    fn osc_with_embedded_newline_does_not_emit_data() {
+        let mut sm = AnsiSm::new();
+        let bytes = b"\x1b]52;c;base64\n=more\x07";
+        let events = step_all(&mut sm, bytes);
+        let nl_idx = bytes.iter().position(|&b| b == b'\n').expect("\\n");
+        assert!(
+            matches!(events[nl_idx], StepEvent::StringPayloadByte),
+            "embedded \\n inside OSC must be StringPayloadByte, got {:?}",
+            events[nl_idx]
+        );
     }
 }
