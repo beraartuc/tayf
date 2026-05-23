@@ -447,8 +447,6 @@ impl Compiled {
     /// exercises this same empty-Compiled shape via the user-config
     /// path, proving the Pipeline tolerates an empty rule set without
     /// panic.
-    #[allow(dead_code)]
-    // reason: consumed by lib.rs bypass branching in Task 7 of v0.3.3 plan
     pub(crate) fn empty() -> Self {
         Self {
             set: RegexSet::empty(),

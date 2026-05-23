@@ -77,17 +77,71 @@ impl Tayf {
     pub fn run(args: Args) -> Result<ExitCode> {
         log::init_from_env();
 
-        // Detect terminal capabilities up-front so we can both gate the
-        // runtime's no-color fast path AND pre-bake colors into the rule
-        // set at their final depth.
-        //
-        // Note: the `depth != None` short-circuit here is for *performance*
-        // — `runtime::run` uses `apply_colors == false` to bypass the
-        // `Pipeline` entirely and stream raw PTY bytes to stdout. The
-        // pre-bake (`Compiled::load_with_theme(_, _, _, ColorDepth::None)`) already
-        // guarantees empty SGR output for correctness, so a future
-        // maintainer simplifying this gate should preserve the runtime
-        // bypass separately, not just delete the depth check here.
+        // Resolve bypass at process start; tek read garantisi (race-free).
+        // CLI flag wins over env var; both default to false.
+        let bypass = args.bypass || crate::env_truthy("TAYF_DISABLE");
+
+        if bypass {
+            // ============================================================
+            // BYPASS BRANCH (spec §1.1 + §3.3, Rev2 C-3 enumeration)
+            //
+            // RUNS:    shell::discover, tty_guard::TtyGuard::engage,
+            //          pty::PtySession::spawn, signals::spawn_handler
+            //          (with reload_tx = None), runtime::run
+            //          (apply_colors = false).
+            //
+            // SKIPS:   terminfo::detect_depth, terminfo::stdout_is_tty,
+            //          config::load, bg_detect::resolve, theme resolution,
+            //          rules::Compiled::load_with_theme,
+            //          watch::ConfigWatcher::spawn,
+            //          reload::ReloadOrchestrator::spawn.
+            //
+            // Pipeline IS constructed inside runtime::run (Rev2 C-2),
+            // but apply_colors=false short-circuits all feed/tick/drain
+            // calls in the output thread. Compiled::empty() satisfies
+            // the Arc<ArcSwap<Compiled>> signature with a structurally
+            // valid (but never iterated) empty rule set.
+            // ============================================================
+
+            // Rev2 I-10: diagnostic so users debugging with TAYF_LOG=info
+            // see why no colorization is happening.
+            crate::log::info_msg!(
+                "bypass active (CLI={}, TAYF_DISABLE={:?})",
+                args.bypass,
+                std::env::var("TAYF_DISABLE").ok()
+            );
+
+            let spec = shell::discover(args.shell.as_deref(), args.login)?;
+            let empty_rules: Arc<ArcSwap<rules::Compiled>> =
+                Arc::new(ArcSwap::from_pointee(rules::Compiled::empty()));
+
+            let guard = tty_guard::TtyGuard::engage()?;
+            let session = pty::PtySession::spawn(&spec)?;
+            let (reader, writer, resizer, child) = session.into_parts()?;
+            let child_pid = child.pid();
+
+            // No reload pipeline in bypass — pass None to signal thread.
+            // SIGHUP is still forwarded to the child PG (signals.rs
+            // handler body, v0.3.3 F2-b fix).
+            let signal_guard = signals::spawn_handler(resizer, child_pid, None)?;
+
+            let exit_code = runtime::run(reader, writer, child, Arc::clone(&empty_rules), false)?;
+
+            // Explicit ordered shutdown for symmetry with the non-bypass
+            // branch: signal_guard joined first, tty_guard restored last.
+            drop(signal_guard);
+            drop(guard);
+
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // reason: exit_code & 0xff is structurally in 0..=255
+            let code = (exit_code & 0xff) as u8;
+            return Ok(ExitCode::from(code));
+        }
+
+        // ================================================================
+        // NON-BYPASS BRANCH (v0.3.2 flow + --no-hot-reload gating)
+        // ================================================================
+
         let depth = terminfo::detect_depth();
         let apply_colors =
             !args.no_color && terminfo::stdout_is_tty() && depth != terminfo::ColorDepth::None;
@@ -95,26 +149,13 @@ impl Tayf {
 
         let spec = shell::discover(args.shell.as_deref(), args.login)?;
 
-        // Load TOML config before engaging the TTY guard — failures here
-        // produce friendly stderr output without leaving the terminal in
-        // raw mode. `config::load` returns the path it loaded from so we
-        // can thread it into user-rule error messages without a second
-        // resolve (which would race on $HOME / $XDG_CONFIG_HOME).
         let loaded = config::load(args.config.as_deref())?;
         let config_ref = loaded.as_ref().map(|(c, _)| c);
         let config_path: Option<String> = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
-        // Resolve the effective theme: CLI `--theme` wins over `[general] theme`;
-        // both may be absent. Threaded through compile + reload so config edits
-        // don't silently drop the active theme.
         let explicit_theme: Option<String> =
             args.theme.clone().or_else(|| config_ref.and_then(|c| c.general.theme.clone()));
 
-        // Resolve background theme automatically when the user hasn't pinned one
-        // AND we're going to emit color. Skips when:
-        // - explicit CLI `--theme` or config `[general] theme` set
-        // - `--no-color`, non-TTY stdout, or `TERM=dumb` (apply_colors == false)
-        // Spec §3.6.
         let effective_theme: Option<String> = explicit_theme.or_else(|| {
             if apply_colors {
                 Some(bg_detect::resolve().as_theme_name().to_owned())
@@ -123,12 +164,6 @@ impl Tayf {
             }
         });
 
-        // Compile rules BEFORE engaging the TTY guard. Rule validation
-        // (missing pattern, missing style, bad regex, duplicate names,
-        // invalid color) lives inside `Compiled::load_with_theme` via
-        // `config::apply_user_rules`; surfacing those errors before the
-        // guard keeps the terminal in cooked mode and lets `Command::output`
-        // callers (integration tests) observe exit code 64 cleanly.
         let compiled = rules::Compiled::load_with_theme(
             config_ref,
             config_path.as_deref(),
@@ -137,12 +172,14 @@ impl Tayf {
         )?;
         let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
 
-        // The reload channel: senders go to the signal thread (always)
-        // and the file-watcher debounce thread (when a config exists).
-        // Receiver is moved into the orchestrator below. Both ends are
-        // owned here until the orchestrator spawns; if any `?` returns
-        // before that point, both ends drop with no observable effect
-        // (no thread holds them yet).
+        // F2: --no-hot-reload gates BOTH the file watcher AND the reload
+        // orchestrator. Channel still constructed; receiver dropped on
+        // the else branch so no orphan rx lives past the decision point.
+        let hot_reload_enabled = !args.no_hot_reload;
+
+        // Snapshot the banner-opt-in flag while config_ref is still live.
+        let show_reload_banner = config_ref.is_some_and(|c| c.general.show_reload_banner);
+
         let (reload_tx, reload_rx) = std::sync::mpsc::channel::<reload::ReloadRequest>();
 
         let guard = tty_guard::TtyGuard::engage()?;
@@ -151,47 +188,80 @@ impl Tayf {
         let (reader, writer, resizer, child) = session.into_parts()?;
         let child_pid = child.pid();
 
-        let signal_guard = signals::spawn_handler(resizer, child_pid, Some(reload_tx.clone()))?;
+        // F2: signal thread always receives child_pid; reload_tx only
+        // when hot-reload is wired. The SIGHUP handler in signals.rs
+        // forwards to the child PG unconditionally (v0.3.3 F2-b), and
+        // additionally sends to reload_tx when Some.
+        let signal_reload_tx = if hot_reload_enabled { Some(reload_tx.clone()) } else { None };
+        let signal_guard = signals::spawn_handler(resizer, child_pid, signal_reload_tx)?;
 
-        // Spawn the file watcher only when a config file was loaded.
-        // Per spec §8 question 2: absent config → no watcher; SIGHUP
-        // can still trigger a reload that re-resolves the config path.
-        let watcher = loaded
-            .as_ref()
-            .map(|(_, p)| watch::ConfigWatcher::spawn(p, reload_tx.clone()))
-            .transpose()?;
+        // Spawn the file watcher only when (a) a config file was loaded
+        // AND (b) hot-reload is enabled. Either condition false → no
+        // watcher, and the corresponding reload_tx clone is never created.
+        let watcher = if hot_reload_enabled {
+            loaded
+                .as_ref()
+                .map(|(_, p)| watch::ConfigWatcher::spawn(p, reload_tx.clone()))
+                .transpose()?
+        } else {
+            None
+        };
 
-        // Orchestrator is declared LAST among the threading scaffolding.
-        // If any `?` above had returned `Err`, no orchestrator would
-        // have been spawned — preventing the join-deadlock where the
-        // orchestrator's Drop blocks on a channel still holding live
-        // senders in already-spawned signal/watcher threads.
-        let _orchestrator = reload::ReloadOrchestrator::spawn(
-            Arc::clone(&rules),
-            loaded.as_ref().map(|(_, p)| p.clone()),
-            effective_theme.clone(),
-            effective_depth,
-            reload_rx,
-            None, // banner_sink — wired in v0.3.3 Task 7 with config-driven Some(Box::new(DevTtySink))
-        );
+        // Orchestrator: spawned only when hot-reload is enabled. Drop
+        // ordering (mirrors lib.rs:152-156 invariant): orchestrator is
+        // declared LAST so that on any earlier `?` returning Err, no
+        // orchestrator exists → no join-deadlock where its Drop blocks
+        // on a channel still held by already-spawned signal/watcher
+        // threads.
+        let _orchestrator = if hot_reload_enabled {
+            Some(reload::ReloadOrchestrator::spawn(
+                Arc::clone(&rules),
+                loaded.as_ref().map(|(_, p)| p.clone()),
+                effective_theme.clone(),
+                effective_depth,
+                reload_rx,
+                // F3: inject banner sink; production = DevTtySink when
+                // banner enabled, None when disabled.
+                if show_reload_banner {
+                    Some(Box::new(reload::DevTtySink) as Box<dyn reload::BannerSink>)
+                } else {
+                    None
+                },
+            ))
+        } else {
+            // Hot-reload off: receiver is never consumed. Drop it
+            // explicitly so the channel reaches zero-receivers
+            // immediately; any stray future `reload_tx.send(...)`
+            // returns Err (intended). Note: there are no clones live —
+            // signal_reload_tx was None and watcher was not spawned,
+            // so dropping `reload_rx` here is safe and explicit.
+            drop(reload_rx);
+            None
+        };
 
-        // Drop the local sender now. The only remaining `reload_tx`
-        // clones live in the signal thread and (when present) the
-        // watcher thread. When BOTH threads exit at shutdown, the
-        // orchestrator's `recv()` returns Err and the reload thread
-        // exits cleanly. Without this drop, the orchestrator's
-        // channel would never reach a zero-sender state.
+        // Drop the local sender now (mirrors lib.rs:171). Remaining
+        // clones live in signal_guard (when hot_reload_enabled) and
+        // watcher (when both hot_reload_enabled and config present).
+        // When BOTH guards Drop at shutdown their clones go away, the
+        // orchestrator's recv() returns Err, and its loop exits cleanly.
+        // When hot_reload disabled, reload_tx here is the only sender
+        // (none was cloned to signal thread); dropping is trivially safe
+        // — receiver is already gone.
         drop(reload_tx);
 
         let exit_code = runtime::run(reader, writer, child, Arc::clone(&rules), apply_colors)?;
 
-        // Explicit ordered shutdown — drop the watcher and signal
-        // guard BEFORE the implicit `_orchestrator` drop at end of
-        // scope. Each of those drops joins its thread, which in turn
-        // drops the thread's `reload_tx` clone. Once both clones are
-        // gone, `recv()` in the reload thread returns Err and its
-        // loop exits, so the orchestrator's `Drop`-time `join()` is
-        // unblocked.
+        // Explicit ordered shutdown (mirrors lib.rs:175-184 invariant):
+        // - watcher first: closes notify's raw_tx, which lets the
+        //   debounce thread observe Disconnected and exit, which drops
+        //   the debounce thread's reload_tx clone.
+        // - signal_guard next: closes signal_hook iterator, joins
+        //   signal thread, which drops the signal thread's reload_tx
+        //   clone (if any).
+        // - implicit _orchestrator drop at end of scope: recv() returns
+        //   Err (all senders gone), loop exits, join completes.
+        // - guard last: explicit for ordering clarity; Drop restores
+        //   termios.
         drop(watcher);
         drop(signal_guard);
 

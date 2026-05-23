@@ -18,7 +18,6 @@
 ///   (NOT `\x1b[0m` ALL-reset, which would clobber prompt-side SGR state).
 /// - `\n` advance one line.
 /// - `\x1b[u` (DECRC) restore cursor to the saved position.
-#[allow(dead_code)] // reason: consumed in Task 7 (lib.rs wires DevTtySink).
 pub(crate) const BANNER_BYTES: &[u8] =
     b"\x1b[s\r\x1b[K\x1b[2mtayf: config reloaded\x1b[22m\n\x1b[u";
 
@@ -42,7 +41,6 @@ pub(crate) trait BannerSink: Send + 'static {
 /// spawn was considered and rejected: holding a `/dev/tty` fd for the
 /// entire session is a small surface increase, while reload events are
 /// rare enough that per-event open is trivial.
-#[allow(dead_code)] // reason: consumed in Task 7 (lib.rs wires DevTtySink).
 pub(crate) struct DevTtySink;
 
 impl BannerSink for DevTtySink {
