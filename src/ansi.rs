@@ -161,6 +161,10 @@ impl AnsiSm {
     // reason: the `Ground` arm and the catch-all `_ => Data` placeholder for
     // Tasks 4-7 states coincidentally share a body; collapsing them would
     // hide the intent. The wildcard goes away in Task 4 onward.
+    #[allow(clippy::too_many_lines)]
+    // reason: the per-state match is the spec's transition table written as
+    // code; splitting state arms into helpers obscures Williams §3.4. The
+    // shape stays here verbatim and grows linearly with new states.
     pub(crate) fn step(&mut self, byte: u8) -> StepEvent {
         if byte == 0x1b {
             self.state = SmState::Escape;
@@ -206,9 +210,13 @@ impl AnsiSm {
                         self.state = SmState::CsiParam;
                         StepEvent::SequenceByte
                     }
-                    b'?' => {
+                    b'<' | b'=' | b'>' | b'?' => {
                         self.private_mode = true;
                         self.state = SmState::CsiParam;
+                        StepEvent::SequenceByte
+                    }
+                    0x20..=0x2F => {
+                        self.state = SmState::CsiIntermediate;
                         StepEvent::SequenceByte
                     }
                     0x40..=0x7E => self.finalize_csi(byte),
@@ -227,8 +235,33 @@ impl AnsiSm {
                             self.accum.saturating_mul(10).saturating_add(u32::from(byte - b'0'));
                         StepEvent::SequenceByte
                     }
-                    b';' => StepEvent::SequenceByte,
+                    b';' => {
+                        self.accum = 0;
+                        StepEvent::SequenceByte
+                    }
+                    0x20..=0x2F => {
+                        self.state = SmState::CsiIntermediate;
+                        StepEvent::SequenceByte
+                    }
                     0x40..=0x7E => self.finalize_csi(byte),
+                    _ => {
+                        self.state = SmState::CsiIgnore;
+                        StepEvent::SequenceByte
+                    }
+                }
+            }
+
+            SmState::CsiIntermediate => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    0x20..=0x2F => StepEvent::SequenceByte,
+                    0x40..=0x7E => {
+                        self.state = SmState::Ground;
+                        self.private_mode = false;
+                        self.accum = 0;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::SequenceCompleted(SequenceKind::OtherCsi)
+                    }
                     _ => {
                         self.state = SmState::CsiIgnore;
                         StepEvent::SequenceByte
@@ -436,5 +469,43 @@ mod ansi_tests {
             "expected OtherCsi for unknown private mode, got {last:?}"
         );
         assert!(!sm.tui_mode_active());
+    }
+
+    #[test]
+    fn multi_param_csi_resets_accum_on_semicolon() {
+        let mut sm = AnsiSm::new();
+        // \e[?1049;1000h — alt-screen first, then mouse. Both private.
+        // With accum reset on ';', the LAST param (1000) drives finalize.
+        let events = step_all(&mut sm, b"\x1b[?1049;1000h");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::TuiToggleOn))
+        ));
+        // Mouse flag set (1000) because accum landed on 1000 at FINAL.
+        assert!(sm.tui_mode_active());
+    }
+
+    #[test]
+    fn dec_secondary_da_with_lt_prefix_does_not_set_flag() {
+        // \e[>0c — DEC secondary device attributes. '<>=' are PRIVATE_PREFIX
+        // per Williams; our flag_for_mode(0) returns 0, so this is OtherCsi.
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[>0c");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::OtherCsi))
+        ));
+        assert!(!sm.tui_mode_active());
+    }
+
+    #[test]
+    fn csi_with_intermediate_byte_routes_through_csi_intermediate() {
+        // \e[ q — DECSCUSR (cursor style). Intermediate ' ' (0x20), final 'q'.
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[ q");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::OtherCsi))
+        ));
     }
 }
