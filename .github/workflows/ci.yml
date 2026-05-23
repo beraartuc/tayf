@@ -27,6 +27,12 @@ jobs:
       - name: Build
         run: cargo build --release
       - name: Test
+        env:
+          # CI portable-pty subprocesses cannot respond to OSC 11; pre-set
+          # COLORFGBG so bg_detect short-circuits via the env-var path
+          # before opening /dev/tty. Production behavior is unchanged
+          # (real terminals respond to OSC 11 within the 100 ms cap).
+          COLORFGBG: "15;15"
         run: cargo test --all-targets
 
   audit:
