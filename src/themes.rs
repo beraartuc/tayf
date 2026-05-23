@@ -1,23 +1,60 @@
-//! Embedded preset color themes.
+//! Theme loading: embedded preset registry + disk-based custom themes.
 //!
-//! Theme files live in `assets/themes/` and are baked into the binary at
-//! compile time via `include_str!`. They are NOT loaded from disk; users
-//! who want a custom theme should use the user-config layer (which is
-//! applied AFTER the theme layer and so wins on conflicts).
+//! Preset theme files live in `assets/themes/` and are baked into the
+//! binary at compile time via `include_str!`. Disk themes live in
+//! `<config_base>/themes/<name>.toml` and are loaded through the same
+//! 1 MiB read cap and symlink-out whitelist as the user config
+//! (`config::read_capped` + canonical-base validation).
 //!
-//! A theme is a subset of the user-config schema: a sequence of `[[rules]]`
-//! blocks with `name` and `style` only. Validation at load time rejects
-//! `pattern`, `enabled = false`, and unknown rule names — see
-//! [`validate_theme_rules`] for the precise rules.
+//! Resolution order in [`load`]:
+//! 1. Disk theme `<config_base>/themes/<name>.toml` exists?
+//!    - And `name` matches a built-in (case-insensitively) →
+//!      [`Error::Config`] with rename hint (F2 collision policy).
+//!    - Else → load from disk, return `Cow::Owned`.
+//! 2. Built-in registry has `name` (case-sensitive) → return
+//!    `Cow::Borrowed(&'static str)`.
+//! 3. Neither → [`Error::Theme`] with available list (built-ins ∪ disk
+//!    discovered, deduplicated, alphabetically sorted, collisions
+//!    excluded).
+//!
+//! A theme is a subset of the user-config schema: a sequence of
+//! `[[rules]]` blocks with `name` and `style` only. Validation rejects
+//! `pattern`, `enabled = false`, unknown rule names, and any `[general]`
+//! section — see [`validate_theme_rules`] for the precise contract.
+//! Disk themes are NOT required to override every built-in (partial
+//! themes are accepted); shipped preset themes ARE required to be
+//! exhaustive (unit-tested).
 //!
 //! Public to crate:
-//! - [`load`] — resolve a theme name to its embedded TOML source.
-//! - [`names`] — alphabetically-sorted list of available theme names.
-//! - [`validate_theme_rules`] — schema-shape check applied after parsing.
-//! - [`synthetic_path`] — embedded source label used when feeding a theme through the user-config merge.
+//! - [`LoadedTheme`] — `(source, path_label)` pair returned by [`load`].
+//! - [`load`] — resolve a theme name (disk-first, built-in fallback).
+//! - [`load_with`] — testable variant accepting env-var closures.
+//! - [`names`] — alphabetically-sorted list of BUILT-IN theme names.
+//! - [`validate_theme_rules`] — fail-collected schema-shape check.
+//! - [`synthetic_path`] — embedded source label for built-in themes.
 
 use crate::error::Error;
 use crate::Result;
+
+/// A theme loaded into memory, paired with the path label used in
+/// error messages produced during parsing and validation.
+///
+/// `source` is `Cow::Borrowed(&'static str)` for built-in preset themes
+/// (zero-alloc, baked into the binary) and `Cow::Owned(String)` for disk
+/// themes (allocated once at load time).
+///
+/// `path_label` is `<embedded:theme/{name}>` for presets and the
+/// absolute canonical disk path for disk-loaded themes. It is fed into
+/// [`crate::config::parse`] and [`validate_theme_rules`] so downstream
+/// error messages point at the actual source the user can edit.
+#[allow(dead_code)]
+// reason: consumed by Task 14 (themes::load rewrite) — struct lands
+// first so subsequent helper commits can reference the type if needed.
+#[derive(Debug)]
+pub(crate) struct LoadedTheme {
+    pub source: std::borrow::Cow<'static, str>,
+    pub path_label: String,
+}
 
 const DARK_SRC: &str = include_str!("../assets/themes/dark.toml");
 const LIGHT_SRC: &str = include_str!("../assets/themes/light.toml");
