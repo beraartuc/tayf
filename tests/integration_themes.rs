@@ -61,6 +61,24 @@ fn theme_flag_appears_in_help_text() {
 }
 
 #[test]
+fn theme_help_text_mentions_disk_themes() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tayf"))
+        .arg("--help")
+        .output()
+        .expect("run tayf --help");
+    assert!(out.status.success(), "tayf --help should succeed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Disk themes"),
+        "help text should mention disk themes (Rev2 I-11): got: {stdout}"
+    );
+    assert!(
+        stdout.contains("themes/"),
+        "help text should point at <config_base>/themes/: got: {stdout}"
+    );
+}
+
+#[test]
 fn config_general_theme_drives_resolution_when_cli_omits() {
     // Pins the `[general] theme = "..."` config-driven path end-to-end.
     // When --theme is NOT passed on the CLI, the binary must resolve

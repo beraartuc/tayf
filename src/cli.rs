@@ -60,9 +60,12 @@ pub struct Args {
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
-    /// Apply a preset color theme before user-config rules. CLI override of
-    /// `[general] theme`. Available themes are `dark` and `light`; unknown
-    /// names exit with `EX_USAGE` (64) and a list of known themes.
+    /// Apply a preset color theme before user-config rules. CLI override
+    /// of `[general] theme`. Built-in themes: `dark`, `light`. Disk
+    /// themes loaded from `<config_base>/themes/<name>.toml` are also
+    /// accepted (`$XDG_CONFIG_HOME/tayf/themes/` or
+    /// `$HOME/.config/tayf/themes/`). Unknown names exit with
+    /// `EX_USAGE` (64) and a list of known names.
     #[arg(long, value_name = "NAME")]
     pub theme: Option<String>,
 
