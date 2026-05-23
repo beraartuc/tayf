@@ -19,12 +19,6 @@
 
 /// Resolved background theme. Maps directly to v0.2.3 preset theme names:
 /// `BgTheme::Light` → `"light"`, `BgTheme::Dark` → `"dark"`.
-#[allow(dead_code)]
-// reason: skeleton commit lands the enum + `resolve()` API surface; the
-// `Light` variant is constructed by `detect_from_colorfgbg` /
-// `detect_from_osc11` in the next v0.3.1 task. Without this allow,
-// clippy's `-D warnings` rejects the unused variant before its wiring
-// arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BgTheme {
     Light,
@@ -80,13 +74,71 @@ fn debug_log(args: std::fmt::Arguments<'_>) {
     }
 }
 
-// Subsequent tasks fill in `detect_from_colorfgbg`, `detect_from_osc11`,
-// and their helpers. Stub the missing items with `None` so this skeleton
-// compiles cleanly.
+// Subsequent tasks fill in `detect_from_osc11` and its helpers. Stub it
+// with `None` so this module compiles cleanly until that task lands.
 fn detect_from_colorfgbg() -> Option<BgTheme> {
-    None
+    let raw = std::env::var("COLORFGBG").ok()?;
+    parse_colorfgbg(&raw)
+}
+
+/// Parse the COLORFGBG environment variable.
+///
+/// rxvt / urxvt format: `fg;bg` where bg is an xterm color number 0..15.
+/// Some implementations include a third field (`fg;bd;bg`) for default-bd
+/// status; we accept both by consulting only the last `;`-separated field.
+/// Value `default` (any case) is rejected — no useful signal.
+fn parse_colorfgbg(s: &str) -> Option<BgTheme> {
+    let bg = s.split(';').next_back()?;
+    let bg = bg.trim();
+    if bg.is_empty() || bg.eq_ignore_ascii_case("default") {
+        return None;
+    }
+    let n: u8 = bg.parse().ok()?;
+    if n > 15 {
+        return None;
+    }
+    if n < 8 {
+        Some(BgTheme::Dark)
+    } else {
+        Some(BgTheme::Light)
+    }
 }
 
 fn detect_from_osc11() -> Option<BgTheme> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colorfgbg_two_field_dark() {
+        assert_eq!(parse_colorfgbg("15;0"), Some(BgTheme::Dark));
+    }
+
+    #[test]
+    fn colorfgbg_two_field_light() {
+        assert_eq!(parse_colorfgbg("0;15"), Some(BgTheme::Light));
+    }
+
+    #[test]
+    fn colorfgbg_three_field_with_non_numeric_middle() {
+        // Parser must use only the last field; middle is ignored.
+        assert_eq!(parse_colorfgbg("0;garbage;15"), Some(BgTheme::Light));
+    }
+
+    #[test]
+    fn colorfgbg_default_keyword_returns_none() {
+        assert_eq!(parse_colorfgbg("0;default"), None);
+        assert_eq!(parse_colorfgbg("0;DEFAULT"), None);
+    }
+
+    #[test]
+    fn colorfgbg_malformed_returns_none() {
+        assert_eq!(parse_colorfgbg(""), None);
+        assert_eq!(parse_colorfgbg("abc"), None);
+        assert_eq!(parse_colorfgbg("0;99"), None);
+        assert_eq!(parse_colorfgbg("0;-1"), None);
+    }
 }
