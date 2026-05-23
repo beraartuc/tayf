@@ -89,3 +89,70 @@ pub fn spawn_for_interaction_with_env(
 
     (pair.master, child)
 }
+
+/// Spawn the tayf binary inside a PTY, write `stdin_content` to the child
+/// shell's stdin, then drain the master until the child exits or `timeout`
+/// elapses. Returns the captured PTY bytes (tayf's stdout).
+///
+/// Convenience wrapper around [`spawn_for_interaction_with_env`] for tests
+/// that just need "feed these commands, get the bytes back" semantics.
+/// `stdin_content` must terminate with `exit\n` (or otherwise cause the
+/// shell to exit) so the read loop sees EOF on the master before `timeout`.
+pub fn spawn_with_input(stdin_content: &str, timeout: Duration) -> Vec<u8> {
+    spawn_with_input_and_args(stdin_content, &[], timeout)
+}
+
+/// Same as [`spawn_with_input`] but threads extra CLI args (e.g. `--config
+/// <path>`) into the tayf invocation. The child shell is always
+/// `/bin/sh`; tests that need a different shell should use
+/// [`spawn_for_interaction_with_env`] directly.
+pub fn spawn_with_input_and_args(
+    stdin_content: &str,
+    extra_args: &[&str],
+    timeout: Duration,
+) -> Vec<u8> {
+    use std::io::{Read, Write};
+
+    let tayf = env!("CARGO_BIN_EXE_tayf");
+    let mut args: Vec<&str> = Vec::with_capacity(extra_args.len() + 2);
+    args.extend_from_slice(extra_args);
+    args.push("--shell");
+    args.push("/bin/sh");
+
+    let (master, mut child) = spawn_for_interaction(
+        tayf,
+        &args,
+        portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+    );
+
+    // Give tayf a moment to install its signal handler and spawn the
+    // child shell before writing — otherwise the first bytes can race
+    // the shell's startup and disappear into the void.
+    std::thread::sleep(Duration::from_millis(200));
+
+    let mut writer = master.take_writer().expect("take writer");
+    writer.write_all(stdin_content.as_bytes()).expect("write stdin");
+    drop(writer);
+
+    let mut reader = master.try_clone_reader().expect("clone reader");
+    let mut out = Vec::new();
+    let start = std::time::Instant::now();
+    let mut buf = [0u8; 4096];
+    while start.elapsed() < timeout {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+        if let Ok(Some(_status)) = child.try_wait() {
+            // Drain any remaining bytes the kernel still has buffered.
+            if let Ok(n) = reader.read(&mut buf) {
+                out.extend_from_slice(&buf[..n]);
+            }
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    out
+}
