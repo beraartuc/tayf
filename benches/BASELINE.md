@@ -58,7 +58,10 @@ the `cat`-equivalent denominator for the spec §7 overhead target.
 ## v0.2.4 baseline (recorded 2026-05-23)
 
 Source: HEAD = 1de4cb50e4ec4976abfdf9d1fe4136eeaffba818
-Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64), Bera-MacBook-Pro.local
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64)
+Input: identical to v0.1.1 above (1000-copy `connect 192.168.1.1 …`).
+Profile: release (`cargo bench`).
 
 Criterion output excerpt:
 
@@ -69,5 +72,14 @@ apply_rules/ipv4-heavy  time:   [7.6697 ms 7.6786 ms 7.6881 ms]
 passthrough/write_all   time:   [1.1473 µs 1.1492 µs 1.1515 µs]
                         thrpt:  [54.190 GiB/s 54.299 GiB/s 54.387 GiB/s]
 ```
+
+Notes on the v0.1.1 → v0.2.4 delta:
+
+- `apply_rules/ipv4-heavy` ~3% slower (~7.48 ms → ~7.68 ms, 8.545 → 8.321 MiB/s).
+  Expected: v0.2.x grew the default ruleset from 8 to 13 built-ins, and the
+  synthetic walks every individual regex (`Compiled::individuals`) per line.
+- `passthrough/write_all` ~14% faster (~1.33 µs → ~1.15 µs, 46.78 → 54.30 GiB/s).
+  Likely run-to-run variance plus toolchain microbenefits; no semantic change to
+  the passthrough path between v0.1.1 and v0.2.4.
 
 These numbers anchor the v0.3.0 < 20% regression budget per spec §7.4.
