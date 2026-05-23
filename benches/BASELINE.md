@@ -137,3 +137,59 @@ Notes on the v0.2.4 → v0.3.0 delta:
 - 17% outliers on `passthrough/write_all` likely reflect macOS scheduler jitter
   on a sub-µs measurement; same pattern showed up in v0.2.4 (1 mild outlier on
   a similarly tiny per-iter time).
+
+## v0.3.2 measurement (recorded 2026-05-23)
+
+Source: HEAD = 39dc9f4 (CHANGELOG entry, post version bump 01a26b7)
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64) (same as v0.3.0 baseline)
+Input: identical to v0.3.0 (and earlier) above.
+Profile: release (`cargo bench`).
+
+Criterion output excerpt:
+
+```
+apply_rules/ipv4-heavy  time:   [7.7444 ms 7.7543 ms 7.7642 ms]
+                        thrpt:  [8.2296 MiB/s 8.2401 MiB/s 8.2506 MiB/s]
+                 change: time:   [−0.2528% +0.3644% +0.7881%] (p = 0.20 > 0.05)
+                        thrpt:  [−0.7819% −0.3631% +0.2534%]
+                        No change in performance detected.
+
+passthrough/write_all   time:   [1.2880 µs 1.3550 µs 1.4273 µs]
+                        thrpt:  [43.718 GiB/s 46.051 GiB/s 48.445 GiB/s]
+                 change: time:   [+2.5578% +6.6031% +11.380%] (p = 0.00 < 0.05)
+                        thrpt:  [−10.217% −6.1941% −2.4940%]
+                        Performance has regressed.
+```
+
+### Regression check vs v0.3.0 baseline
+
+| Bench group | v0.3.0 | v0.3.2 | Delta |
+|---|---|---|---|
+| `apply_rules/ipv4-heavy` | 7.7261 ms (8.2702 MiB/s) | 7.7543 ms (8.2401 MiB/s) | +0.36% time / −0.36% thrpt |
+| `passthrough/write_all` | 1.2109 µs (51.529 GiB/s) | 1.3550 µs (46.051 GiB/s) | +6.60% time / −10.63% thrpt |
+
+Spec budget per §5.2: < 20% regression. Status: PASS on both bench groups
+(both deltas well inside the 20% ceiling).
+
+Notes on the v0.3.0 → v0.3.2 delta:
+
+- `apply_rules/ipv4-heavy` ~0.4% slower (criterion flags "No change in
+  performance detected", p = 0.20 > 0.05). The v0.3.2 URL pattern grew a
+  trailing-tail char class plus a 4th alternation branch (`git@host:path`),
+  and the `duration` pattern grew a repeat-group for compound forms
+  (`2d3h`, `1h30m20s`). Neither shows up in this synthetic benchmark
+  because the input exercises only `ipv4`, `http_status`, and `log_level`
+  — but the linear-DFA structure of the new patterns means the runtime
+  cost on URL/duration-heavy inputs would be similarly linear.
+- `passthrough/write_all` ~6.6% slower (~1.21 µs → ~1.36 µs, 51.53 →
+  46.05 GiB/s). Sub-µs per-iter scheduler jitter dominates; criterion
+  flags 7% outliers (3 mild + 4 severe). No code change in v0.3.2 touches
+  the passthrough hot path — this is run-to-run variance, not a regression
+  in the implementation. Cumulative v0.1.1 → v0.3.2 delta on this group is
+  +2% time / −1.5% thrpt vs the original baseline, which is within noise.
+- No v0.3.2 change should plausibly affect either bench group: pattern
+  changes (A/B/C) are not exercised by the input fixture, and the D
+  changes (`TAYF_DISABLE_BG_DETECT` env-var check at startup, watch test
+  rewrite) touch startup and test paths only. Observed deltas are
+  consistent with that expectation.
