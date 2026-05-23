@@ -52,11 +52,6 @@ use crate::Result;
 #[derive(Debug)]
 pub(crate) struct LoadedTheme {
     pub source: std::borrow::Cow<'static, str>,
-    #[allow(dead_code)]
-    // reason: read by Task 16 (rules.rs:504 final adapter) — bridge in this
-    // commit keeps the synthetic-path label so the tree compiles; promoted
-    // to `loaded.path_label` in the next task, gating diagnostics on the
-    // real on-disk theme file rather than the embedded synthetic.
     pub path_label: String,
 }
 

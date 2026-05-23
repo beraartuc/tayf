@@ -480,14 +480,19 @@ impl Compiled {
     /// surfaced [`crate::Error::Config`].
     ///
     /// # Errors
-    /// Returns [`crate::Error::Theme`] when `theme` names a preset that is not
-    /// in the embedded registry. Returns [`crate::Error::Config`] when the
-    /// theme's TOML fails to parse, the theme fails validation, a user rule
-    /// fails to compile (regex error), or a user rule violates validation
-    /// (missing fields / no visible style). Returns
-    /// [`crate::Error::RegexCompile`] when a *built-in* pattern fails to
-    /// compile — this never happens in practice (built-ins are unit-tested)
-    /// but is preserved so callers don't need to special-case.
+    /// Returns [`crate::Error::Theme`] when `theme` names neither a disk
+    /// theme nor a built-in preset; the `available` list includes both
+    /// sources, deduplicated and case-insensitive.
+    /// Returns [`crate::Error::Config`] when (a) a disk theme exists for
+    /// a built-in name (F2 collision policy), (b) a disk theme cannot be
+    /// read, exceeds the 1 MiB cap, or resolves outside the canonical
+    /// themes base, (c) a user rule fails to compile (regex error), or
+    /// (d) a user rule violates validation (missing fields / no visible
+    /// style).
+    /// Returns [`crate::Error::ThemeValidation`] when one or more theme
+    /// rules fail validation (collected from a single pass; v0.3.4+).
+    /// Returns [`crate::Error::RegexCompile`] when a *built-in* pattern
+    /// fails to compile — never happens in practice.
     pub(crate) fn load_with_theme(
         config: Option<&crate::config::Config>,
         config_path: Option<&str>,
@@ -502,11 +507,9 @@ impl Compiled {
         // theme path rather than mutating the rule set first.
         if let Some(name) = theme {
             let loaded = crate::themes::load(name)?;
-            let src: &str = &loaded.source;
-            let synth = crate::themes::synthetic_path(name);
-            let theme_cfg = crate::config::parse(&synth, src)?;
-            crate::themes::validate_theme_rules(name, &synth, &theme_cfg)?;
-            crate::config::apply_user_rules(&synth, &mut rules, &theme_cfg.rules)?;
+            let theme_cfg = crate::config::parse(&loaded.path_label, &loaded.source)?;
+            crate::themes::validate_theme_rules(name, &loaded.path_label, &theme_cfg)?;
+            crate::config::apply_user_rules(&loaded.path_label, &mut rules, &theme_cfg.rules)?;
         }
 
         // Layer 2: user config.
