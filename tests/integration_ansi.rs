@@ -126,3 +126,97 @@ fn dcs_query_passthrough() {
         String::from_utf8_lossy(&out)
     );
 }
+
+/// Adversarial: a 5 KiB unterminated OSC must be force-closed by tayf so the
+/// downstream terminal does not eat subsequent shell output as part of the
+/// string sequence. The captive `/bin/sh` is asked (via `awk`) to PRINT an
+/// `\e]2;` introducer + 5000 'a' bytes (no `\e\\`, no BEL) to ITS stdout —
+/// which is what tayf's pipeline sees. tayf must detect the cap-fire inside
+/// `OscString`, emit a synthetic ST, and let the post-OSC marker line
+/// `AFTER` reach the outer pty. Spec §7.2.
+///
+/// Asserts:
+///   1. The synthetic ST (`\e\\`) appears in tayf's stdout — i.e. Pipeline
+///      emitted `ForceStringTerminate` when `AnsiSm` tripped its 4 KiB
+///      `SEQUENCE_BYTES_CAP` inside `OscString`.
+///   2. The literal `AFTER` appears in tayf's stdout after the OSC payload,
+///      meaning the post-cap-fire flow processed the marker line normally.
+#[test]
+fn adversarial_unterminated_osc_terminates_via_synthetic_st() {
+    use std::io::{Read, Write};
+    use std::time::Instant;
+
+    use portable_pty::PtySize;
+
+    // Hermetic config — defeat any `~/.config/tayf/config.toml` on the host
+    // so this test only depends on built-in behaviour. Same pattern as
+    // `tests/integration_bg_detect.rs::empty_config`.
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let cfg_path = dir.path().join("config.toml");
+    std::fs::write(&cfg_path, "").expect("write empty config");
+    let cfg_str = cfg_path.to_str().expect("utf8 cfg path");
+
+    let tayf = env!("CARGO_BIN_EXE_tayf");
+    let (master, mut child) = common::spawn_for_interaction_with_env(
+        tayf,
+        &["--config", cfg_str, "--shell", "/bin/sh"],
+        &[],
+        PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+    );
+
+    // Match the 200 ms startup grace used by `common::spawn_with_input` and
+    // `tests/integration_bg_detect.rs` — give tayf time to install signal
+    // handlers and spawn the captive shell before writing.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // The cap-fire-in-string-state path is driven by tayf SEEING an
+    // unterminated OSC on the shell's STDOUT (not its stdin). Use awk
+    // to print the adversarial payload — OSC introducer `\e]2;` + 5000
+    // 'a' bytes (well past the 4 KiB `SEQUENCE_BYTES_CAP`) with no
+    // `\e\\` / BEL terminator — then the marker line and a clean exit.
+    let script: &[u8] = b"awk 'BEGIN { printf \"\\033]2;\"; for (i=0; i<5000; i++) printf \"a\"; printf \"\\nAFTER\\n\" }'; exit 0\n";
+
+    let mut writer = master.take_writer().expect("take writer");
+    writer.write_all(script).expect("write stdin");
+    drop(writer);
+
+    let mut reader = master.try_clone_reader().expect("clone reader");
+    let mut out: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 4096];
+    // Larger deadline than the file-level TIMEOUT because we wait for shell
+    // startup, awk execution emitting 5+ KiB, tayf cap-fire emission, AND
+    // the shell exit to flow through the PTY before EOF arrives.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+        let saw_st = out.windows(2).any(|w| w == b"\x1b\\");
+        let saw_after = out.windows(5).any(|w| w == b"AFTER");
+        if saw_st && saw_after {
+            break;
+        }
+        if let Ok(Some(_status)) = child.try_wait() {
+            // Drain any kernel-buffered tail before bailing.
+            if let Ok(n) = reader.read(&mut buf) {
+                out.extend_from_slice(&buf[..n]);
+            }
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        out.windows(2).any(|w| w == b"\x1b\\"),
+        "expected synthetic ST (\\e\\\\) in tayf stdout for unterminated OSC: {:?}",
+        String::from_utf8_lossy(&out)
+    );
+    assert!(
+        out.windows(5).any(|w| w == b"AFTER"),
+        "expected post-OSC marker 'AFTER' in tayf stdout (was it visually eaten by the terminal?): {:?}",
+        String::from_utf8_lossy(&out)
+    );
+}
