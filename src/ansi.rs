@@ -52,7 +52,8 @@ pub(crate) enum SmState {
     SosPmApcEsc,
 }
 
-/// Per-byte event surfaced from [`AnsiSm::step`]. See spec §3.5.
+/// Per-byte event surfaced from [`AnsiSm::step`]. See spec §3.5 (v0.3.0)
+/// and v0.3.1 spec §4.1 for the v0.3.1 addition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepEvent {
     /// Ground state, normal data byte. Pipeline: feed byte to `line_buffer`.
@@ -69,6 +70,17 @@ pub(crate) enum StepEvent {
     /// the triggering byte for this event). Pipeline: push the final byte
     /// onto `sequence_scratch`, then route the scratch based on `kind`.
     SequenceCompleted(SequenceKind),
+    /// Cap exceeded mid-sequence in a string state (OSC/DCS/PM/APC).
+    /// Pipeline: write a synthetic 7-bit ST (`\e\\`, 2 bytes) directly to
+    /// stdout to close the unterminated string sequence on the terminal
+    /// side, then re-step the current byte (SM has reset to Ground).
+    ///
+    /// Asymmetric with the non-string cap path: there, the byte is
+    /// consumed as `Data`. Here, the byte is NOT consumed; Pipeline must
+    /// re-step. See v0.3.1 spec §4 for rationale.
+    // reason: variant is reserved in this commit; SM emission lands in Task 11.
+    #[allow(dead_code)]
+    ForceStringTerminate,
 }
 
 /// Classification of a completed CSI or ESC sequence; tells `Pipeline`

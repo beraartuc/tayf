@@ -174,6 +174,9 @@ impl Pipeline {
                     self.sequence_scratch.push(byte);
                     self.dispatch_completed_sequence(kind, out)?;
                 }
+                crate::ansi::StepEvent::ForceStringTerminate => {
+                    unreachable!("ForceStringTerminate is not yet emitted; introduced in Task 12")
+                }
             }
         }
         Ok(())
