@@ -153,15 +153,136 @@ impl AnsiSm {
 
     /// Advance the machine by one byte; emit the classification event.
     ///
-    /// Tasks 3-7 fill in the real transitions. Task 2 stubs this to always
-    /// emit `Data` so the module compiles and tests can be authored against
-    /// a known baseline.
-    #[allow(clippy::unused_self)]
-    // reason: Tasks 3-7 wire `step` to mutate `self.state`/`self.flags`/etc.;
-    // keeping the `&mut self` signature now avoids churning every call site
-    // in Pipeline (Task 8) when the real transitions land.
-    pub(crate) fn step(&mut self, _byte: u8) -> StepEvent {
-        StepEvent::Data
+    /// Implements the CSI path (Ground → Escape → `CsiEntry` → `CsiParam`
+    /// → completion) plus `CsiIgnore` recovery. ESC direct finals,
+    /// `EscapeIntermediate`, OSC/DCS/PM/APC paths are wired by Tasks 4-7;
+    /// until then they return [`StepEvent::Data`] as a placeholder.
+    #[allow(clippy::match_same_arms)]
+    // reason: the `Ground` arm and the catch-all `_ => Data` placeholder for
+    // Tasks 4-7 states coincidentally share a body; collapsing them would
+    // hide the intent. The wildcard goes away in Task 4 onward.
+    pub(crate) fn step(&mut self, byte: u8) -> StepEvent {
+        if byte == 0x1b {
+            self.state = SmState::Escape;
+            self.accum = 0;
+            self.private_mode = false;
+            self.sequence_bytes_seen = 1;
+            return StepEvent::SequenceByte;
+        }
+
+        match self.state {
+            SmState::Ground => StepEvent::Data,
+
+            SmState::Escape => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                // Task 3 only routes `[` into CSI. Tasks 4-6 will add arms for
+                // `]` (OSC), `P` (DCS), `X`/`^`/`_` (SOS/PM/APC), `(`/`#`
+                // (EscIntermediate), and ESC direct finals. Keeping a match
+                // here makes the eventual expansion a one-line addition.
+                #[allow(clippy::single_match_else)]
+                // reason: see comment above — Tasks 4-6 add more arms.
+                match byte {
+                    b'[' => {
+                        self.state = SmState::CsiEntry;
+                        StepEvent::SequenceByte
+                    }
+                    _ => {
+                        self.state = SmState::Ground;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::SequenceByte
+                    }
+                }
+            }
+
+            SmState::CsiEntry => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    b'0'..=b'9' => {
+                        self.accum = u32::from(byte - b'0');
+                        self.state = SmState::CsiParam;
+                        StepEvent::SequenceByte
+                    }
+                    b';' => {
+                        self.state = SmState::CsiParam;
+                        StepEvent::SequenceByte
+                    }
+                    b'?' => {
+                        self.private_mode = true;
+                        self.state = SmState::CsiParam;
+                        StepEvent::SequenceByte
+                    }
+                    0x40..=0x7E => self.finalize_csi(byte),
+                    _ => {
+                        self.state = SmState::CsiIgnore;
+                        StepEvent::SequenceByte
+                    }
+                }
+            }
+
+            SmState::CsiParam => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    b'0'..=b'9' => {
+                        self.accum =
+                            self.accum.saturating_mul(10).saturating_add(u32::from(byte - b'0'));
+                        StepEvent::SequenceByte
+                    }
+                    b';' => StepEvent::SequenceByte,
+                    0x40..=0x7E => self.finalize_csi(byte),
+                    _ => {
+                        self.state = SmState::CsiIgnore;
+                        StepEvent::SequenceByte
+                    }
+                }
+            }
+
+            SmState::CsiIgnore => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    0x40..=0x7E => {
+                        self.state = SmState::Ground;
+                        self.private_mode = false;
+                        self.accum = 0;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::SequenceCompleted(SequenceKind::OtherCsi)
+                    }
+                    _ => StepEvent::SequenceByte,
+                }
+            }
+
+            // Tasks 4-7 will wire these states. Task 3 stub: emit Data.
+            _ => StepEvent::Data,
+        }
+    }
+
+    fn finalize_csi(&mut self, byte: u8) -> StepEvent {
+        let kind = match byte {
+            b'h' if self.private_mode => {
+                let bit = flag_for_mode(self.accum);
+                if bit != 0 {
+                    self.flags |= bit;
+                    SequenceKind::TuiToggleOn
+                } else {
+                    SequenceKind::OtherCsi
+                }
+            }
+            b'l' if self.private_mode => {
+                let bit = flag_for_mode(self.accum);
+                if bit != 0 {
+                    self.flags &= !bit;
+                    SequenceKind::TuiToggleOff
+                } else {
+                    SequenceKind::OtherCsi
+                }
+            }
+            b'm' => SequenceKind::Sgr,
+            _ => SequenceKind::OtherCsi,
+        };
+        self.state = SmState::Ground;
+        self.private_mode = false;
+        self.accum = 0;
+        self.sequence_bytes_seen = 0;
+        StepEvent::SequenceCompleted(kind)
     }
 }
 
@@ -194,9 +315,126 @@ mod ansi_tests {
     }
 
     #[test]
-    fn step_all_helper_returns_events_in_order() {
+    fn ground_data_byte_emits_data_event() {
         let mut sm = AnsiSm::new();
-        let events = step_all(&mut sm, b"abc");
-        assert_eq!(events.len(), 3);
+        assert_eq!(sm.step(b'a'), StepEvent::Data);
+        assert_eq!(sm.step(b'\n'), StepEvent::Data);
+    }
+
+    #[test]
+    fn esc_in_ground_emits_sequence_byte_and_transitions() {
+        let mut sm = AnsiSm::new();
+        assert_eq!(sm.step(0x1b), StepEvent::SequenceByte);
+    }
+
+    #[test]
+    fn alt_screen_enters_on_1049h() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[?1049h");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::TuiToggleOn)),
+            "expected TuiToggleOn, got {last:?}"
+        );
+        assert!(sm.tui_mode_active());
+    }
+
+    #[test]
+    fn alt_screen_exits_on_1049l() {
+        let mut sm = AnsiSm::new();
+        let _ = step_all(&mut sm, b"\x1b[?1049h");
+        assert!(sm.tui_mode_active());
+        let events = step_all(&mut sm, b"\x1b[?1049l");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::TuiToggleOff)),
+            "expected TuiToggleOff, got {last:?}"
+        );
+        assert!(!sm.tui_mode_active());
+    }
+
+    #[test]
+    fn accepts_legacy_alt_screen_variants() {
+        for mode in [b"47".as_slice(), b"1047"] {
+            let mut sm = AnsiSm::new();
+            let mut seq = vec![0x1b, b'[', b'?'];
+            seq.extend_from_slice(mode);
+            seq.push(b'h');
+            let events = step_all(&mut sm, &seq);
+            let last = events.last().expect("events");
+            assert!(
+                matches!(last, StepEvent::SequenceCompleted(SequenceKind::TuiToggleOn)),
+                "mode {mode:?}: expected TuiToggleOn, got {last:?}"
+            );
+            assert!(sm.tui_mode_active(), "mode {mode:?}: should be active");
+        }
+    }
+
+    #[test]
+    fn bracketed_paste_enters_on_2004h() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[?2004h");
+        assert!(matches!(
+            events.last(),
+            Some(StepEvent::SequenceCompleted(SequenceKind::TuiToggleOn))
+        ));
+        assert!(sm.tui_mode_active());
+    }
+
+    #[test]
+    fn mouse_tracking_enters_on_1000h_1002h_1003h_1006h() {
+        for mode in [b"1000".as_slice(), b"1002", b"1003", b"1006"] {
+            let mut sm = AnsiSm::new();
+            let mut seq = vec![0x1b, b'[', b'?'];
+            seq.extend_from_slice(mode);
+            seq.push(b'h');
+            let events = step_all(&mut sm, &seq);
+            assert!(matches!(
+                events.last(),
+                Some(StepEvent::SequenceCompleted(SequenceKind::TuiToggleOn))
+            ));
+        }
+    }
+
+    #[test]
+    fn sgr_csi_emits_completed_sgr() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[31m");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::Sgr)),
+            "expected Sgr, got {last:?}"
+        );
+        assert!(!sm.tui_mode_active());
+    }
+
+    #[test]
+    fn sgr_with_default_reset_csi_m_alone() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[m");
+        assert!(matches!(events.last(), Some(StepEvent::SequenceCompleted(SequenceKind::Sgr))));
+    }
+
+    #[test]
+    fn non_sgr_csi_emits_other_csi() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[2A");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::OtherCsi)),
+            "expected OtherCsi, got {last:?}"
+        );
+    }
+
+    #[test]
+    fn csi_with_unknown_private_mode_does_not_set_flag() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b[?9999h");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::OtherCsi)),
+            "expected OtherCsi for unknown private mode, got {last:?}"
+        );
+        assert!(!sm.tui_mode_active());
     }
 }
