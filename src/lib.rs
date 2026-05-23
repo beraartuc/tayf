@@ -39,7 +39,7 @@ pub(crate) mod tty_guard;
 pub(crate) mod watch;
 
 pub use cli::Args;
-pub use error::{Error, Result};
+pub use error::{Error, Result, ThemeRuleError, ThemeRuleErrorKind};
 
 /// Truthy env-var values: "1", "true", "yes" (case-insensitive). Shared by:
 /// - `bg_detect::resolve` (`TAYF_DISABLE_BG_DETECT` test-only bypass, v0.3.2)
