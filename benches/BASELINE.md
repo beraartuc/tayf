@@ -193,3 +193,64 @@ Notes on the v0.3.0 → v0.3.2 delta:
   changes (`TAYF_DISABLE_BG_DETECT` env-var check at startup, watch test
   rewrite) touch startup and test paths only. Observed deltas are
   consistent with that expectation.
+
+## v0.3.3 measurement (recorded 2026-05-23)
+
+Source: HEAD = 7e79bde (README updates, post version bump a05fee1)
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64) (same as v0.3.2 baseline)
+Input: identical to v0.3.2 (and earlier) above.
+Profile: release (`cargo bench`).
+
+Criterion output excerpt:
+
+```
+apply_rules/ipv4-heavy  time:   [7.6608 ms 7.6713 ms 7.6831 ms]
+                        thrpt:  [8.3164 MiB/s 8.3292 MiB/s 8.3407 MiB/s]
+                 change: time:   [−1.2568% −1.0697% −0.8668%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.8744% +1.0813% +1.2728%]
+                        Change within noise threshold.
+
+passthrough/write_all   time:   [1.2072 µs 1.2252 µs 1.2447 µs]
+                        thrpt:  [50.132 GiB/s 50.930 GiB/s 51.689 GiB/s]
+                 change: time:   [−9.2209% −5.3260% −1.7097%] (p = 0.01 < 0.05)
+                        thrpt:  [+1.7394% +5.6257% +10.158%]
+                        Performance has improved.
+```
+
+### Regression check vs v0.3.2 baseline
+
+| Bench group | v0.3.2 | v0.3.3 | Delta |
+|---|---|---|---|
+| `apply_rules/ipv4-heavy` | 7.7543 ms (8.2401 MiB/s) | 7.6713 ms (8.3292 MiB/s) | −1.07% time / +1.08% thrpt |
+| `passthrough/write_all` | 1.3550 µs (46.051 GiB/s) | 1.2252 µs (50.930 GiB/s) | −9.58% time / +10.59% thrpt |
+
+Spec budget per §5.2: < 20% regression. Status: PASS on both bench groups
+(both deltas are improvements, well inside the budget ceiling).
+
+Notes on the v0.3.2 → v0.3.3 delta:
+
+- `apply_rules/ipv4-heavy` ~1% faster (criterion flags "Change within
+  noise threshold"). v0.3.3 does not modify the hot path — F1 (bypass),
+  F2 (no-hot-reload + SIGHUP forwarding), and F3 (reload banner) all
+  touch startup orchestration or the reload thread, never the per-line
+  rule scanner. The small improvement is run-to-run variance against
+  v0.3.2's measurement (which itself showed +6.6% noise on the sub-µs
+  passthrough group).
+- `passthrough/write_all` ~9.6% faster — clear scheduler/thermal
+  recovery from v0.3.2's outlier-heavy run (v0.3.2 had 7% outliers).
+  v0.3.3 outliers: 14% (7 mild + 7 severe) — sub-µs measurements remain
+  noisy. Cumulative v0.1.1 → v0.3.3 delta on this group is −7.4% time /
+  +8.9% thrpt vs the original baseline, fully within noise.
+- No v0.3.3 change should plausibly affect either bench group:
+  - The bypass branch in `Tayf::run` is gated by `if bypass { ... }`
+    early-return and never reached when the user runs without
+    `--bypass` / `TAYF_DISABLE`.
+  - The `--no-hot-reload` gate is one boolean check at startup; the
+    hot-path Pipeline is identical to v0.3.2 in the default config.
+  - The reload-banner field gating + `Option<Box<dyn BannerSink>>` arg
+    add one branch inside the reload thread, fires at most every 200 ms
+    on a config save — orders of magnitude below the per-line cost.
+  - The SIGHUP forwarding fix is in the signal-thread handler, never
+    on the I/O hot path.
+  Observed deltas are consistent with that expectation.
