@@ -35,6 +35,11 @@ fn version_str() -> &'static str {
     about,
     long_about = None,
 )]
+#[non_exhaustive]
+// reason: CLI argument structs are a flat collection of independent toggles —
+// each bool maps 1:1 to a user-visible `--flag`, so a state machine or enum
+// would obscure the surface rather than clarify it.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Args {
     /// Override the shell to launch. Defaults to $SHELL, then /etc/passwd, then /bin/sh.
     #[arg(long, value_name = "PATH")]
@@ -60,6 +65,19 @@ pub struct Args {
     /// names exit with `EX_USAGE` (64) and a list of known themes.
     #[arg(long, value_name = "NAME")]
     pub theme: Option<String>,
+
+    /// Disable all of tayf's colorization, pattern matching, and background
+    /// detection — passthrough the shell's output byte-for-byte while still
+    /// wrapping the PTY and forwarding signals. Equivalent to `TAYF_DISABLE=1`
+    /// (CLI flag wins on precedence).
+    #[arg(long, default_value_t = false)]
+    pub bypass: bool,
+
+    /// Disable hot config reloading. The file watcher and reload orchestrator
+    /// threads are not spawned. `SIGHUP` is still forwarded to the child
+    /// process group (a behavior change from v0.2.1 — see CHANGELOG).
+    #[arg(long, default_value_t = false)]
+    pub no_hot_reload: bool,
 }
 
 impl Args {
@@ -104,6 +122,8 @@ mod tests {
             "/tmp/cfg.toml",
             "--theme",
             "dark",
+            "--bypass",
+            "--no-hot-reload",
         ])
         .unwrap();
         assert_eq!(args.shell.as_deref(), Some(std::path::Path::new("/bin/fish")));
@@ -111,6 +131,8 @@ mod tests {
         assert!(args.no_color);
         assert_eq!(args.config.as_deref(), Some(std::path::Path::new("/tmp/cfg.toml")));
         assert_eq!(args.theme.as_deref(), Some("dark"));
+        assert!(args.bypass);
+        assert!(args.no_hot_reload);
     }
 
     #[test]
@@ -135,5 +157,33 @@ mod tests {
     fn theme_defaults_to_none() {
         let args = Args::try_parse_from(["tayf"]).unwrap();
         assert!(args.theme.is_none());
+    }
+
+    #[test]
+    fn parses_bypass_flag() {
+        let args = Args::try_parse_from(["tayf", "--bypass"]).unwrap();
+        assert!(args.bypass);
+        assert!(!args.no_hot_reload);
+    }
+
+    #[test]
+    fn parses_no_hot_reload_flag() {
+        let args = Args::try_parse_from(["tayf", "--no-hot-reload"]).unwrap();
+        assert!(args.no_hot_reload);
+        assert!(!args.bypass);
+    }
+
+    #[test]
+    fn bypass_and_no_hot_reload_default_to_false() {
+        let args = Args::try_parse_from(["tayf"]).unwrap();
+        assert!(!args.bypass);
+        assert!(!args.no_hot_reload);
+    }
+
+    #[test]
+    fn parses_combined_bypass_and_no_hot_reload() {
+        let args = Args::try_parse_from(["tayf", "--bypass", "--no-hot-reload"]).unwrap();
+        assert!(args.bypass);
+        assert!(args.no_hot_reload);
     }
 }
