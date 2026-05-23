@@ -153,14 +153,9 @@ impl AnsiSm {
 
     /// Advance the machine by one byte; emit the classification event.
     ///
-    /// Implements the CSI path (Ground → Escape → `CsiEntry` → `CsiParam`
-    /// → completion) plus `CsiIgnore` recovery. ESC direct finals,
-    /// `EscapeIntermediate`, OSC/DCS/PM/APC paths are wired by Tasks 4-7;
-    /// until then they return [`StepEvent::Data`] as a placeholder.
-    #[allow(clippy::match_same_arms)]
-    // reason: the `Ground` arm and the catch-all `_ => Data` placeholder for
-    // Tasks 4-7 states coincidentally share a body; collapsing them would
-    // hide the intent. The wildcard goes away in Task 4 onward.
+    /// Implements the full Williams VT500 subset: CSI (with `CsiIgnore`
+    /// recovery), ESC direct finals, `EscapeIntermediate`, and the
+    /// OSC / DCS / PM / APC string sequences. See spec §3.4.
     #[allow(clippy::too_many_lines)]
     // reason: the per-state match is the spec's transition table written as
     // code; splitting state arms into helpers obscures Williams §3.4. The
@@ -175,6 +170,9 @@ impl AnsiSm {
                 self.state,
                 SmState::OscString
                     | SmState::OscEsc
+                    | SmState::DcsEntry
+                    | SmState::DcsParam
+                    | SmState::DcsIntermediate
                     | SmState::DcsPassthrough
                     | SmState::DcsEsc
                     | SmState::SosPmApcString
@@ -206,13 +204,13 @@ impl AnsiSm {
                         self.state = SmState::OscString;
                         StepEvent::StringPayloadByte
                     }
-                    // String introducers handled by Task 6 (DCS/PM/APC): for
-                    // Task 5, treat as single-byte ESC finals so we still emit
-                    // a meaningful event.
-                    b'P' | b'X' | b'^' | b'_' => {
-                        self.state = SmState::Ground;
-                        self.sequence_bytes_seen = 0;
-                        StepEvent::SequenceCompleted(SequenceKind::EscFinal)
+                    b'P' => {
+                        self.state = SmState::DcsEntry;
+                        StepEvent::StringPayloadByte
+                    }
+                    b'X' | b'^' | b'_' => {
+                        self.state = SmState::SosPmApcString;
+                        StepEvent::StringPayloadByte
                     }
                     // INTERMEDIATE: \e ( B, \e # 8, etc.
                     0x20..=0x2F => {
@@ -386,8 +384,93 @@ impl AnsiSm {
                 }
             }
 
-            // Tasks 6-7 will wire these states. Task 5 stub: emit Data.
-            _ => StepEvent::Data,
+            SmState::DcsEntry => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    b'0'..=b'9' | b';' => {
+                        self.state = SmState::DcsParam;
+                        StepEvent::StringPayloadByte
+                    }
+                    0x20..=0x2F => {
+                        self.state = SmState::DcsIntermediate;
+                        StepEvent::StringPayloadByte
+                    }
+                    0x40..=0x7E => {
+                        self.state = SmState::DcsPassthrough;
+                        StepEvent::StringPayloadByte
+                    }
+                    _ => {
+                        // Invalid: route to SosPmApcString (acts as DcsIgnore).
+                        self.state = SmState::SosPmApcString;
+                        StepEvent::StringPayloadByte
+                    }
+                }
+            }
+
+            SmState::DcsParam | SmState::DcsIntermediate => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    0x40..=0x7E => {
+                        self.state = SmState::DcsPassthrough;
+                        StepEvent::StringPayloadByte
+                    }
+                    0x1b => {
+                        // ESC mid-DCS-header aborts. Restart Escape.
+                        self.state = SmState::Escape;
+                        self.sequence_bytes_seen = 1;
+                        StepEvent::SequenceByte
+                    }
+                    _ => StepEvent::StringPayloadByte,
+                }
+            }
+
+            SmState::DcsPassthrough => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    0x1b => {
+                        self.state = SmState::DcsEsc;
+                        StepEvent::StringPayloadByte
+                    }
+                    _ => StepEvent::StringPayloadByte,
+                }
+            }
+
+            SmState::SosPmApcString => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    0x1b => {
+                        self.state = SmState::SosPmApcEsc;
+                        StepEvent::StringPayloadByte
+                    }
+                    _ => StepEvent::StringPayloadByte,
+                }
+            }
+
+            // DcsEsc and SosPmApcEsc share identical ST-peek logic: \\ closes
+            // the string, lone ESC restarts Escape, anything else aborts and
+            // re-routes the byte through Escape.
+            SmState::DcsEsc | SmState::SosPmApcEsc => {
+                self.sequence_bytes_seen = self.sequence_bytes_seen.saturating_add(1);
+                match byte {
+                    b'\\' => {
+                        self.state = SmState::Ground;
+                        self.sequence_bytes_seen = 0;
+                        StepEvent::StringPayloadByte
+                    }
+                    0x1b => {
+                        self.state = SmState::Escape;
+                        self.sequence_bytes_seen = 1;
+                        StepEvent::SequenceByte
+                    }
+                    _ => {
+                        self.state = SmState::Escape;
+                        self.accum = 0;
+                        self.private_mode = false;
+                        self.sequence_bytes_seen = 1;
+                        self.step(byte)
+                    }
+                }
+            }
         }
     }
 
@@ -782,5 +865,58 @@ mod ansi_tests {
             "embedded \\n inside OSC must be StringPayloadByte, got {:?}",
             events[nl_idx]
         );
+    }
+
+    #[test]
+    fn dcs_passthrough_until_st() {
+        let mut sm = AnsiSm::new();
+        // \eP$qm\e\\ — DCS query.
+        let events = step_all(&mut sm, b"\x1bP$qm\x1b\\");
+        // After ST, next byte should be Data.
+        let after = sm.step(b'X');
+        assert_eq!(after, StepEvent::Data);
+        // First byte (\e) is SequenceByte; second (P) is StringPayloadByte.
+        assert_eq!(events[0], StepEvent::SequenceByte);
+        assert_eq!(events[1], StepEvent::StringPayloadByte);
+    }
+
+    #[test]
+    fn dcs_lone_esc_aborts_and_resyncs() {
+        let mut sm = AnsiSm::new();
+        // \eP$q\e[31m — DCS with embedded lone ESC aborts; \e[31m starts new CSI.
+        let events = step_all(&mut sm, b"\x1bP$q\x1b[31m");
+        let last = events.last().expect("events");
+        assert!(
+            matches!(last, StepEvent::SequenceCompleted(SequenceKind::Sgr)),
+            "expected new CSI Sgr after DCS abort, got {last:?}"
+        );
+    }
+
+    #[test]
+    fn pm_passthrough() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b^private\x1b\\");
+        let after = sm.step(b'X');
+        assert_eq!(after, StepEvent::Data);
+        assert_eq!(events[1], StepEvent::StringPayloadByte);
+    }
+
+    #[test]
+    fn apc_passthrough() {
+        let mut sm = AnsiSm::new();
+        let events = step_all(&mut sm, b"\x1b_payload\x1b\\");
+        let after = sm.step(b'X');
+        assert_eq!(after, StepEvent::Data);
+        assert_eq!(events[1], StepEvent::StringPayloadByte);
+    }
+
+    #[test]
+    fn sos_passthrough() {
+        let mut sm = AnsiSm::new();
+        // \eX is SOS (Start of String) — same handling as PM/APC in our impl.
+        let events = step_all(&mut sm, b"\x1bXpayload\x1b\\");
+        let after = sm.step(b'X');
+        assert_eq!(after, StepEvent::Data);
+        assert_eq!(events[1], StepEvent::StringPayloadByte);
     }
 }
