@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-MM-DD
+
+### Changed
+
+- **`respect_existing_colors` is honored by default.** The config field defaults to `true` and was parsed but ignored in v0.2.0–v0.2.4. Starting with v0.3.0 it is wired into the hot path: any line that already contains an ANSI SGR sequence (`\e[…m`) bypasses tayf's rules and is written to stdout byte-for-byte. Users whose input was already colored (e.g. piped `git log --color=always`, `journalctl` with `SYSTEMD_COLORS=true`) will see tayf stop overlaying its own rules on those lines. Migration: set `[general] respect_existing_colors = false` to restore the v0.2 effective behavior of running rules on every line.
+
+### Added
+
+- OSC, DCS, PM, and APC sequence handling. `\e]…`, `\eP…`, `\e^…`, `\e_…` are now classified as terminal-control payloads and pass through to stdout verbatim. Lines containing such sequences are written byte-for-byte and skip rule application, so OSC 8 hyperlinks (`\e]8;;URL\aLABEL\e]8;;\a`) render correctly without the URL being matched by tayf's `url` rule.
+- Non-CSI ESC sequences (`\e=`, `\eM`, `\e7`, `\e8`, `\ec` RIS) and multi-byte ESC sequences (`\e(B` G0 designate, `\e#8` DEC alignment test) are now parsed as control sequences rather than leaking their payload bytes into the rule engine.
+- Trigger sequence bytes (`\e[?1049h` alt-screen entry, `\e[31m` SGR, etc.) used to land in the line buffer alongside surrounding text. They are now collected in a per-pipeline scratch buffer and routed by sequence type: stdout for TUI toggles, line_buffer for SGR/other CSI/ESC completions.
+
+### Internal
+
+- New module `src/ansi.rs` (~580 lines including 47 unit tests) implementing a 16-state subset of the Paul Williams VT500 ANSI parser (https://vt100.net/emu/dec_ansi_parser). Replaces the manual `TuiModeSm` that lived in `src/pipeline.rs` since v0.1.
+- `Pipeline::feed` rewritten with a three-path architecture (TUI passthrough / sequence accumulation in scratch / OSC-payload direct-to-stdout). Existing callers unchanged.
+- New 4 KiB internal cap on unterminated CSI/ESC byte accumulation. Defense against malicious input keeping the parser in a non-Ground state forever.
+- `Compiled` struct gains a `respect_existing_colors: bool` field. Hot-reload-aware via the existing `ArcSwap<Compiled>` (snapshotted at every line boundary).
+
+### Notes
+
+- No new dependency. No public CLI / config schema change.
+- Cross-line SGR state is not tracked: a multi-line color block (e.g. `git log --color=always` with prompts that span lines) is honored on each SGR-bearing line, but rules may still run on intermediate lines that have no SGR themselves. Segment-level semantics are planned for v0.4.
+
+[0.3.0]: https://github.com/beraartuc/tayf/releases/tag/v0.3.0
+
 ## [0.2.4] — 2026-05-23
 
 ### Changed

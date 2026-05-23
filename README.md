@@ -185,6 +185,22 @@ If `tayf` was launched without a config file, the file watcher is not
 active — but `SIGHUP` still works as a manual reload trigger. If you
 create a config later, send `SIGHUP` to pick it up.
 
+### Respecting existing colors (v0.3.0)
+
+If your input already contains ANSI color sequences (`git log --color=always`, `journalctl` with colors, colored compiler output piped through tayf), you can tell tayf to leave those lines alone:
+
+```toml
+# ~/.config/tayf/config.toml
+[general]
+respect_existing_colors = true   # default, since v0.3.0
+```
+
+When `true`, any line containing at least one SGR sequence (`\e[…m`) is written to stdout byte-for-byte; tayf does not apply its own rules to it. Lines without SGR are colored normally per your config.
+
+The default is `true` — this is a behavior change from v0.2, where the field was parsed but never honored. If you want the v0.2 effective behavior (rules run on every line regardless of pre-existing color), set `respect_existing_colors = false`.
+
+Caveat: line-level only. A multi-line color block (e.g. `git log` with `\e[31m` on one line and `\e[0m` later) is honored per SGR-bearing line, but rules may still run on intermediate plain lines. Segment-level support is planned for v0.4.
+
 ## TUI compatibility
 
 `tayf` detects when a program enters a full-screen or interactive mode and
