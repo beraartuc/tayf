@@ -46,8 +46,9 @@ impl Drop for SignalGuard {
 
 /// Install signal handling. `resizer` is moved into the signal thread.
 /// `child_pid` is forwarded to as the process-group leader on
-/// `SIGINT`/`SIGTERM`; when `None` (rare — `portable_pty` could not report a
-/// pid) forwarding is silently skipped, since there is no group to target.
+/// `SIGINT`/`SIGTERM`/`SIGHUP`; when `None` (rare — `portable_pty` could not
+/// report a pid) forwarding is silently skipped, since there is no group to
+/// target.
 /// `reload_tx`, when `Some`, receives a
 /// [`ReloadRequest::SignalHup`](crate::reload::ReloadRequest::SignalHup) on
 /// every delivered `SIGHUP` IN ADDITION to the SIGHUP being forwarded to

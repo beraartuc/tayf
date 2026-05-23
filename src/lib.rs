@@ -77,7 +77,7 @@ impl Tayf {
     pub fn run(args: Args) -> Result<ExitCode> {
         log::init_from_env();
 
-        // Resolve bypass at process start; tek read garantisi (race-free).
+        // Resolve bypass at process start; single-read guarantee (race-free).
         // CLI flag wins over env var; both default to false.
         let bypass = args.bypass || crate::env_truthy("TAYF_DISABLE");
 
@@ -208,11 +208,11 @@ impl Tayf {
         };
 
         // Orchestrator: spawned only when hot-reload is enabled. Drop
-        // ordering (mirrors lib.rs:152-156 invariant): orchestrator is
-        // declared LAST so that on any earlier `?` returning Err, no
-        // orchestrator exists → no join-deadlock where its Drop blocks
-        // on a channel still held by already-spawned signal/watcher
-        // threads.
+        // ordering (mirrors the v0.3.2 invariant — orchestrator-declared-
+        // LAST among threading scaffolding so that on any earlier `?`
+        // returning Err, no orchestrator exists → no join-deadlock where
+        // its Drop blocks on a channel still held by already-spawned
+        // signal/watcher threads).
         let _orchestrator = if hot_reload_enabled {
             Some(reload::ReloadOrchestrator::spawn(
                 Arc::clone(&rules),
@@ -239,7 +239,9 @@ impl Tayf {
             None
         };
 
-        // Drop the local sender now (mirrors lib.rs:171). Remaining
+        // Drop the local sender now (preserves the v0.3.2 invariant —
+        // local reload_tx is dropped before runtime::run so the only
+        // remaining clones are the ones inside guard threads). Remaining
         // clones live in signal_guard (when hot_reload_enabled) and
         // watcher (when both hot_reload_enabled and config present).
         // When BOTH guards Drop at shutdown their clones go away, the
@@ -251,7 +253,8 @@ impl Tayf {
 
         let exit_code = runtime::run(reader, writer, child, Arc::clone(&rules), apply_colors)?;
 
-        // Explicit ordered shutdown (mirrors lib.rs:175-184 invariant):
+        // Explicit ordered shutdown (preserves the v0.3.2 invariant; see
+        // spec §3.3 drop-ordering invariant):
         // - watcher first: closes notify's raw_tx, which lets the
         //   debounce thread observe Disconnected and exit, which drops
         //   the debounce thread's reload_tx clone.
@@ -260,8 +263,9 @@ impl Tayf {
         //   clone (if any).
         // - implicit _orchestrator drop at end of scope: recv() returns
         //   Err (all senders gone), loop exits, join completes.
-        // - guard last: explicit for ordering clarity; Drop restores
-        //   termios.
+        // - guard last among explicit drops: Drop restores termios.
+        //   _orchestrator's implicit Drop runs after this, but its only
+        //   side-effect is joining the (already-exited) reload thread.
         drop(watcher);
         drop(signal_guard);
 
