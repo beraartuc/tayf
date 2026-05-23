@@ -256,6 +256,13 @@ conventions. Their output is never altered by `tayf`.
 
 Set `TAYF_LOG=debug` to send diagnostic logs to stderr.
 
+`TAYF_DISABLE_BG_DETECT=1` (or `true`/`yes`, case-insensitive) is a
+**test-only escape hatch** that skips the startup background-color detection
+and assumes a dark theme. Use it in CI environments where `/dev/tty` is a
+pseudo-terminal slave that cannot respond to OSC 11 queries. For production
+use, prefer `--theme dark` / `--theme light` or `[general] theme = "..."`
+in your config.
+
 ## Security posture
 
 `tayf` sits in the I/O path of every command in your shell. Its built-in
