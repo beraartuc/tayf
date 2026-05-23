@@ -1,12 +1,25 @@
-//! Output processing pipeline: TUI mode detection + line buffering +
+//! Output processing pipeline: ANSI-aware byte routing + line buffering +
 //! rule application.
 //!
-//! See spec §3.5 (TUI mode state machine) and §3.6 (rules engine).
+//! See spec §3 (ANSI state machine) and §5 (three-path feed mimari).
 //!
-//! The state machine never consumes bytes; it only flips internal flag bits
-//! tracking which TUI mode (alt-screen, bracketed paste, mouse tracking) is
-//! active. When any flag is set, bytes go straight to the writer without
-//! line buffering or rule application.
+//! Pipeline owns an [`crate::ansi::AnsiSm`] and routes each byte by the
+//! classification event surfaced from the SM:
+//!
+//! 1. **TUI passthrough** — while any TUI flag is set (alt-screen, bracketed
+//!    paste, mouse), bytes go verbatim to stdout. No rule application.
+//! 2. **Sequence accumulation** — CSI/ESC bytes accumulate in
+//!    `sequence_scratch`; on completion their destination depends on the
+//!    sequence kind:
+//!      - TUI toggle on/off → stdout (terminal needs the trigger).
+//!      - SGR (CSI `m`) → `line_buffer` (sets `line_has_sgr`).
+//!      - Other CSI / ESC final / ESC intermediate final → `line_buffer`.
+//! 3. **OSC/DCS/PM/APC payload** — payload bytes go direct to stdout
+//!    (flushing any pending scratch first); never line-buffered.
+//!
+//! At line boundary the `respect_existing_colors` flag on the rule snapshot
+//! gates rule application: if the line carried any SGR, rules are skipped
+//! and the original bytes pass verbatim.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -18,97 +31,6 @@ use crate::error::Error;
 use crate::line_buffer::{LineBuffer, FLUSH_TIMEOUT};
 use crate::rules::Compiled;
 use crate::style::Style;
-
-/// TUI mode bitmask flags. Any non-zero value means the pipeline is in
-/// passthrough mode; bytes go straight to stdout without rule application.
-mod tui_flags {
-    pub const ALT_SCREEN: u32 = 1 << 0;
-    pub const BRACKETED_PASTE: u32 = 1 << 1;
-    pub const MOUSE: u32 = 1 << 2;
-}
-
-/// Map a DEC private mode number to a flag bit, or 0 if it's not a tracked
-/// TUI indicator (see spec §3.5).
-fn flag_for_mode(num: u32) -> u32 {
-    match num {
-        47 | 1047 | 1049 => tui_flags::ALT_SCREEN,
-        2004 => tui_flags::BRACKETED_PASTE,
-        1000 | 1002 | 1003 | 1006 => tui_flags::MOUSE,
-        _ => 0,
-    }
-}
-
-/// 5-state TUI mode parser. Detects DEC private mode set/reset
-/// (CSI ? Pm h/l) and toggles bitmask flags. See spec §3.5.
-#[derive(Debug)]
-pub(crate) struct TuiModeSm {
-    state: SmState,
-    accum: u32,
-    flags: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SmState {
-    Ground,
-    EscSeen,
-    Csi,
-    Question,
-    Digits,
-}
-
-impl TuiModeSm {
-    pub(crate) fn new() -> Self {
-        TuiModeSm { state: SmState::Ground, accum: 0, flags: 0 }
-    }
-
-    /// True iff any TUI mode is currently active.
-    pub(crate) fn passthrough(&self) -> bool {
-        self.flags != 0
-    }
-
-    /// Advance the machine by one byte. Returns the new passthrough state.
-    pub(crate) fn step(&mut self, byte: u8) -> bool {
-        use SmState::{Csi, Digits, EscSeen, Ground, Question};
-        // ESC always restarts a fresh escape sequence regardless of current
-        // state — a lone or interrupting `\x1b` resyncs the parser.
-        if byte == 0x1b {
-            self.state = EscSeen;
-            return self.passthrough();
-        }
-        self.state = match (self.state, byte) {
-            (EscSeen, b'[') => Csi,
-            (Csi, b'?') => {
-                self.accum = 0;
-                Question
-            }
-            (Question | Digits, b) if b.is_ascii_digit() => {
-                let digit = u32::from(b - b'0');
-                self.accum = if self.state == Question {
-                    digit
-                } else {
-                    self.accum.saturating_mul(10).saturating_add(digit)
-                };
-                Digits
-            }
-            (Digits, b'h') => {
-                let bit = flag_for_mode(self.accum);
-                if bit != 0 {
-                    self.flags |= bit;
-                }
-                Ground
-            }
-            (Digits, b'l') => {
-                let bit = flag_for_mode(self.accum);
-                if bit != 0 {
-                    self.flags &= !bit;
-                }
-                Ground
-            }
-            _ => Ground,
-        };
-        self.passthrough()
-    }
-}
 
 /// Apply the compiled rule set to a single line. Writes the original bytes,
 /// with SGR wrappers inserted around the first non-overlapping match of each
@@ -159,56 +81,178 @@ pub(crate) fn apply_rules<W: Write>(
     Ok(())
 }
 
-/// Output pipeline. Owns the TUI-mode SM, line buffer, and an
-/// `ArcSwap` handle to the rule set. The handle is shared with whoever
-/// owns the other end (the hot-reload orchestrator in subsequent work);
-/// `apply_rules` snapshots it once per line so reloads landing mid-call
-/// never split a line.
+/// Output pipeline. Owns the ANSI state machine, line buffer, sequence
+/// scratch (for accumulating CSI/ESC sequence bytes whose destination is
+/// decided at completion), and an `ArcSwap` handle to the rule set.
+///
+/// See spec §5 for the three-path feed mimari. `apply_rules` snapshots the
+/// `ArcSwap` once per line so reloads landing mid-call never split a line.
 pub(crate) struct Pipeline {
-    sm: TuiModeSm,
+    sm: crate::ansi::AnsiSm,
     buffer: LineBuffer,
+    /// Accumulates CSI/ESC sequence bytes; routed to stdout (TUI toggle)
+    /// or `line_buffer` (SGR / other CSI / ESC final) at sequence completion.
+    sequence_scratch: Vec<u8>,
     rules: Arc<ArcSwap<Compiled>>,
+    /// Set when the current line contained at least one completed SGR
+    /// (CSI `m`). Reset on every newline. Drives the
+    /// `respect_existing_colors` skip behavior.
+    line_has_sgr: bool,
+    /// Set when an OSC/DCS/PM/APC string payload appeared mid-line. Forces
+    /// the rest of the line to pass verbatim (no rule application). See
+    /// the `StringPayloadByte` arm in `feed` for the buffer-drain rationale.
+    line_has_string_payload: bool,
 }
 
 impl Pipeline {
     pub(crate) fn new(rules: Arc<ArcSwap<Compiled>>) -> Self {
-        Pipeline { sm: TuiModeSm::new(), buffer: LineBuffer::new(), rules }
+        Pipeline {
+            sm: crate::ansi::AnsiSm::new(),
+            buffer: LineBuffer::new(),
+            sequence_scratch: Vec::with_capacity(64),
+            rules,
+            line_has_sgr: false,
+            line_has_string_payload: false,
+        }
     }
 
-    /// Feed a chunk from the PTY master into the pipeline; emit processed
-    /// output to `out`. May produce zero, one, or many writes per call.
+    /// Feed a chunk from the PTY master into the pipeline. See spec §5
+    /// for the three-path mimari (TUI passthrough / scratch accumulation /
+    /// OSC payload direct).
     pub(crate) fn feed<W: Write>(&mut self, chunk: &[u8], out: &mut W) -> std::io::Result<()> {
-        let mut cursor = 0;
-        while cursor < chunk.len() {
-            let pass_before = self.sm.passthrough();
-            let mut i = cursor;
-            while i < chunk.len() {
-                self.sm.step(chunk[i]);
-                i += 1;
-                if self.sm.passthrough() != pass_before {
-                    break;
+        for &byte in chunk {
+            if self.sm.tui_mode_active() {
+                // Path 1: TUI mode active — verbatim passthrough.
+                out.write_all(&[byte])?;
+                let _ = self.sm.step(byte);
+                continue;
+            }
+            let event = self.sm.step(byte);
+            match event {
+                crate::ansi::StepEvent::Data => {
+                    debug_assert!(self.sequence_scratch.is_empty());
+                    if let Some(line) = self.buffer.feed_byte_with_overflow(byte) {
+                        self.apply_or_passthrough(&line, out)?;
+                        // `feed_byte_with_overflow` strips the trailing `\n`
+                        // from newline-terminated lines (see line_buffer.rs);
+                        // restore it here so byte-for-byte fidelity holds.
+                        // The slice-API path (used for scratch drains below)
+                        // keeps `\n` in the line, so it does not need this.
+                        if byte == b'\n' {
+                            out.write_all(b"\n")?;
+                        }
+                    }
+                }
+                crate::ansi::StepEvent::SequenceByte => {
+                    self.sequence_scratch.push(byte);
+                }
+                crate::ansi::StepEvent::StringPayloadByte => {
+                    // Path 3: OSC/DCS-passthrough/PM/APC payload byte. To
+                    // preserve byte ordering with any pre-OSC content sitting
+                    // in the line buffer, drain the buffer's partial line to
+                    // stdout *verbatim* first; then flush any pending scratch
+                    // (introducer bytes) and write the payload byte direct.
+                    //
+                    // Decision: a line that contains OSC/DCS/PM/APC cannot be
+                    // rule-applied (the pre-OSC portion is already on the
+                    // wire). Mark `line_has_string_payload` so the post-OSC
+                    // remainder also passes verbatim at `\n`. This keeps
+                    // hyperlinks (`\e]8;;URL\aLABEL\e]8;;\a`) byte-intact
+                    // and avoids regex inside URL payloads. Spec §4.1.
+                    let partial = self.buffer.drain();
+                    if !partial.is_empty() {
+                        out.write_all(&partial)?;
+                    }
+                    if !self.sequence_scratch.is_empty() {
+                        out.write_all(&self.sequence_scratch)?;
+                        self.sequence_scratch.clear();
+                    }
+                    out.write_all(&[byte])?;
+                    self.line_has_string_payload = true;
+                }
+                crate::ansi::StepEvent::SequenceCompleted(kind) => {
+                    self.sequence_scratch.push(byte);
+                    self.dispatch_completed_sequence(kind, out)?;
                 }
             }
-            let segment = &chunk[cursor..i];
-            cursor = i;
+        }
+        Ok(())
+    }
 
-            let pass_after = self.sm.passthrough();
-            let became_passthrough = !pass_before && pass_after;
-            if pass_before || became_passthrough {
-                // Either we WERE in passthrough for the whole segment, OR we
-                // transitioned INTO passthrough mid-segment (segment ends with
-                // the trigger sequence). Either way, those bytes are terminal
-                // control sequences and must reach the terminal immediately —
-                // not via LineBuffer.
-                out.write_all(segment)?;
-            } else {
-                let (lines, overflow) = self.buffer.feed_with_overflow(segment);
+    /// Route a completed CSI/ESC sequence to its destination per
+    /// [`crate::ansi::SequenceKind`]. Consumes `sequence_scratch`.
+    fn dispatch_completed_sequence<W: Write>(
+        &mut self,
+        kind: crate::ansi::SequenceKind,
+        out: &mut W,
+    ) -> std::io::Result<()> {
+        use crate::ansi::SequenceKind;
+        match kind {
+            SequenceKind::TuiToggleOn | SequenceKind::TuiToggleOff => {
+                // Trigger sequence goes verbatim to stdout — terminal needs it.
+                out.write_all(&self.sequence_scratch)?;
+            }
+            SequenceKind::Sgr => {
+                let drained = std::mem::take(&mut self.sequence_scratch);
+                let (lines, overflow) = self.buffer.feed_with_overflow(&drained);
                 if let Some(Error::BufferOverflow { cap }) = overflow {
                     crate::log::warn_msg!("line buffer overflowed; cap={cap}");
                 }
                 for line in lines {
-                    apply_rules(&line, &self.rules, out)?;
+                    self.apply_or_passthrough(&line, out)?;
                 }
+                self.line_has_sgr = true;
+            }
+            SequenceKind::OtherCsi
+            | SequenceKind::EscFinal
+            | SequenceKind::EscIntermediateFinal => {
+                let drained = std::mem::take(&mut self.sequence_scratch);
+                let (lines, overflow) = self.buffer.feed_with_overflow(&drained);
+                if let Some(Error::BufferOverflow { cap }) = overflow {
+                    crate::log::warn_msg!("line buffer overflowed; cap={cap}");
+                }
+                for line in lines {
+                    self.apply_or_passthrough(&line, out)?;
+                }
+            }
+        }
+        self.sequence_scratch.clear();
+        Ok(())
+    }
+
+    /// Apply rules to `line`, OR pass it through verbatim. Rules are skipped
+    /// when either:
+    /// - The rule snapshot has `respect_existing_colors = true` and the line
+    ///   carried any SGR (spec §4.4, Karar 11); or
+    /// - The line had an OSC/DCS/PM/APC string payload (the pre-string
+    ///   portion was already drained verbatim — re-applying rules to the
+    ///   post-string remainder alone would split styling across the line).
+    ///
+    /// Resets both line flags after handling.
+    fn apply_or_passthrough<W: Write>(&mut self, line: &[u8], out: &mut W) -> std::io::Result<()> {
+        // Karar 11: snapshot Compiled at line boundary.
+        let compiled = self.rules.load_full();
+        let skip_rules =
+            self.line_has_string_payload || (compiled.respect_existing_colors && self.line_has_sgr);
+        if skip_rules {
+            out.write_all(line)?;
+        } else {
+            apply_rules(line, &self.rules, out)?;
+        }
+        self.line_has_sgr = false;
+        self.line_has_string_payload = false;
+        Ok(())
+    }
+
+    /// Drain any in-flight `sequence_scratch` into the line buffer + emit
+    /// completed lines. Called by `tick` (on idle) and `drain` (on shutdown)
+    /// to ensure unterminated CSI/ESC bytes do not get stuck forever.
+    fn flush_partial<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
+        if !self.sequence_scratch.is_empty() {
+            let drained = std::mem::take(&mut self.sequence_scratch);
+            let (lines, _) = self.buffer.feed_with_overflow(&drained);
+            for line in lines {
+                self.apply_or_passthrough(&line, out)?;
             }
         }
         Ok(())
@@ -217,10 +261,10 @@ impl Pipeline {
     /// Flush any pending partial line if it has been idle long enough.
     ///
     /// Called from the poll-driven output thread on every 50ms timeout
-    /// (see `runtime::spawn_output_thread`). In passthrough mode the
+    /// (see `runtime::spawn_output_thread`). In TUI passthrough mode the
     /// pipeline holds no buffered content, so this is a no-op.
     pub(crate) fn tick<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
-        if self.sm.passthrough() {
+        if self.sm.tui_mode_active() {
             return Ok(());
         }
         // `checked_sub` may return None very early in the process lifetime
@@ -229,137 +273,21 @@ impl Pipeline {
         let Some(cutoff) = Instant::now().checked_sub(FLUSH_TIMEOUT) else {
             return Ok(());
         };
+        self.flush_partial(out)?;
         if let Some(partial) = self.buffer.flush_if_stale(cutoff) {
-            apply_rules(&partial, &self.rules, out)?;
+            self.apply_or_passthrough(&partial, out)?;
         }
         Ok(())
     }
 
     /// Drain remaining bytes at shutdown.
     pub(crate) fn drain<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
+        self.flush_partial(out)?;
         let remaining = self.buffer.drain();
         if !remaining.is_empty() {
-            apply_rules(&remaining, &self.rules, out)?;
+            self.apply_or_passthrough(&remaining, out)?;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tui_mode_tests {
-    use super::*;
-
-    #[test]
-    fn alt_screen_modern_enters_on_1049h() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[?1049h" {
-            sm.step(b);
-        }
-        assert!(sm.passthrough());
-    }
-
-    #[test]
-    fn alt_screen_exits_on_1049l() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[?1049h\x1b[?1049l" {
-            sm.step(b);
-        }
-        assert!(!sm.passthrough());
-    }
-
-    #[test]
-    fn accepts_legacy_alt_screen_variants() {
-        for seq in [b"\x1b[?47h".as_slice(), b"\x1b[?1047h".as_slice()] {
-            let mut sm = TuiModeSm::new();
-            for &b in seq {
-                sm.step(b);
-            }
-            assert!(sm.passthrough(), "expected passthrough after {seq:?}");
-        }
-    }
-
-    #[test]
-    fn bracketed_paste_enters_on_2004h() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[?2004h" {
-            sm.step(b);
-        }
-        assert!(sm.passthrough());
-    }
-
-    #[test]
-    fn mouse_tracking_enters_on_1000h_1002h_1003h_1006h() {
-        for code in [b"1000", b"1002", b"1003", b"1006"] {
-            let mut sm = TuiModeSm::new();
-            let mut seq = b"\x1b[?".to_vec();
-            seq.extend_from_slice(code);
-            seq.push(b'h');
-            for &b in &seq {
-                sm.step(b);
-            }
-            assert!(sm.passthrough(), "expected passthrough after {code:?}h");
-        }
-    }
-
-    #[test]
-    fn multiple_modes_active_simultaneously() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[?2004h\x1b[?1000h" {
-            sm.step(b);
-        }
-        assert!(sm.passthrough());
-        for &b in b"\x1b[?2004l" {
-            sm.step(b);
-        }
-        assert!(sm.passthrough(), "mouse mode still on");
-        for &b in b"\x1b[?1000l" {
-            sm.step(b);
-        }
-        assert!(!sm.passthrough(), "all modes cleared");
-    }
-
-    #[test]
-    fn split_across_chunks_still_triggers() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[?104" {
-            sm.step(b);
-        }
-        assert!(!sm.passthrough());
-        for &b in b"9h" {
-            sm.step(b);
-        }
-        assert!(sm.passthrough());
-    }
-
-    #[test]
-    fn other_csi_does_not_trigger() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[31m" {
-            sm.step(b);
-        }
-        assert!(!sm.passthrough());
-    }
-
-    #[test]
-    fn unknown_dec_private_mode_does_not_trigger() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1b[?25h" {
-            sm.step(b);
-        }
-        assert!(!sm.passthrough());
-    }
-
-    #[test]
-    fn lone_esc_does_not_corrupt_state() {
-        let mut sm = TuiModeSm::new();
-        for &b in b"\x1bA" {
-            sm.step(b);
-        }
-        assert!(!sm.passthrough());
-        for &b in b"\x1b[?1049h" {
-            sm.step(b);
-        }
-        assert!(sm.passthrough());
     }
 }
 
@@ -496,5 +424,64 @@ mod pipeline_tests {
             post_exit.windows(2).any(|w| w == b"\x1b["),
             "post-exit content should be rule-wrapped: {post_exit:?}"
         );
+    }
+
+    #[test]
+    fn alt_screen_entry_sequence_not_regexed() {
+        // C1 regression guard from spec §5.1. \e[?1049h must reach stdout
+        // byte-for-byte, NOT through apply_rules.
+        let compiled =
+            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .unwrap();
+        let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
+        let mut pipeline = Pipeline::new(handle);
+        let mut out = Vec::new();
+        pipeline.feed(b"\x1b[?1049h", &mut out).unwrap();
+        assert_eq!(
+            out,
+            b"\x1b[?1049h",
+            "trigger sequence must reach stdout verbatim; got {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    #[test]
+    fn three_path_preserves_byte_ordering_with_osc() {
+        let compiled =
+            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .unwrap();
+        let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
+        let mut pipeline = Pipeline::new(handle);
+        let mut out = Vec::new();
+        pipeline.feed(b"error \x1b]8;;https://x\x07click\x1b]8;;\x07 tail\n", &mut out).unwrap();
+        assert!(
+            out.windows(b"\x1b]8;;https://x\x07click\x1b]8;;\x07".len())
+                .any(|w| w == b"\x1b]8;;https://x\x07click\x1b]8;;\x07"),
+            "OSC sequence must appear in output; got: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    #[test]
+    fn sgr_in_line_with_respect_true_skips_rules() {
+        // \e[31mERROR\e[0m 192.168.1.1 — respect_existing_colors=true → verbatim.
+        use crate::config::{Config, GeneralSection, UserRule};
+        let cfg = Config {
+            general: GeneralSection { respect_existing_colors: true, ..GeneralSection::default() },
+            rules: Vec::<UserRule>::new(),
+        };
+        let compiled = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap();
+        let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
+        let mut pipeline = Pipeline::new(handle);
+        let mut out = Vec::new();
+        pipeline.feed(b"\x1b[31mERROR\x1b[0m 192.168.1.1\n", &mut out).unwrap();
+        // Output should match input byte-for-byte (no tayf SGR injection).
+        assert_eq!(out, b"\x1b[31mERROR\x1b[0m 192.168.1.1\n");
     }
 }

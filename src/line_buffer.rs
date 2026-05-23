@@ -87,9 +87,6 @@ impl LineBuffer {
     /// except the trailing `\n` is stripped from the returned line for
     /// consumers that route bytes through `AnsiSm::step` (spec §6.1). Used
     /// by the per-byte pipeline path in `pipeline::Pipeline::feed`.
-    // reason: wired up by Pipeline in v0.3.0 Task 10; held behind the test
-    // suite until then so the per-byte API ships alongside its consumer.
-    #[allow(dead_code)]
     pub(crate) fn feed_byte_with_overflow(&mut self, byte: u8) -> Option<Vec<u8>> {
         let (mut lines, overflow) = self.feed_with_overflow(&[byte]);
         if let Some(Error::BufferOverflow { cap }) = overflow {

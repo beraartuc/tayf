@@ -409,9 +409,6 @@ pub(crate) struct Compiled {
     pub(crate) set: RegexSet,
     pub(crate) individuals: Vec<Regex>,
     pub(crate) styles: Vec<Style>,
-    #[allow(dead_code)]
-    // reason: consumed by Task 10's pipeline refactor; wired now so the
-    // ArcSwap<Compiled> snapshot already carries the flag at line boundary
     /// When `true`, lines containing any SGR (CSI `m`) byte skip rule
     /// application. Read from `[general] respect_existing_colors` and
     /// snapshotted at line boundary via the enclosing `ArcSwap<Compiled>`

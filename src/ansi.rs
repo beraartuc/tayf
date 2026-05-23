@@ -24,10 +24,6 @@
 //! folding their transitions in. See spec §3.4 (the locked transition
 //! table) before extending.
 
-#![allow(dead_code)]
-// reason: AnsiSm is feature-complete after Task 7 but unused until Task 8
-// wires it into Pipeline. Remove this allow when Task 8 lands.
-
 /// 16-state Williams VT500 subset (14 canonical + 2 ST peek-ahead).
 /// See spec §3.2 for the canonical states and §3.4 for the peek-ahead
 /// transitions on `OscEsc` / `DcsEsc` / `SosPmApcEsc`.
