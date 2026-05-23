@@ -108,6 +108,48 @@ fn detect_from_osc11() -> Option<BgTheme> {
     None
 }
 
+/// Parse a hex channel of 1..=4 ASCII hex nibbles to a 0.0..=1.0 float.
+/// `RR` → 0xRR / 0xFF; `RRRR` → 0xRRRR / 0xFFFF. Both forms scale to [0,1].
+#[allow(dead_code)]
+// reason: consumed by the OSC 11 parser in a subsequent v0.3.1 task; landed
+// alongside `luminance_to_theme` so each helper has a focused TDD commit.
+fn parse_hex_channel(bytes: &[u8]) -> Option<f32> {
+    let len = bytes.len();
+    if !(1..=4).contains(&len) {
+        return None;
+    }
+    // Channel bytes are guaranteed ASCII hex digits when well-formed.
+    // `from_utf8` over ≤4 bytes is bounded; on non-ASCII / non-hex we
+    // surface None via the `str::from_utf8` and `from_str_radix` checks.
+    let s = std::str::from_utf8(bytes).ok()?;
+    let n = u32::from_str_radix(s, 16).ok()?;
+    let max: u32 = match len {
+        1 => 0xF,
+        2 => 0xFF,
+        3 => 0xFFF,
+        4 => 0xFFFF,
+        _ => unreachable!("len bounded by the early check above"),
+    };
+    #[allow(clippy::cast_precision_loss)]
+    // reason: max is at most 0xFFFF (65535), well within f32 mantissa range
+    Some(n as f32 / max as f32)
+}
+
+/// Rec. 601 weighted luminance with threshold 0.5 (inclusive → Light).
+/// Boundary direction (`>=` not `>`) ensures deterministic mapping when
+/// float arithmetic lands exactly on 0.5.
+#[allow(dead_code)]
+// reason: consumed by the OSC 11 parser in a subsequent v0.3.1 task; landed
+// alongside `parse_hex_channel` so each helper has a focused TDD commit.
+fn luminance_to_theme(r: f32, g: f32, b: f32) -> BgTheme {
+    let y = 0.299 * r + 0.587 * g + 0.114 * b;
+    if y >= 0.5 {
+        BgTheme::Light
+    } else {
+        BgTheme::Dark
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +182,52 @@ mod tests {
         assert_eq!(parse_colorfgbg("abc"), None);
         assert_eq!(parse_colorfgbg("0;99"), None);
         assert_eq!(parse_colorfgbg("0;-1"), None);
+    }
+
+    #[test]
+    fn parse_hex_channel_1_nibble() {
+        let v = parse_hex_channel(b"f").unwrap();
+        // 0xF / 0xF = 1.0
+        assert!((v - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_hex_channel_2_nibble() {
+        let v = parse_hex_channel(b"ff").unwrap();
+        // 0xFF / 0xFF = 1.0
+        assert!((v - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_hex_channel_4_nibble_half() {
+        let v = parse_hex_channel(b"7fff").unwrap();
+        // 0x7FFF / 0xFFFF ≈ 0.4999847412
+        #[allow(clippy::cast_precision_loss)]
+        // reason: 0xFFFF (65535) fits exactly in f32 mantissa; test-only constants
+        let expected = 0x7FFF_u32 as f32 / 0xFFFF_u32 as f32;
+        assert!((v - expected).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_hex_channel_rejects_zero_length_and_too_long() {
+        assert_eq!(parse_hex_channel(b""), None);
+        assert_eq!(parse_hex_channel(b"abcde"), None);
+    }
+
+    #[test]
+    fn parse_hex_channel_rejects_non_hex() {
+        assert_eq!(parse_hex_channel(b"zz"), None);
+    }
+
+    #[test]
+    fn luminance_threshold_inclusive_at_half() {
+        // RGB (0.5, 0.5, 0.5) → Y = 0.5 (modulo IEEE 754 rounding).
+        // Threshold `>= 0.5 → Light` makes the boundary deterministic.
+        assert_eq!(luminance_to_theme(0.5, 0.5, 0.5), BgTheme::Light);
+    }
+
+    #[test]
+    fn luminance_dark_gray_below_threshold() {
+        assert_eq!(luminance_to_theme(0.2, 0.2, 0.2), BgTheme::Dark);
     }
 }
