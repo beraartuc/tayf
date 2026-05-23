@@ -16,7 +16,6 @@
 //! - [`validate_theme_rules`] — schema-shape check applied after parsing.
 //! - [`synthetic_path`] — embedded source label used when feeding a theme through the user-config merge.
 
-use crate::config::UserRule;
 use crate::error::Error;
 use crate::Result;
 
@@ -54,60 +53,82 @@ pub(crate) fn names() -> &'static [&'static str] {
     &THEME_NAMES
 }
 
-/// Validate the shape of parsed theme rules.
+/// Validate the shape of a theme's parsed config (`[general]` and
+/// `[[rules]]`). Themes may only override existing built-in styles,
+/// never define new rules, change patterns, set `enabled = false`, or
+/// carry a `[general]` section.
 ///
-/// Themes may only override existing built-in styles, never define new
-/// rules or change patterns. Specifically:
-/// - every [`UserRule::name`] must match an entry in
-///   [`crate::rules::BUILTIN_NAMES`];
-/// - [`UserRule::pattern`] must be `None`;
-/// - [`UserRule::enabled`] must be `true` (the serde default; explicit
-///   `enabled = false` is rejected).
+/// This function is **fail-collected** — every violation across the whole
+/// config is gathered into a single [`Error::ThemeValidation`]. Users see
+/// every problem in one save-and-rerun cycle.
 ///
-/// `theme_name` is interpolated into error messages so the surfaced
-/// [`Error::Config`] points at the offending preset.
+/// Per-rule, the first violation that fires is `UnknownName`; subsequent
+/// gates (`pattern`, `enabled`) for the SAME rule are skipped (Rev2 I-9
+/// — "fix the name first" subsumes the rest of the diagnostics for that
+/// rule). Other rules continue independently.
+///
+/// `theme_name` is the requested theme (e.g. `dark`); `source_path` is
+/// the embedded synthetic path for presets or the canonical disk path
+/// for disk themes. Both flow into [`Error::ThemeValidation`].
 ///
 /// # Errors
-/// Returns [`Error::Config`] on the first violation. The error's `path`
-/// is a synthetic `<embedded:theme/{name}>` label so downstream display
-/// makes the source clear without claiming a real filesystem path.
-pub(crate) fn validate_theme_rules(theme_name: &str, rules: &[UserRule]) -> Result<()> {
+/// Returns [`Error::ThemeValidation`] with at least one
+/// [`ThemeRuleError`] when any violation is found. Returns `Ok(())` when
+/// the parsed config matches the theme contract exactly.
+pub(crate) fn validate_theme_rules(
+    theme_name: &str,
+    source_path: &str,
+    cfg: &crate::config::Config,
+) -> Result<()> {
     use std::collections::HashSet;
     let known: HashSet<&str> = crate::rules::BUILTIN_NAMES.iter().copied().collect();
-    let path = synthetic_path(theme_name);
-    for r in rules {
+    let mut errors: Vec<crate::error::ThemeRuleError> = Vec::new();
+
+    // Rev2 Q4 — [general] section forbidden in disk themes. Comparison
+    // against GeneralSection::default() catches any field deviation
+    // additively (future fields automatically gated).
+    if cfg.general != crate::config::GeneralSection::default() {
+        errors.push(crate::error::ThemeRuleError {
+            rule_name: "<general>".to_owned(),
+            kind: crate::error::ThemeRuleErrorKind::GeneralSectionForbidden,
+        });
+    }
+
+    for r in &cfg.rules {
+        // Rev2 I-9 — UnknownName subsumes pattern/enabled checks for the
+        // same rule; user must rename before subsequent gates have
+        // meaningful semantics. Other rules continue independently
+        // (fail-collected story).
         if !known.contains(r.name.as_str()) {
-            return Err(Error::Config {
-                path,
-                line: 0,
-                message: format!(
-                    "rule {n:?}: not a built-in name; themes may only override built-ins",
-                    n = r.name
-                ),
+            errors.push(crate::error::ThemeRuleError {
+                rule_name: r.name.clone(),
+                kind: crate::error::ThemeRuleErrorKind::UnknownName,
             });
+            continue;
         }
         if r.pattern.is_some() {
-            return Err(Error::Config {
-                path,
-                line: 0,
-                message: format!(
-                    "rule {n:?}: must not set 'pattern' (themes only override style)",
-                    n = r.name
-                ),
+            errors.push(crate::error::ThemeRuleError {
+                rule_name: r.name.clone(),
+                kind: crate::error::ThemeRuleErrorKind::PatternForbidden,
             });
         }
         if !r.enabled {
-            return Err(Error::Config {
-                path,
-                line: 0,
-                message: format!(
-                    "rule {n:?}: must not set 'enabled = false' (themes only override style)",
-                    n = r.name
-                ),
+            errors.push(crate::error::ThemeRuleError {
+                rule_name: r.name.clone(),
+                kind: crate::error::ThemeRuleErrorKind::EnabledFalseForbidden,
             });
         }
     }
-    Ok(())
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::error::Error::ThemeValidation {
+            theme: theme_name.to_owned(),
+            source_path: source_path.to_owned(),
+            errors,
+        })
+    }
 }
 
 /// Synthetic path label used when feeding a theme through the user-config
@@ -159,40 +180,56 @@ mod tests {
         }
     }
 
+    fn cfg_with_rules(rules: Vec<UserRule>) -> crate::config::Config {
+        crate::config::Config { general: crate::config::GeneralSection::default(), rules }
+    }
+
     #[test]
     fn validate_accepts_well_formed_theme() {
-        let rs = vec![rule("ipv4"), rule("log_level")];
-        validate_theme_rules("dark", &rs).expect("valid theme rules should pass");
+        let cfg = cfg_with_rules(vec![rule("ipv4"), rule("log_level")]);
+        validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)
+            .expect("valid theme rules should pass");
     }
 
     #[test]
     fn validate_rejects_unknown_builtin_name() {
-        let rs = vec![rule("nothere")];
-        let err = validate_theme_rules("dark", &rs).expect_err("unknown name must error");
-        assert!(
-            err.to_string().contains("nothere"),
-            "error must mention the offending name; got {err}"
-        );
-        assert!(
-            err.to_string().contains("themes may only override"),
-            "error must explain the rule"
-        );
+        let cfg = cfg_with_rules(vec![rule("nothere")]);
+        let err = validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)
+            .expect_err("unknown name must error");
+        let Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].rule_name, "nothere");
+        assert_eq!(errors[0].kind, crate::error::ThemeRuleErrorKind::UnknownName);
     }
 
     #[test]
     fn validate_rejects_pattern_field() {
         let mut r = rule("ipv4");
         r.pattern = Some(r"\d+".into());
-        let err = validate_theme_rules("dark", &[r]).expect_err("pattern must error");
-        assert!(err.to_string().contains("must not set 'pattern'"), "got {err}");
+        let cfg = cfg_with_rules(vec![r]);
+        let err = validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)
+            .expect_err("pattern must error");
+        let Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, crate::error::ThemeRuleErrorKind::PatternForbidden);
     }
 
     #[test]
     fn validate_rejects_enabled_false() {
         let mut r = rule("ipv4");
         r.enabled = false;
-        let err = validate_theme_rules("dark", &[r]).expect_err("enabled=false must error");
-        assert!(err.to_string().contains("'enabled = false'"), "got {err}");
+        let cfg = cfg_with_rules(vec![r]);
+        let err = validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)
+            .expect_err("enabled=false must error");
+        let Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, crate::error::ThemeRuleErrorKind::EnabledFalseForbidden);
     }
 
     #[test]
@@ -202,9 +239,10 @@ mod tests {
         // between the embedded TOML and the validation rules at unit-test time.
         for &name in names() {
             let src = load(name).unwrap();
-            let cfg = crate::config::parse(&synthetic_path(name), src)
+            let synth = synthetic_path(name);
+            let cfg = crate::config::parse(&synth, src)
                 .unwrap_or_else(|e| panic!("theme {name:?} did not parse: {e}"));
-            validate_theme_rules(name, &cfg.rules)
+            validate_theme_rules(name, &synth, &cfg)
                 .unwrap_or_else(|e| panic!("theme {name:?} failed validation: {e}"));
             assert_eq!(
                 cfg.rules.len(),
@@ -212,5 +250,113 @@ mod tests {
                 "theme {name:?} should override every built-in"
             );
         }
+    }
+
+    #[test]
+    fn validate_returns_ok_when_all_rules_valid() {
+        let cfg = cfg_with_rules(vec![rule("ipv4"), rule("log_level")]);
+        validate_theme_rules("dark", "<embedded:theme/dark>", &cfg).expect("valid");
+    }
+
+    #[test]
+    fn validate_collects_multiple_errors_in_single_pass() {
+        let mut bad_pattern = rule("ipv4");
+        bad_pattern.pattern = Some(r"\d+".into());
+        let mut bad_disabled = rule("log_level");
+        bad_disabled.enabled = false;
+        let unknown = rule("nope_typo");
+        let cfg = cfg_with_rules(vec![bad_pattern, bad_disabled, unknown]);
+
+        let err = validate_theme_rules("x", "<x>", &cfg).expect_err("should fail");
+        let crate::error::Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation, got something else");
+        };
+        assert_eq!(errors.len(), 3, "three independent rules => three errors: {errors:?}");
+    }
+
+    #[test]
+    fn validate_skips_other_gates_after_unknown_name() {
+        let mut r = rule("nope_typo");
+        r.pattern = Some(r"\d+".into());
+        r.enabled = false;
+        let cfg = cfg_with_rules(vec![r]);
+
+        let err = validate_theme_rules("x", "<x>", &cfg).expect_err("should fail");
+        let crate::error::Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors.len(), 1, "UnknownName subsumes other gates: {errors:?}");
+        assert_eq!(errors[0].kind, crate::error::ThemeRuleErrorKind::UnknownName);
+    }
+
+    #[test]
+    fn validate_continues_with_other_rules_after_unknown_name() {
+        let unknown = rule("nope_typo");
+        let mut bad_pattern = rule("ipv4");
+        bad_pattern.pattern = Some(r"\d+".into());
+        let cfg = cfg_with_rules(vec![unknown, bad_pattern]);
+
+        let err = validate_theme_rules("x", "<x>", &cfg).expect_err("should fail");
+        let crate::error::Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors.len(), 2, "next rule should still be checked: {errors:?}");
+        assert_eq!(errors[0].kind, crate::error::ThemeRuleErrorKind::UnknownName);
+        assert_eq!(errors[1].kind, crate::error::ThemeRuleErrorKind::PatternForbidden);
+    }
+
+    #[test]
+    fn validate_preserves_rule_order_in_errors_vec() {
+        let unknown1 = rule("first_typo");
+        let unknown2 = rule("second_typo");
+        let cfg = cfg_with_rules(vec![unknown1, unknown2]);
+
+        let err = validate_theme_rules("x", "<x>", &cfg).expect_err("should fail");
+        let crate::error::Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors[0].rule_name, "first_typo");
+        assert_eq!(errors[1].rule_name, "second_typo");
+    }
+
+    #[test]
+    fn validate_carries_source_path_into_error() {
+        let cfg = cfg_with_rules(vec![rule("nope")]);
+        let err = validate_theme_rules("mine", "/home/u/.config/tayf/themes/mine.toml", &cfg)
+            .expect_err("should fail");
+        let crate::error::Error::ThemeValidation { source_path, theme, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(theme, "mine");
+        assert_eq!(source_path, "/home/u/.config/tayf/themes/mine.toml");
+    }
+
+    #[test]
+    fn validate_rejects_general_section_in_disk_theme() {
+        // [general] non-default => GeneralSectionForbidden push.
+        let mut cfg = cfg_with_rules(vec![rule("ipv4")]);
+        cfg.general.respect_existing_colors = false; // deviation from default
+
+        let err = validate_theme_rules("mine", "<mine>", &cfg).expect_err("should fail");
+        let crate::error::Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        let has_general = errors
+            .iter()
+            .any(|e| matches!(e.kind, crate::error::ThemeRuleErrorKind::GeneralSectionForbidden));
+        assert!(has_general, "GeneralSectionForbidden missing: {errors:?}");
+        let general_entry = errors
+            .iter()
+            .find(|e| matches!(e.kind, crate::error::ThemeRuleErrorKind::GeneralSectionForbidden))
+            .unwrap();
+        assert_eq!(general_entry.rule_name, "<general>");
+    }
+
+    #[test]
+    fn validate_accepts_default_general_section() {
+        // GeneralSection::default() => no GeneralSectionForbidden push.
+        let cfg = cfg_with_rules(vec![rule("ipv4")]);
+        assert_eq!(cfg.general, crate::config::GeneralSection::default());
+        validate_theme_rules("mine", "<mine>", &cfg).expect("default general is fine");
     }
 }

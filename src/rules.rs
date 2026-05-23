@@ -504,7 +504,7 @@ impl Compiled {
             let src = crate::themes::load(name)?;
             let synth = crate::themes::synthetic_path(name);
             let theme_cfg = crate::config::parse(&synth, src)?;
-            crate::themes::validate_theme_rules(name, &theme_cfg.rules)?;
+            crate::themes::validate_theme_rules(name, &synth, &theme_cfg)?;
             crate::config::apply_user_rules(&synth, &mut rules, &theme_cfg.rules)?;
         }
 
