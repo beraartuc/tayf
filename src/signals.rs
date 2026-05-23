@@ -2,7 +2,12 @@
 //!
 //! Spawns a dedicated thread that consumes signals from the `signal_hook`
 //! iterator API. The thread forwards `SIGWINCH` to the PTY master and
-//! `SIGINT`/`SIGTERM` to the child's process group.
+//! `SIGINT`/`SIGTERM`/`SIGHUP` to the child's process group. `SIGHUP`
+//! additionally triggers a config reload when the hot-reload pipeline
+//! is wired (`reload_tx` is `Some`); when not wired (no config file
+//! present or `--no-hot-reload` set), `SIGHUP` is still forwarded — a
+//! BEHAVIOR CHANGE from v0.2.1–v0.3.2, where `SIGHUP` was silently
+//! dropped without a forward fallback (see CHANGELOG v0.3.3).
 //!
 //! Per CLAUDE.md §3, terminal signals must reach the child's process *group*
 //! (`killpg`) and not the child PID alone — otherwise foreground programs
@@ -45,9 +50,11 @@ impl Drop for SignalGuard {
 /// pid) forwarding is silently skipped, since there is no group to target.
 /// `reload_tx`, when `Some`, receives a
 /// [`ReloadRequest::SignalHup`](crate::reload::ReloadRequest::SignalHup) on
-/// every delivered `SIGHUP`. When `None`, `SIGHUP` is accepted by the
-/// signal iterator but otherwise ignored (no panic, no default
-/// disposition).
+/// every delivered `SIGHUP` IN ADDITION to the SIGHUP being forwarded to
+/// the child's process group. When `None`, `SIGHUP` is still forwarded
+/// to the child PG — only the reload trigger is skipped. v0.3.3 fixed a
+/// v0.2.1 regression where `SIGHUP` with `None` `reload_tx` was silently
+/// dropped (CHANGELOG v0.3.3).
 ///
 /// # Errors
 /// Returns [`Error::Signal`] if `signal_hook` cannot register the requested
@@ -82,8 +89,26 @@ pub(crate) fn spawn_handler(
                         }
                     }
                     SIGHUP => {
-                        // Best-effort: orchestrator may have exited
-                        // (channel closed). Silent drop in that case.
+                        // v0.3.3: SIGHUP is forwarded to the child process
+                        // group unconditionally, mirroring SIGINT/SIGTERM.
+                        // This fixes a v0.2.1 regression where SIGHUP was
+                        // silently dropped when hot-reload was not wired
+                        // (no config file present, or --no-hot-reload),
+                        // leaving the child shell unaware of tmux detach /
+                        // terminal close and orphaning its foreground
+                        // processes. Order: forward first (kernel path,
+                        // immediate), reload-notify after (mpsc channel).
+                        // The post-forward reload is intentional residual
+                        // work — see spec §1.2 (Rev2 I-4): the child may
+                        // die from the forwarded HUP before the reload
+                        // completes; the wasted work is benign (no
+                        // functional impact, minor info_msg! stderr
+                        // artifact gated by TAYF_LOG=info).
+                        if let Some(pid) = child_pid {
+                            if let Ok(pid_i32) = i32::try_from(pid) {
+                                forward_to_pgid(pid_i32, sig);
+                            }
+                        }
                         if let Some(tx) = &reload_tx {
                             let _ = tx.send(ReloadRequest::SignalHup);
                         }

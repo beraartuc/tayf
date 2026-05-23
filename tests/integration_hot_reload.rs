@@ -237,6 +237,14 @@ style = { fg = "yellow", bold = true }
 
     thread::sleep(Duration::from_millis(300));
 
+    // v0.3.3 BEHAVIOR CHANGE: tayf now forwards SIGHUP to the child
+    // process group unconditionally (fixing a v0.2.1 silent-drop
+    // regression — see CHANGELOG v0.3.3). /bin/sh's default HUP
+    // disposition is termination, which would kill the shell before
+    // we could exercise the reload-still-happened assertion. Install
+    // a trap that ignores HUP so the shell stays alive; the reload
+    // pipeline still fires independently via the mpsc channel.
+    writer.write_all(b"trap '' HUP\n").expect("write hup trap");
     writer.write_all(b"echo ERROR before-sighup\n").expect("write before");
 
     std::fs::write(
@@ -249,8 +257,21 @@ style = { fg = "red", bold = true }
     )
     .expect("write red");
 
+    // Synchronization barrier: the `trap '' HUP` bytes above were just
+    // handed to the PTY master fd, but the child shell still has to
+    // read them, lex the line, and actually install the trap. Without
+    // a wait here, tayf's signal thread can deliver SIGHUP to the
+    // process group (via forward_to_pgid) BEFORE sh has processed the
+    // trap line — and sh's default HUP disposition is termination, so
+    // the shell dies with "Input/output error" and the rest of the
+    // test fails. 200ms is generous on every platform we target; bump
+    // to 250ms if this resurfaces as flaky.
+    thread::sleep(Duration::from_millis(200));
+
     // SIGHUP — bypasses the file watcher debounce window. The
-    // orchestrator runs reload_once immediately.
+    // orchestrator runs reload_once immediately. (The shell also
+    // receives the HUP per v0.3.3 forwarding, but ignores it via
+    // the trap installed above.)
     let pid = i32::try_from(child.process_id().expect("child pid")).expect("pid fits i32");
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGHUP)
         .expect("kill SIGHUP");
