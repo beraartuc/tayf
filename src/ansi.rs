@@ -78,8 +78,6 @@ pub(crate) enum StepEvent {
     /// Asymmetric with the non-string cap path: there, the byte is
     /// consumed as `Data`. Here, the byte is NOT consumed; Pipeline must
     /// re-step. See v0.3.1 spec §4 for rationale.
-    // reason: variant is reserved in this commit; SM emission lands in Task 11.
-    #[allow(dead_code)]
     ForceStringTerminate,
 }
 
@@ -203,10 +201,29 @@ impl AnsiSm {
         // byte is consumed as a Data event so the byte stream stays in sync
         // (it was inside a sequence so visually noise anyway).
         if self.sequence_bytes_seen >= SEQUENCE_BYTES_CAP {
+            // v0.3.1 (I4 fix): if cap fires while in any string state, emit
+            // ForceStringTerminate so Pipeline writes a synthetic ST and re-steps
+            // the byte. Otherwise (non-string state, e.g. mid-CSI), consume the
+            // byte as Data — preserves v0.3.0 semantics. See v0.3.1 spec §4.2.
+            let prior_in_string_state = matches!(
+                self.state,
+                SmState::OscString
+                    | SmState::OscEsc
+                    | SmState::DcsEntry
+                    | SmState::DcsParam
+                    | SmState::DcsIntermediate
+                    | SmState::DcsPassthrough
+                    | SmState::DcsEsc
+                    | SmState::SosPmApcString
+                    | SmState::SosPmApcEsc
+            );
             self.state = SmState::Ground;
             self.accum = 0;
             self.private_mode = false;
             self.sequence_bytes_seen = 0;
+            if prior_in_string_state {
+                return StepEvent::ForceStringTerminate;
+            }
             return StepEvent::Data;
         }
 
@@ -1018,5 +1035,66 @@ mod ansi_tests {
         // Last byte should emit StringPayloadByte — payload passes through
         // even though sequence is unterminated. Drain is Pipeline's job.
         assert_eq!(events.last(), Some(&StepEvent::StringPayloadByte));
+    }
+
+    #[test]
+    fn cap_fire_in_osc_string_emits_force_terminate() {
+        let mut sm = AnsiSm::new();
+        // Open OSC: \e]2;
+        sm.step(0x1b);
+        sm.step(b']');
+        sm.step(b'2');
+        sm.step(b';');
+        // Burn through (cap - bytes_already_seen) more bytes to trigger cap.
+        // sequence_bytes_seen: 1 (esc) + 1 (]) + 1 (2) + 1 (;) = 4.
+        // Need cap (4096) more steps to reach the trigger.
+        for _ in 0..(super::SEQUENCE_BYTES_CAP - 4) {
+            let _ = sm.step(b'a');
+        }
+        // Next step is the cap-trigger. We're in OscString state.
+        let evt = sm.step(b'a');
+        assert!(
+            matches!(evt, StepEvent::ForceStringTerminate),
+            "expected ForceStringTerminate, got {evt:?}"
+        );
+        // Pipeline contract: re-step → byte classified fresh as Data.
+        let evt2 = sm.step(b'a');
+        assert_eq!(evt2, StepEvent::Data, "after reset to Ground, byte must be Data");
+    }
+
+    #[test]
+    fn cap_fire_in_dcs_passthrough_emits_force_terminate() {
+        let mut sm = AnsiSm::new();
+        // Open DCS with header: \eP$q
+        sm.step(0x1b);
+        sm.step(b'P');
+        sm.step(b'$');
+        sm.step(b'q');
+        // sequence_bytes_seen: 1 + 1 + 1 + 1 = 4 (DcsPassthrough now).
+        for _ in 0..(super::SEQUENCE_BYTES_CAP - 4) {
+            let _ = sm.step(b'x');
+        }
+        let evt = sm.step(b'x');
+        assert!(
+            matches!(evt, StepEvent::ForceStringTerminate),
+            "expected ForceStringTerminate from DcsPassthrough, got {evt:?}"
+        );
+    }
+
+    #[test]
+    fn cap_fire_in_sos_pm_apc_string_emits_force_terminate() {
+        let mut sm = AnsiSm::new();
+        // Open PM: \e^
+        sm.step(0x1b);
+        sm.step(b'^');
+        // sequence_bytes_seen: 1 + 1 = 2 (SosPmApcString now).
+        for _ in 0..(super::SEQUENCE_BYTES_CAP - 2) {
+            let _ = sm.step(b'p');
+        }
+        let evt = sm.step(b'p');
+        assert!(
+            matches!(evt, StepEvent::ForceStringTerminate),
+            "expected ForceStringTerminate from SosPmApcString, got {evt:?}"
+        );
     }
 }
