@@ -297,9 +297,19 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightMagenta), ..Style::DEFAULT },
             is_user_supplied: false,
         },
+        // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
+        // Char classes here are byte classes under regex::bytes — bytes 0x80..0xFF
+        // (UTF-8 continuation, IDN, percent-decoded paths) are implicitly included
+        // because the negation only lists ASCII bytes. Trailing-trim set is sentence
+        // punctuation only (.,;:!?); closing brackets ) and ] stay in the match to
+        // preserve Wikipedia/MDN URLs and IPv6 literal host syntax.
         BuiltinRule {
             name: "url".into(),
-            pattern: r#"\b(?:https?|ssh|ftp)://[^\s<>"\\^`{|}]+"#.into(),
+            pattern: concat!(
+                r#"\b(?:https?|ssh|ftp)://[^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?]"#,
+                r#"|"#,
+                r#"\bgit@[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]:[^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?]"#,
+            ).into(),
             style: Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT },
             is_user_supplied: false,
         },
@@ -562,6 +572,21 @@ mod tests {
     fn matches(pattern_name: &str, input: &str) -> bool {
         let re = regex::bytes::Regex::new(&find_rule(pattern_name)).unwrap();
         re.is_match(input.as_bytes())
+    }
+
+    fn match_string(pattern_name: &str, input: &str) -> Option<String> {
+        let re = regex::bytes::Regex::new(&find_rule(pattern_name)).unwrap();
+        re.find(input.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned())
+    }
+
+    // reason: helper for upcoming v0.3.2 tasks (duration fixture matrix uses
+    // `match list: [...]`); landing both helpers together per the plan.
+    #[allow(dead_code)]
+    fn all_matches(pattern_name: &str, input: &str) -> Vec<String> {
+        let re = regex::bytes::Regex::new(&find_rule(pattern_name)).unwrap();
+        re.find_iter(input.as_bytes())
+            .map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned())
+            .collect()
     }
 
     #[test]
@@ -940,22 +965,213 @@ mod tests {
         assert!(!matches("uuid", "550e8400e29b41d4a716446655440000"));
     }
 
+    // === URL pattern (rule "url") — see spec §4.1 ===
+
     #[test]
-    fn url_matches_supported_schemes() {
-        assert!(matches("url", "visit https://example.com today"));
-        assert!(matches("url", "see http://example.com/path?q=1"));
-        assert!(matches("url", "api at https://example.com:8080/v1"));
-        assert!(matches("url", "rsync from ssh://user@host/path"));
-        assert!(matches("url", "download ftp://files.example.com/file.zip"));
+    fn url_trims_trailing_sentence_punctuation() {
+        assert_eq!(
+            match_string("url", "Bkz https://example.com."),
+            Some("https://example.com".into())
+        );
+        assert_eq!(match_string("url", "see https://a.com, then"), Some("https://a.com".into()));
+        assert_eq!(match_string("url", "urls: https://a.com; next"), Some("https://a.com".into()));
+        assert_eq!(match_string("url", "link: https://x.com! wow"), Some("https://x.com".into()));
+        assert_eq!(
+            match_string("url", "is https://example.com?"),
+            Some("https://example.com".into())
+        );
+    }
+
+    #[test]
+    fn url_preserves_wikipedia_style_trailing_paren() {
+        // REGRESSION GUARD: spec §1.1, §1.7 — closing brackets stay in match.
+        assert_eq!(
+            match_string("url", "see https://en.wikipedia.org/wiki/Foo_(disambig)"),
+            Some("https://en.wikipedia.org/wiki/Foo_(disambig)".into())
+        );
+        assert_eq!(
+            match_string("url", "see https://en.wikipedia.org/wiki/Foo_(disambig)."),
+            Some("https://en.wikipedia.org/wiki/Foo_(disambig)".into())
+        );
+        assert_eq!(
+            match_string("url", "MDN https://developer.mozilla.org/en-US/docs/Web/JS/Array_(prim)"),
+            Some("https://developer.mozilla.org/en-US/docs/Web/JS/Array_(prim)".into())
+        );
+    }
+
+    #[test]
+    fn url_preserves_ipv6_literal_host() {
+        // REGRESSION GUARD: spec §1.1, §1.7 — `]` stays in match.
+        assert_eq!(match_string("url", "https://[::1]"), Some("https://[::1]".into()));
+        assert_eq!(
+            match_string("url", "https://[::1]:8080/v1"),
+            Some("https://[::1]:8080/v1".into())
+        );
+    }
+
+    #[test]
+    fn url_paren_wrap_tradeoff() {
+        // DOCUMENTED trade-off: paren-wrapped URL keeps trailing `)` in match.
+        // Spec §1.1 — Wikipedia regression outweighs the wrap-case loss.
+        assert_eq!(
+            match_string("url", "(https://example.com)"),
+            Some("https://example.com)".into())
+        );
+    }
+
+    #[test]
+    fn url_preserves_path_internal_characters() {
+        assert_eq!(
+            match_string("url", "api at https://example.com:8080/v1"),
+            Some("https://example.com:8080/v1".into())
+        );
+        assert_eq!(
+            match_string("url", "query https://x/path?q=1&r=2"),
+            Some("https://x/path?q=1&r=2".into())
+        );
+        assert_eq!(
+            match_string("url", "frag https://x/path#section"),
+            Some("https://x/path#section".into())
+        );
+    }
+
+    #[test]
+    fn url_byte_class_includes_utf8_idn_and_percent() {
+        // Char classes are byte classes under regex::bytes; bytes 0x80..0xFF
+        // (UTF-8 continuation, IDN, percent-decoded paths) are implicitly
+        // included because the negation only lists ASCII bytes. Spec §3.1.
+        assert_eq!(
+            match_string("url", "idn https://xn--bcher-kva.com/"),
+            Some("https://xn--bcher-kva.com/".into())
+        );
+        assert_eq!(
+            match_string("url", "pct https://example.com/%E4%B8%AD"),
+            Some("https://example.com/%E4%B8%AD".into())
+        );
+        assert_eq!(
+            match_string("url", "raw https://example.com/中"),
+            Some("https://example.com/中".into())
+        );
+    }
+
+    #[test]
+    fn url_min_length_and_all_punct_path() {
+        assert_eq!(match_string("url", "https://x"), Some("https://x".into()));
+        assert_eq!(match_string("url", "https://."), None);
+    }
+
+    #[test]
+    fn url_known_limitation_word_char_prefix() {
+        // KNOWN LIMITATION: spec §1.7. \b fails when prev char is a word char.
+        // These pin the documented behavior so a future change cannot silently
+        // flip it.
+        assert_eq!(match_string("url", "9https://x.com"), None);
+        assert_eq!(match_string("url", "_https://x.com"), None);
     }
 
     #[test]
     fn url_rejects_unsupported_schemes() {
-        // v0.2.2 scope: https?://, ssh://, ftp://. git@host:path deferred to v0.3.
-        assert!(!matches("url", "git@github.com:user/repo.git"));
-        assert!(!matches("url", "no scheme example.com/path"));
-        // Scheme alone without "://" doesn't match
-        assert!(!matches("url", "talk about https in general"));
+        // NOTE: `git+ssh://example.com` from the v0.3.2 plan fixture is NOT
+        // asserted here. Under `\b(?:https?|ssh|ftp)://...`, the `+` -> `s`
+        // transition forms a word boundary, so `ssh://example.com` is matched
+        // as a substring. The same family of `\b`-substring matches exists
+        // for `_https://` / `9https://` (covered as known limitations above);
+        // this case is in the same class and would require lookbehind to
+        // suppress (not supported by the Rust regex crate). Documented as a
+        // plan-vs-pattern inconsistency.
+        assert_eq!(match_string("url", "file:///etc/hosts"), None);
+        assert_eq!(match_string("url", "just a sentence with https in it"), None);
+    }
+
+    #[test]
+    fn url_matches_supported_schemes() {
+        // Sanity: the legacy v0.2.2 acceptance cases still work.
+        assert_eq!(
+            match_string("url", "visit https://example.com today"),
+            Some("https://example.com".into())
+        );
+        assert_eq!(
+            match_string("url", "see http://example.com/path?q=1"),
+            Some("http://example.com/path?q=1".into())
+        );
+        assert_eq!(
+            match_string("url", "rsync from ssh://user@host/path"),
+            Some("ssh://user@host/path".into())
+        );
+        assert_eq!(
+            match_string("url", "download ftp://files.example.com/file.zip"),
+            Some("ftp://files.example.com/file.zip".into())
+        );
+    }
+
+    #[test]
+    fn url_matches_git_at_host_path_form() {
+        // Spec §3.1, §1.2 — new 4th alternation branch.
+        assert_eq!(
+            match_string("url", "clone git@github.com:user/repo.git"),
+            Some("git@github.com:user/repo.git".into())
+        );
+        assert_eq!(
+            match_string("url", "git@gitlab.com:org/sub/repo.git"),
+            Some("git@gitlab.com:org/sub/repo.git".into())
+        );
+        assert_eq!(
+            match_string("url", "git@bitbucket.org:team/repo.git"),
+            Some("git@bitbucket.org:team/repo.git".into())
+        );
+    }
+
+    #[test]
+    fn url_git_at_host_class_rejects_pathological_hosts() {
+        // REGRESSION GUARD: spec §3.1 Karar 3 — host class label-aware.
+        assert_eq!(match_string("url", "git@.host:path"), None);
+        assert_eq!(match_string("url", "git@host.:path"), None);
+        assert_eq!(match_string("url", "git@-host:path"), None);
+        assert_eq!(match_string("url", "git@host-:path"), None);
+    }
+
+    #[test]
+    fn url_git_at_without_path_does_not_match_url() {
+        // Spec §3.2 — `git@host` without `:path` falls through to email rule.
+        assert_eq!(match_string("url", "clone git@github.com"), None);
+    }
+
+    #[test]
+    fn url_git_at_trim_applies_to_path() {
+        assert_eq!(
+            match_string("url", "see git@github.com:user/repo.git."),
+            Some("git@github.com:user/repo.git".into())
+        );
+    }
+
+    #[test]
+    fn url_git_at_with_path_wins_over_email() {
+        // Spec §3.2 — `apply_rules` is first-rule-wins; url precedes email.
+        use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"clone git@github.com:u/r.git\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // BrightBlue fg = SGR 94 (url); BrightGreen fg = SGR 92 (email).
+        assert!(s.contains("94"), "expected BrightBlue (url): {s:?}");
+        assert!(!s.contains("\x1b[92m"), "must not contain BrightGreen (email): {s:?}");
+    }
+
+    #[test]
+    fn url_git_at_without_path_falls_to_email() {
+        // Spec §3.2 — without `:path`, url branch fails; email rule matches.
+        use crate::pipeline::apply_rules;
+        use arc_swap::ArcSwap;
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"clone git@github.com\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // BrightGreen fg = SGR 92 (email); BrightBlue fg = SGR 94 (url).
+        assert!(s.contains("92"), "expected BrightGreen (email): {s:?}");
+        assert!(!s.contains("\x1b[94m"), "must not contain BrightBlue (url): {s:?}");
     }
 
     #[test]
