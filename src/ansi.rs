@@ -1,6 +1,9 @@
 //! ANSI byte-stream state machine.
 //!
-//! Implements a 14-state subset of Paul Williams' VT500 ANSI parser
+//! Implements a 16-state subset of Paul Williams' VT500 ANSI parser
+//! (14 logical states from the canonical reference, plus two peek-ahead
+//! states — `DcsEsc` and `SosPmApcEsc` — that resolve the 7-bit ST
+//! terminator `\e\\` lookahead)
 //! (<https://vt100.net/emu/dec_ansi_parser>) scoped to tayf's classification
 //! needs. The SM does not interpret payloads; it classifies each byte by
 //! what `Pipeline` should do with it:
@@ -25,7 +28,9 @@
 // reason: Tasks 3-7 wire `step` to emit each event variant; until then,
 // the stubbed step only returns `Data`. Remove this allow when Task 7 lands.
 
-/// 14-state Williams VT500 subset. See spec §3.2 for the per-state meanings.
+/// 16-state Williams VT500 subset (14 canonical + 2 ST peek-ahead).
+/// See spec §3.2 for the canonical states and §3.4 for the peek-ahead
+/// transitions on `OscEsc` / `DcsEsc` / `SosPmApcEsc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum SmState {
@@ -92,6 +97,11 @@ pub(crate) enum SequenceKind {
     EscIntermediateFinal,
 }
 
+/// Hard cap on bytes accumulated within a single in-progress CSI/ESC
+/// sequence before the SM force-resets to Ground. Defense against
+/// malicious unterminated input. Spec §7.1.
+const SEQUENCE_BYTES_CAP: u16 = 4096;
+
 /// TUI mode bitmask flags. Any non-zero value means alt-screen / bracketed
 /// paste / mouse tracking is active; bytes go straight to stdout without
 /// passing through `apply_rules`.
@@ -119,9 +129,9 @@ pub(crate) struct AnsiSm {
     flags: u32,
     accum: u32,
     private_mode: bool,
-    /// Internal sequence-byte budget: refuse to accumulate sequences larger
-    /// than this many bytes. Defends against malicious unterminated CSI/ESC
-    /// inputs. See spec §7.1 (4 KiB cap rationale).
+    /// Bytes accumulated within the current CSI/ESC sequence; capped at
+    /// [`SEQUENCE_BYTES_CAP`] (4 KiB). Tasks 3+ enforce the cap by
+    /// resetting to Ground when this field reaches the constant.
     sequence_bytes_seen: u16,
 }
 
