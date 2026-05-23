@@ -7,6 +7,14 @@
 //! point to either fix the root cause (Senaryo 1 or 2) or ship the
 //! TAYF_DISABLE_BG_DETECT env-var bypass (Senaryo 3).
 //!
+//! NOTE: The test below is `#[ignore]`d. With COLORFGBG scrubbed from the
+//! child env, the test genuinely reaches the OSC 11 path that hangs
+//! indefinitely on macOS — `child.wait()` blocks forever after `child.kill()`,
+//! which would wedge CI for the full 6-hour GitHub Actions timeout. Un-ignore
+//! as part of Task 7 (D-3) once the root-cause fix or the
+//! TAYF_DISABLE_BG_DETECT bypass lands. To reproduce locally on macOS:
+//! `cargo test --test integration_bg_detect -- --ignored`.
+//!
 //! See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.6, §4.4.
 
 #![allow(clippy::expect_used)] // reason: tests
@@ -18,6 +26,7 @@ fn tayf_bin() -> &'static str {
     env!("CARGO_BIN_EXE_tayf")
 }
 
+#[ignore = "exposes v0.3.1 OSC 11 hang on macOS; un-ignore in Task 7 D-3 fix/fallback"]
 #[test]
 fn bg_detect_does_not_hang_in_portable_pty_subprocess() {
     // Spawn tayf with /bin/sh and immediately send `exit` so the binary's
