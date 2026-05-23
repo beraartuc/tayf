@@ -409,6 +409,14 @@ pub(crate) struct Compiled {
     pub(crate) set: RegexSet,
     pub(crate) individuals: Vec<Regex>,
     pub(crate) styles: Vec<Style>,
+    #[allow(dead_code)]
+    // reason: consumed by Task 10's pipeline refactor; wired now so the
+    // ArcSwap<Compiled> snapshot already carries the flag at line boundary
+    /// When `true`, lines containing any SGR (CSI `m`) byte skip rule
+    /// application. Read from `[general] respect_existing_colors` and
+    /// snapshotted at line boundary via the enclosing `ArcSwap<Compiled>`
+    /// (spec §4.4, Karar 11).
+    pub(crate) respect_existing_colors: bool,
 }
 
 impl Compiled {
@@ -501,7 +509,14 @@ impl Compiled {
         // error path is preserved for forward-compat (e.g. larger rule sets in v0.4).
         let set = RegexSet::new(&sources).map_err(Error::from)?;
 
-        Ok(Compiled { set, individuals, styles })
+        // Karar 11: snapshot config value into Compiled so reads happen at
+        // line boundary via ArcSwap<Compiled>, no separate atomic needed.
+        let respect_existing_colors = config.map_or_else(
+            || crate::config::GeneralSection::default().respect_existing_colors,
+            |c| c.general.respect_existing_colors,
+        );
+
+        Ok(Compiled { set, individuals, styles, respect_existing_colors })
     }
 
     /// Built-in defaults compiled at Truecolor depth, no theme, no user
@@ -1144,5 +1159,50 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("huge"), "expected rule name in error: {err}");
         assert!(msg.contains("/x"), "expected config path in error: {err}");
+    }
+
+    #[test]
+    fn compiled_carries_respect_existing_colors_from_config() {
+        use crate::config::{Config, GeneralSection, UserRule};
+        let cfg = Config {
+            general: GeneralSection { respect_existing_colors: true, ..GeneralSection::default() },
+            rules: Vec::<UserRule>::new(),
+        };
+        let compiled = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/cfg.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile");
+        assert!(compiled.respect_existing_colors, "should be true from config");
+    }
+
+    #[test]
+    fn compiled_respect_existing_colors_false_from_config() {
+        use crate::config::{Config, GeneralSection, UserRule};
+        let cfg = Config {
+            general: GeneralSection { respect_existing_colors: false, ..GeneralSection::default() },
+            rules: Vec::<UserRule>::new(),
+        };
+        let compiled = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/cfg.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile");
+        assert!(!compiled.respect_existing_colors, "should be false from config");
+    }
+
+    #[test]
+    fn compiled_respect_defaults_match_general_default_when_no_config() {
+        // Without a config, Compiled uses GeneralSection::default()'s
+        // respect_existing_colors value, NOT a hardcoded fallback.
+        let compiled =
+            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
+        let expected = crate::config::GeneralSection::default().respect_existing_colors;
+        assert_eq!(compiled.respect_existing_colors, expected);
     }
 }
