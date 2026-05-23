@@ -168,6 +168,11 @@ impl Pipeline {
                 debug_assert!(self.sequence_scratch.is_empty());
                 if let Some(line) = self.buffer.feed_byte_with_overflow(byte) {
                     self.apply_or_passthrough(&line, out)?;
+                    // `feed_byte_with_overflow` strips the trailing `\n` from
+                    // newline-terminated lines (see line_buffer.rs); restore
+                    // it here so byte-for-byte fidelity holds. The slice-API
+                    // path (used for scratch drains in dispatch_completed_sequence)
+                    // keeps `\n` in the line, so it does not need this.
                     if byte == b'\n' {
                         out.write_all(b"\n")?;
                     }
@@ -177,6 +182,17 @@ impl Pipeline {
                 self.sequence_scratch.push(byte);
             }
             StepEvent::StringPayloadByte => {
+                // Path 3: OSC/DCS-passthrough/PM/APC payload byte. To preserve
+                // byte ordering with any pre-OSC content sitting in the line
+                // buffer, drain the buffer's partial line to stdout *verbatim*
+                // first, then flush any pending scratch (introducer bytes), then
+                // write the payload byte direct.
+                //
+                // Decision: a line that contains OSC/DCS/PM/APC cannot be
+                // rule-applied (pre-OSC bytes are already on the wire). Mark
+                // `line_has_string_payload` so the post-OSC remainder also
+                // passes verbatim at `\n`. Keeps hyperlinks intact and avoids
+                // regex inside OSC payloads. Spec v0.3.0 §4.1.
                 let partial = self.buffer.drain();
                 if !partial.is_empty() {
                     out.write_all(&partial)?;
