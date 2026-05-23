@@ -551,4 +551,22 @@ mod pipeline_tests {
         // Output should match input byte-for-byte (no tayf SGR injection).
         assert_eq!(out, b"\x1b[31mERROR\x1b[0m 192.168.1.1\n");
     }
+
+    #[test]
+    fn pipeline_writes_st_on_cap_fire_in_string_state() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = Arc::new(ArcSwap::from_pointee(compiled));
+        let mut pipeline = Pipeline::new(rules);
+        let mut out: Vec<u8> = Vec::new();
+
+        // Adversarial unterminated OSC: \e]2; + lots of 'a' bytes.
+        // SEQUENCE_BYTES_CAP is 4096; this exceeds the cap.
+        let mut input = vec![0x1b, b']', b'2', b';'];
+        input.extend(std::iter::repeat(b'a').take(5000));
+        pipeline.feed(&input, &mut out).unwrap();
+
+        // Stdout must contain a synthetic \e\\ ST emitted at cap fire.
+        let has_st = out.windows(2).any(|w| w == b"\x1b\\");
+        assert!(has_st, "expected synthetic ST in stdout; got len={}", out.len());
+    }
 }
