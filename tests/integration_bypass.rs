@@ -123,7 +123,7 @@ fn contains_sgr(bytes: &[u8]) -> bool {
 
 #[test]
 fn bypass_flag_skips_pattern_matching() {
-    // The built-in log_level rule normally colors "error". With --bypass
+    // The built-in log_level rule normally colors "ERROR". With --bypass
     // we expect zero SGR escapes around the user echo output.
     let (out, _status) = run_in_pty(&["--bypass"], &[], "echo error: failed");
     let s = String::from_utf8_lossy(&out);

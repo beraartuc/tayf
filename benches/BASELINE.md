@@ -28,8 +28,9 @@ Per-line rule scanner (five matches per line: three IPv4 + one
 ## passthrough / write_all
 
 `Cursor<Vec<u8>>::write_all` on the same 67 KB input — models tayf's
-TUI passthrough path (alt-screen, bracketed paste, mouse). Essentially
-the `cat`-equivalent denominator for the spec §7 overhead target.
+AnsiSm-routed passthrough — TUI alt-screen state short-circuits regex
+matching while keeping byte-stream parsing intact. Essentially the
+`cat`-equivalent denominator for the spec §7 overhead target.
 
 - Time per iter: 1.29 µs – 1.33 µs – 1.38 µs
 - Throughput:    45.342 GiB/s – 46.781 GiB/s – 48.273 GiB/s
