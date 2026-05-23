@@ -3,3 +3,6 @@
 Cargo.lock.bak
 .DS_Store
 *.profraw
+
+# Claude Code session state (per-developer; not source-controlled)
+.claude/
