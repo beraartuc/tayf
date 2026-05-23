@@ -172,6 +172,7 @@ impl Tayf {
             effective_theme.clone(),
             effective_depth,
             reload_rx,
+            None, // banner_sink — wired in v0.3.3 Task 7 with config-driven Some(Box::new(DevTtySink))
         );
 
         // Drop the local sender now. The only remaining `reload_tx`

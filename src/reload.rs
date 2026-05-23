@@ -8,6 +8,70 @@
 //!
 //! See `docs/superpowers/specs/2026-05-22-tayf-v0.2.1-hot-reload.md` §3.2.
 
+/// Banner byte sequence written on successful reload when
+/// `show_reload_banner = true`. See spec §1.3 for the per-byte semantics.
+///
+/// - `\x1b[s` (DECSC) save cursor — multi-line zsh ZLE prompts retain
+///   their visual cursor position after the banner draws.
+/// - `\r\x1b[K` return to col 0 and erase to EOL (overwrites half prompt).
+/// - `\x1b[2m` enable dim; banner text; `\x1b[22m` cancel dim/bold ONLY
+///   (NOT `\x1b[0m` ALL-reset, which would clobber prompt-side SGR state).
+/// - `\n` advance one line.
+/// - `\x1b[u` (DECRC) restore cursor to the saved position.
+#[allow(dead_code)] // reason: consumed in Task 7 (lib.rs wires DevTtySink).
+pub(crate) const BANNER_BYTES: &[u8] =
+    b"\x1b[s\r\x1b[K\x1b[2mtayf: config reloaded\x1b[22m\n\x1b[u";
+
+/// Sink for the reload banner. Production wires `DevTtySink` (writes to
+/// `/dev/tty`); tests wire `VecSink` (captures bytes in-memory for
+/// assertion). `None` injection from `Tayf::run` means banner disabled.
+pub(crate) trait BannerSink: Send + 'static {
+    /// Write the banner bytes. Best-effort: implementations swallow I/O
+    /// errors silently — the banner is a side-channel and its absence
+    /// does not affect session correctness.
+    fn write_banner(&mut self, bytes: &[u8]);
+}
+
+/// Production banner sink. Opens `/dev/tty` per call (no fd caching),
+/// writes the bytes, flushes, closes on Drop of the local `File`.
+///
+/// fd-leak audit (Rev2 I-8): `File` Drop is sync `close(2)`; `notify`
+/// debounce is 200 ms (`src/watch.rs:23`), so the maximum reload rate is
+/// 5/s. Even sustained 5/s reloads produce 5 open/close cycles per second
+/// — well below any fd-budget threshold. Caching the fd at orchestrator
+/// spawn was considered and rejected: holding a `/dev/tty` fd for the
+/// entire session is a small surface increase, while reload events are
+/// rare enough that per-event open is trivial.
+#[allow(dead_code)] // reason: consumed in Task 7 (lib.rs wires DevTtySink).
+pub(crate) struct DevTtySink;
+
+impl BannerSink for DevTtySink {
+    fn write_banner(&mut self, bytes: &[u8]) {
+        use std::io::Write;
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            // Best-effort: ignore write errors. Banner is a side-channel.
+            let _ = tty.write_all(bytes);
+            let _ = tty.flush();
+            // `tty` dropped at scope end → close(2) syncs.
+        }
+    }
+}
+
+/// Test-only in-memory banner sink. Captures written bytes for assertion.
+#[cfg(test)]
+pub(crate) struct VecSink {
+    pub(crate) bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+#[cfg(test)]
+impl BannerSink for VecSink {
+    fn write_banner(&mut self, bytes: &[u8]) {
+        if let Ok(mut g) = self.bytes.lock() {
+            g.extend_from_slice(bytes);
+        }
+    }
+}
+
 /// Source of a reload trigger. Both variants route to the same
 /// orchestrator code path; the variant is preserved purely for
 /// diagnostic logging.
@@ -84,6 +148,9 @@ impl ReloadOrchestrator {
         theme: Option<String>,
         depth: ColorDepth,
         rx: Receiver<ReloadRequest>,
+        // F3 (v0.3.3): None = banner disabled; Some(sink) = enabled.
+        // The sink is moved into the reload thread.
+        banner_sink: Option<Box<dyn BannerSink>>,
     ) -> Self {
         // reason: thread::Builder::spawn fails only on OS resource
         // exhaustion. As with the runtime threads (see
@@ -93,15 +160,26 @@ impl ReloadOrchestrator {
         let handle = thread::Builder::new()
             .name("tayf-reload".into())
             .spawn(move || {
+                let mut banner_sink = banner_sink;
                 while let Ok(req) = rx.recv() {
-                    if let Err(e) =
-                        reload_once(&rules_handle, config_path.as_deref(), theme.as_deref(), depth)
-                    {
-                        crate::log::warn_msg!(
-                            "config reload failed ({req:?}): {e}; keeping previous rule set"
-                        );
-                    } else {
-                        crate::log::info_msg!("config reloaded ({req:?})");
+                    match reload_once(
+                        &rules_handle,
+                        config_path.as_deref(),
+                        theme.as_deref(),
+                        depth,
+                    ) {
+                        Ok(()) => {
+                            crate::log::info_msg!("config reloaded ({req:?})");
+                            if let Some(sink) = banner_sink.as_mut() {
+                                sink.write_banner(BANNER_BYTES);
+                            }
+                        }
+                        Err(e) => {
+                            crate::log::warn_msg!(
+                                "config reload failed ({req:?}): {e}; keeping previous rule set"
+                            );
+                            // Failure path: no banner (intentional — see spec §1.3).
+                        }
                     }
                 }
                 // Sender side closed — exit cleanly.
@@ -239,6 +317,7 @@ style = { fg = "yellow" }
             None,
             ColorDepth::Truecolor,
             rx,
+            None, // banner_sink: disabled (v0.3.2 default behavior)
         );
 
         tx.send(super::ReloadRequest::FileChanged).unwrap();
@@ -267,6 +346,7 @@ style = { fg = "yellow" }
             None,
             ColorDepth::Truecolor,
             rx,
+            None, // banner_sink: disabled (v0.3.2 default behavior)
         );
 
         tx.send(super::ReloadRequest::SignalHup).unwrap();
@@ -277,6 +357,114 @@ style = { fg = "yellow" }
             Arc::ptr_eq(&before, &after),
             "orchestrator must keep the old Arc when reload_once fails"
         );
+
+        drop(tx);
+    }
+
+    #[test]
+    fn orchestrator_writes_banner_on_success_when_sink_present() {
+        let handle = Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().unwrap()));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            &dir,
+            r#"
+[[rules]]
+name = "log_level"
+style = { fg = "yellow" }
+"#,
+        );
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let sink: Box<dyn super::BannerSink> =
+            Box::new(super::VecSink { bytes: Arc::clone(&captured) });
+
+        let (tx, rx) = mpsc::channel::<super::ReloadRequest>();
+        let _orchestrator = super::ReloadOrchestrator::spawn(
+            Arc::clone(&handle),
+            Some(path),
+            None,
+            ColorDepth::Truecolor,
+            rx,
+            Some(sink),
+        );
+
+        tx.send(super::ReloadRequest::FileChanged).unwrap();
+        // 200 ms covers reload_once + sink write under normal load.
+        std::thread::sleep(Duration::from_millis(200));
+
+        let got = captured.lock().unwrap();
+        assert_eq!(
+            got.as_slice(),
+            super::BANNER_BYTES,
+            "banner bytes must match BANNER_BYTES exactly"
+        );
+
+        drop(tx);
+    }
+
+    #[test]
+    fn orchestrator_no_banner_when_sink_absent() {
+        // Mirrors orchestrator_swaps_on_file_changed_event but explicit:
+        // no sink → swap happens, no banner write.
+        let handle = Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().unwrap()));
+        let before = handle.load_full();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            &dir,
+            r#"
+[[rules]]
+name = "log_level"
+style = { fg = "yellow" }
+"#,
+        );
+
+        let (tx, rx) = mpsc::channel::<super::ReloadRequest>();
+        let _orchestrator = super::ReloadOrchestrator::spawn(
+            Arc::clone(&handle),
+            Some(path),
+            None,
+            ColorDepth::Truecolor,
+            rx,
+            None,
+        );
+
+        tx.send(super::ReloadRequest::FileChanged).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let after = handle.load_full();
+        assert!(!Arc::ptr_eq(&before, &after), "reload should still swap the Arc");
+
+        drop(tx);
+    }
+
+    #[test]
+    fn orchestrator_no_banner_on_reload_failure_when_sink_present() {
+        let handle = Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().unwrap()));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "broken toml = = =\n");
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let sink: Box<dyn super::BannerSink> =
+            Box::new(super::VecSink { bytes: Arc::clone(&captured) });
+
+        let (tx, rx) = mpsc::channel::<super::ReloadRequest>();
+        let _orchestrator = super::ReloadOrchestrator::spawn(
+            Arc::clone(&handle),
+            Some(path),
+            None,
+            ColorDepth::Truecolor,
+            rx,
+            Some(sink),
+        );
+
+        tx.send(super::ReloadRequest::SignalHup).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        let got = captured.lock().unwrap();
+        assert!(got.is_empty(), "failed reload must not write banner; got {} bytes", got.len());
 
         drop(tx);
     }
