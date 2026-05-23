@@ -78,6 +78,33 @@ impl LineBuffer {
         (lines, overflow)
     }
 
+    /// Feed a single byte. Returns `Some(line)` when the byte completes a
+    /// line (newline seen) or when adding the byte would exceed the buffer
+    /// cap (in which case the accumulated bytes are returned as the line;
+    /// a warning is logged internally).
+    ///
+    /// Mirrors [`Self::feed_with_overflow`] semantics one byte at a time,
+    /// except the trailing `\n` is stripped from the returned line for
+    /// consumers that route bytes through `AnsiSm::step` (spec §6.1). Used
+    /// by the per-byte pipeline path in `pipeline::Pipeline::feed`.
+    // reason: wired up by Pipeline in v0.3.0 Task 10; held behind the test
+    // suite until then so the per-byte API ships alongside its consumer.
+    #[allow(dead_code)]
+    pub(crate) fn feed_byte_with_overflow(&mut self, byte: u8) -> Option<Vec<u8>> {
+        let (mut lines, overflow) = self.feed_with_overflow(&[byte]);
+        if let Some(Error::BufferOverflow { cap }) = overflow {
+            crate::log::warn_msg!("line buffer overflowed; cap={cap}");
+        }
+        let mut line = lines.pop()?;
+        // Slice API includes the trailing '\n' on newline-terminated lines;
+        // overflow flushes do not. Strip the newline when present so byte
+        // consumers get a clean payload.
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        Some(line)
+    }
+
     /// If the buffer has been idle since `cutoff`, drain and return it.
     pub(crate) fn flush_if_stale(&mut self, cutoff: Instant) -> Option<Vec<u8>> {
         if self.inner.is_empty() {
@@ -249,5 +276,41 @@ mod tests {
         let _ = buf.feed(&[0x9F, 0xA6]);
         let lines = buf.feed(&[0x80, b'\n']);
         assert_eq!(lines, vec![vec![0xF0, 0x9F, 0xA6, 0x80, b'\n']]);
+    }
+
+    #[test]
+    fn feed_byte_returns_line_on_newline() {
+        let mut buf = LineBuffer::new();
+        for &b in b"hello" {
+            assert!(buf.feed_byte_with_overflow(b).is_none());
+        }
+        let line = buf.feed_byte_with_overflow(b'\n').expect("line on newline");
+        // Mirror feed_with_overflow's convention: newline NOT included in line.
+        assert_eq!(line, b"hello");
+    }
+
+    #[test]
+    fn feed_byte_no_newline_no_line() {
+        let mut buf = LineBuffer::new();
+        for &b in b"partial" {
+            assert!(buf.feed_byte_with_overflow(b).is_none());
+        }
+    }
+
+    #[test]
+    fn feed_byte_two_lines() {
+        let mut buf = LineBuffer::new();
+        // First line.
+        for &b in b"first" {
+            assert!(buf.feed_byte_with_overflow(b).is_none());
+        }
+        let line1 = buf.feed_byte_with_overflow(b'\n').expect("line1");
+        assert_eq!(line1, b"first");
+        // Second line.
+        for &b in b"second" {
+            assert!(buf.feed_byte_with_overflow(b).is_none());
+        }
+        let line2 = buf.feed_byte_with_overflow(b'\n').expect("line2");
+        assert_eq!(line2, b"second");
     }
 }
