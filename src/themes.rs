@@ -157,6 +157,98 @@ fn resolve_disk_path_in_base(
     Ok(Some(candidate))
 }
 
+/// List `*.toml` filenames in `<base>/themes/` (alphabetical, basename
+/// only, `.toml` extension stripped). Returns an empty Vec when the
+/// themes dir doesn't exist or cannot be read — cold path, errors are
+/// swallowed because this only feeds the diagnostic-list inside
+/// `Error::Theme`.
+///
+/// `read_dir` failures are logged via `info_msg!` (`TAYF_LOG=info`
+/// gated) so a user debugging "why don't my themes show up in the
+/// not-found list?" gets a signal without polluting stderr by default
+/// (Rev2 N-3). The crate-local logger does not yet expose a
+/// `debug_msg!` macro, so `info` is the lowest gate available.
+#[allow(dead_code)]
+// reason: consumed by Task 14 (themes::load rewrite); tests in the
+// same module exercise it but clippy's dead_code lint fires on lib
+// builds because the production call site lands in the next commit.
+fn discover_disk_themes(base: &std::path::Path) -> Vec<String> {
+    let themes_dir = base.join("themes");
+    let entries = match std::fs::read_dir(&themes_dir) {
+        Ok(it) => it,
+        Err(e) => {
+            crate::log::info_msg!(
+                "themes dir discovery failed for {dir}: {e}",
+                dir = themes_dir.display()
+            );
+            return Vec::new();
+        }
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_file() {
+                return None;
+            }
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_owned)
+                .filter(|_| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Combined available list: built-ins ∪ disk-discovered, deduplicated,
+/// alphabetically sorted. Disk themes that collide with built-in names
+/// (case-insensitively, Rev2 I-1) are EXCLUDED from this list — they
+/// would error on use before being usable.
+///
+/// `base` is the already-resolved config base (`<config_base>`). `None`
+/// means no `$XDG_CONFIG_HOME` and no `$HOME`; only built-ins are listed.
+#[allow(dead_code)]
+// reason: consumed by Task 14 (themes::load rewrite); tests in the
+// same module exercise it but clippy's dead_code lint fires on lib
+// builds because the production call site lands in the next commit.
+fn available_theme_names_from_base(base: Option<&std::path::Path>) -> Vec<String> {
+    let mut names: Vec<String> = REGISTRY.iter().map(|(n, _)| (*n).to_owned()).collect();
+    if let Some(base) = base {
+        let disk = discover_disk_themes(base);
+        let builtins: std::collections::HashSet<String> =
+            REGISTRY.iter().map(|(n, _)| (*n).to_ascii_lowercase()).collect();
+        for d in disk {
+            if !builtins.contains(&d.to_ascii_lowercase()) {
+                names.push(d);
+            }
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Build the `Error::Config` for the F2 collision case — a disk theme
+/// file shares a built-in name. Message carries the disk path so the
+/// user knows exactly which file to rename, plus a concrete hint for a
+/// safe replacement name.
+#[allow(dead_code)]
+// reason: consumed by Task 14 (themes::load rewrite); tests in the
+// same module exercise it but clippy's dead_code lint fires on lib
+// builds because the production call site lands in the next commit.
+fn collision_error(name: &str, disk_path: &std::path::Path) -> Error {
+    Error::Config {
+        path: disk_path.display().to_string(),
+        line: 0,
+        message: format!(
+            "theme '{name}' shadows the built-in theme with the same name; \
+             rename the file (e.g. to '{name}-custom.toml') or remove it"
+        ),
+    }
+}
+
 const DARK_SRC: &str = include_str!("../assets/themes/dark.toml");
 const LIGHT_SRC: &str = include_str!("../assets/themes/light.toml");
 
@@ -646,5 +738,82 @@ mod tests {
         let dir = tmp();
         let resolved = resolve_disk_path_in_base("any", dir.path()).unwrap();
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn discover_disk_themes_ignores_non_toml_files() {
+        let dir = tmp();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        fs::write(themes_dir.join("good.toml"), "").unwrap();
+        fs::write(themes_dir.join("bad.bak"), "").unwrap();
+        fs::write(themes_dir.join("noext"), "").unwrap();
+
+        let names = discover_disk_themes(dir.path());
+        assert_eq!(names, vec!["good".to_string()]);
+    }
+
+    #[test]
+    fn discover_disk_themes_returns_empty_when_dir_missing() {
+        let dir = tmp();
+        let names = discover_disk_themes(dir.path());
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn discover_disk_themes_sorts_alphabetically() {
+        let dir = tmp();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        for n in &["foo", "bar", "baz", "alpha"] {
+            fs::write(themes_dir.join(format!("{n}.toml")), "").unwrap();
+        }
+        let names = discover_disk_themes(dir.path());
+        assert_eq!(names, vec!["alpha", "bar", "baz", "foo"]);
+    }
+
+    #[test]
+    fn available_theme_names_from_base_returns_builtins_when_base_none() {
+        let names = available_theme_names_from_base(None);
+        assert_eq!(names, vec!["dark".to_string(), "light".to_string()]);
+    }
+
+    #[test]
+    fn available_theme_names_from_base_merges_builtin_and_disk() {
+        let dir = tmp();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        fs::write(themes_dir.join("foo.toml"), "").unwrap();
+        fs::write(themes_dir.join("bar.toml"), "").unwrap();
+
+        let names = available_theme_names_from_base(Some(dir.path()));
+        assert_eq!(
+            names,
+            vec!["bar".to_string(), "dark".to_string(), "foo".to_string(), "light".to_string()]
+        );
+    }
+
+    #[test]
+    fn available_theme_names_from_base_excludes_collisions_case_insensitively() {
+        let dir = tmp();
+        let themes_dir = dir.path().join("themes");
+        fs::create_dir(&themes_dir).unwrap();
+        fs::write(themes_dir.join("dark.toml"), "").unwrap();
+        fs::write(themes_dir.join("LIGHT.toml"), "").unwrap();
+        fs::write(themes_dir.join("custom.toml"), "").unwrap();
+
+        let names = available_theme_names_from_base(Some(dir.path()));
+        assert_eq!(names, vec!["custom".to_string(), "dark".to_string(), "light".to_string()]);
+    }
+
+    #[test]
+    fn collision_error_carries_path_and_rename_hint() {
+        let p = std::path::PathBuf::from("/tmp/themes/dark.toml");
+        let e = collision_error("dark", &p);
+        let s = e.to_string();
+        assert!(s.contains("'dark'"), "should quote theme name: {s}");
+        assert!(s.contains("shadows the built-in"), "rationale: {s}");
+        assert!(s.contains("rename"), "actionable hint: {s}");
+        assert!(s.contains("/tmp/themes/dark.toml"), "should include disk path: {s}");
     }
 }
