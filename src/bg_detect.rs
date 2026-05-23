@@ -182,6 +182,7 @@ use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::poll::{PollFd, PollFlags, PollTimeout};
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 use nix::unistd::{read, write};
@@ -403,6 +404,57 @@ fn duration_millis_i32(d: Duration) -> i32 {
 fn poll_timeout_from_duration(d: Duration) -> PollTimeout {
     let millis = duration_millis_i32(d);
     PollTimeout::try_from(millis).unwrap_or(PollTimeout::MAX)
+}
+
+/// Non-blocking drain of any remaining bytes on `/dev/tty` after a
+/// successful OSC 11 response read. Consumes bytes until `read` returns
+/// `EAGAIN`/`EWOULDBLOCK` or any other error. Discards the bytes.
+///
+/// Caller guarantees the OSC 11 read returned Ok before invoking drain —
+/// otherwise we would risk swallowing pre-typed user keystrokes.
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in Task 8.
+fn drain_remaining(fd: RawFd) {
+    // SAFETY: caller still owns the underlying File for `fd`; we only
+    // borrow the fd for the fcntl/read syscalls below.
+    // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments;
+    // allow is scoped to the single borrow.
+    #[allow(unsafe_code)]
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    let Ok(prior_bits) = fcntl(borrowed.as_raw_fd(), FcntlArg::F_GETFL) else {
+        return;
+    };
+    let prior = OFlag::from_bits_truncate(prior_bits);
+    if fcntl(borrowed.as_raw_fd(), FcntlArg::F_SETFL(prior | OFlag::O_NONBLOCK)).is_err() {
+        return;
+    }
+
+    let mut buf = [0u8; 64];
+    loop {
+        match read(borrowed.as_raw_fd(), &mut buf) {
+            // EAGAIN/EWOULDBLOCK lands in `Err(_)`; treat EOF (Ok(0)) and any
+            // error as "done draining".
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+
+    let _ = fcntl(borrowed.as_raw_fd(), FcntlArg::F_SETFL(prior));
+}
+
+/// Write `\r\e[K` (CR + `EraseInLine`) to `/dev/tty` to wipe any literal
+/// echo of the OSC 11 query by terminals that don't recognize OSC 11.
+/// Best-effort; ignores write errors.
+#[allow(dead_code)]
+// reason: consumed by detect_from_osc11 in Task 8.
+fn suppress_query_echo(fd: RawFd) {
+    // SAFETY: caller still owns the underlying File for `fd`; we only
+    // borrow the fd for the single write syscall.
+    // reason: crate-wide policy is `warn(unsafe_code)` with SAFETY comments;
+    // allow is scoped to the single borrow.
+    #[allow(unsafe_code)]
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    let _ = write(borrowed, b"\r\x1b[K");
 }
 
 #[cfg(test)]
