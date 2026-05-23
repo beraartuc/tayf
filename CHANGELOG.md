@@ -18,6 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - No public API changes; no new dependencies. v0.3.0 config files are shimless backward-compatible.
 - The new `src/bg_detect.rs` module manages its own short-lived termios snapshot and process-wide panic hook (parallel to `tty_guard`), necessary because release builds use `panic = "abort"` and `Drop` does not run on panic.
+- I4 cap-fire-in-string-state coverage is pinned by the `pipeline_writes_st_on_cap_fire_in_string_state` unit test in `src/pipeline.rs`, which drives the same 5 KiB unterminated-OSC input through `Pipeline.feed` deterministically. The binary-level integration test originally planned for `tests/integration_ansi.rs` was deferred until a non-blocking PTY-read primitive lands — `portable-pty`'s blocking reader doesn't honor a deadline between shell exit and EOF propagation on macOS CI runners, so the test could hang past the runner budget.
 
 [0.3.1]: https://github.com/beraartuc/tayf/releases/tag/v0.3.1
 
