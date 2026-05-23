@@ -15,10 +15,6 @@ use std::io;
 /// these; for structured access (e.g. machine-readable diagnostics),
 /// pattern-match on `Error::ThemeValidation { errors, .. }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-// reason: introduced ahead of Task 3 (Error::ThemeValidation variant) and
-// Task 8 (themes::validate_theme_rules consumer) of the v0.3.4 plan. The
-// allow is removed when those tasks land in the same release branch.
 pub struct ThemeRuleError {
     /// The offending rule's `name` field, copied verbatim from the TOML.
     /// For the `[general]` section violation the sentinel `"<general>"`
@@ -36,10 +32,6 @@ pub struct ThemeRuleError {
 /// `RuleNameWhitespace`) without a major version bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(dead_code)]
-// reason: introduced ahead of Task 3 (Error::ThemeValidation variant) and
-// Task 8 (themes::validate_theme_rules consumer) of the v0.3.4 plan. The
-// allow is removed when those tasks land in the same release branch.
 pub enum ThemeRuleErrorKind {
     /// `name` does not match any entry in [`crate::rules::BUILTIN_NAMES`].
     UnknownName,
@@ -142,6 +134,31 @@ pub enum Error {
     #[error("file watcher error: {0}")]
     Watch(#[source] notify::Error),
 
+    /// One or more validation errors collected from a single pass over a
+    /// theme's `[[rules]]` list. `theme` is the requested theme name
+    /// (matching `--theme <name>` or `[general] theme`). `source_path` is
+    /// the embedded synthetic path for shipped presets
+    /// (e.g. `<embedded:theme/dark>`) or the absolute canonical disk path
+    /// for disk-loaded themes (e.g. `/home/u/.config/tayf/themes/mine.toml`).
+    ///
+    /// **Display contract:** the `source_path`, each `rule_name`, and the
+    /// theme name itself pass through [`sanitize_for_display`] in the
+    /// `Display` impl so any user-supplied control byte (a hostile config
+    /// path or a rule name with `\x1b`) cannot smuggle a terminal control
+    /// sequence onto the user's terminal — CLAUDE.md §3 invariant.
+    #[error("{}", format_theme_validation(theme, source_path, errors))]
+    ThemeValidation {
+        /// The user-facing theme name (`--theme <name>` or
+        /// `[general] theme`). Asymmetric with `Error::Theme.name` —
+        /// `theme` reads more naturally inside the Display string.
+        theme: String,
+        /// `<embedded:theme/{name}>` for shipped presets, canonical disk
+        /// path for disk-loaded themes.
+        source_path: String,
+        /// At least one entry; an empty Vec would be a constructor bug.
+        errors: Vec<ThemeRuleError>,
+    },
+
     /// A line exceeded the buffer cap; flushed as-is without rule application.
     ///
     /// **Non-fatal — INVARIANT:** This variant must only be constructed for
@@ -187,6 +204,29 @@ fn sanitize_for_display(message: &str) -> String {
         } else {
             out.push(ch);
         }
+    }
+    out
+}
+
+fn format_theme_validation(theme: &str, source_path: &str, errors: &[ThemeRuleError]) -> String {
+    let n = errors.len();
+    let plural = if n == 1 { "error" } else { "errors" };
+    let mut out = format!(
+        "theme '{theme}' (loaded from {path}) has {n} validation {plural}:",
+        theme = sanitize_for_display(theme),
+        path = sanitize_for_display(source_path),
+    );
+    for e in errors {
+        // Literal single quotes around rule_name match Error::Theme's
+        // Display contract (`theme 'foo' not found`). `{name:?}` Debug
+        // formatting would produce double quotes and break visual
+        // consistency.
+        let _ = write!(
+            out,
+            "\n  - rule '{name}': {msg}",
+            name = sanitize_for_display(&e.rule_name),
+            msg = e.kind,
+        );
     }
     out
 }
@@ -455,5 +495,122 @@ mod tests {
         // Compile-time check: if `Copy` were removed, this would not compile.
         fn assert_copy<T: Copy>() {}
         assert_copy::<ThemeRuleErrorKind>();
+    }
+
+    fn rule_err(name: &str, kind: ThemeRuleErrorKind) -> ThemeRuleError {
+        ThemeRuleError { rule_name: name.to_owned(), kind }
+    }
+
+    #[test]
+    fn theme_validation_display_includes_theme_name_and_path() {
+        let e = Error::ThemeValidation {
+            theme: "mine".into(),
+            source_path: "/home/u/.config/tayf/themes/mine.toml".into(),
+            errors: vec![rule_err("log_level", ThemeRuleErrorKind::PatternForbidden)],
+        };
+        let s = e.to_string();
+        assert!(s.contains("theme 'mine'"), "should quote theme; got: {s}");
+        assert!(
+            s.contains("/home/u/.config/tayf/themes/mine.toml"),
+            "should include path; got: {s}"
+        );
+    }
+
+    #[test]
+    fn theme_validation_display_uses_single_quotes_around_rule_name() {
+        let e = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<embedded:theme/x>".into(),
+            errors: vec![rule_err("ipv4", ThemeRuleErrorKind::PatternForbidden)],
+        };
+        let s = e.to_string();
+        assert!(s.contains("rule 'ipv4'"), "literal single quotes; got: {s}");
+        assert!(!s.contains("rule \"ipv4\""), "must not be Debug quoted; got: {s}");
+    }
+
+    #[test]
+    fn theme_validation_display_uses_two_space_indent_for_rule_lines() {
+        let e = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<x>".into(),
+            errors: vec![rule_err("a", ThemeRuleErrorKind::UnknownName)],
+        };
+        let s = e.to_string();
+        assert!(s.contains("\n  - rule 'a':"), "2-space indent + dash; got: {s}");
+    }
+
+    #[test]
+    fn theme_validation_display_singular_vs_plural() {
+        let one = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<x>".into(),
+            errors: vec![rule_err("a", ThemeRuleErrorKind::UnknownName)],
+        };
+        let many = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<x>".into(),
+            errors: vec![
+                rule_err("a", ThemeRuleErrorKind::UnknownName),
+                rule_err("b", ThemeRuleErrorKind::PatternForbidden),
+            ],
+        };
+        assert!(one.to_string().contains("1 validation error:"), "{one}");
+        assert!(!one.to_string().contains("1 validation errors:"), "no plural");
+        assert!(many.to_string().contains("2 validation errors:"), "{many}");
+    }
+
+    #[test]
+    fn theme_validation_display_lists_each_kind_message() {
+        let e = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<x>".into(),
+            errors: vec![
+                rule_err("u", ThemeRuleErrorKind::UnknownName),
+                rule_err("p", ThemeRuleErrorKind::PatternForbidden),
+                rule_err("e", ThemeRuleErrorKind::EnabledFalseForbidden),
+                rule_err("<general>", ThemeRuleErrorKind::GeneralSectionForbidden),
+            ],
+        };
+        let s = e.to_string();
+        assert!(s.contains("not a built-in name"), "UnknownName text: {s}");
+        assert!(s.contains("must not set 'pattern'"), "PatternForbidden text: {s}");
+        assert!(s.contains("must not set 'enabled = false'"), "EnabledFalseForbidden: {s}");
+        assert!(s.contains("themes must not set [general]"), "GeneralSection: {s}");
+    }
+
+    #[test]
+    fn theme_validation_display_sanitizes_control_bytes_in_path() {
+        let e = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "/tmp/\x1b[2J/x.toml".into(),
+            errors: vec![rule_err("a", ThemeRuleErrorKind::UnknownName)],
+        };
+        let s = e.to_string();
+        assert!(!s.contains('\x1b'), "raw ESC must not survive: {s:?}");
+        assert!(s.contains("\\x1b"), "ESC must be escaped: {s:?}");
+    }
+
+    #[test]
+    fn theme_validation_display_sanitizes_control_bytes_in_rule_name() {
+        let e = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<x>".into(),
+            errors: vec![rule_err("evil\x1b[2J", ThemeRuleErrorKind::UnknownName)],
+        };
+        let s = e.to_string();
+        assert!(!s.contains('\x1b'), "raw ESC must not survive: {s:?}");
+        assert!(s.contains("\\x1b"), "ESC must be escaped: {s:?}");
+    }
+
+    #[test]
+    fn theme_validation_display_sanitizes_control_bytes_in_theme_name() {
+        let e = Error::ThemeValidation {
+            theme: "evil\x1b[2J".into(),
+            source_path: "<x>".into(),
+            errors: vec![rule_err("a", ThemeRuleErrorKind::UnknownName)],
+        };
+        let s = e.to_string();
+        assert!(!s.contains('\x1b'), "raw ESC must not survive: {s:?}");
+        assert!(s.contains("\\x1b"), "ESC must be escaped: {s:?}");
     }
 }
