@@ -29,7 +29,6 @@
 //! - [`LoadedTheme`] — `(source, path_label)` pair returned by [`load`].
 //! - [`load`] — resolve a theme name (disk-first, built-in fallback).
 //! - [`load_with`] — testable variant accepting env-var closures.
-//! - [`names`] — alphabetically-sorted list of BUILT-IN theme names.
 //! - [`validate_theme_rules`] — fail-collected schema-shape check.
 //! - [`synthetic_path`] — embedded source label for built-in themes.
 
@@ -44,15 +43,20 @@ use crate::Result;
 /// themes (allocated once at load time).
 ///
 /// `path_label` is `<embedded:theme/{name}>` for presets and the
-/// absolute canonical disk path for disk-loaded themes. It is fed into
+/// absolute disk path (as the user typed/configured it, not the
+/// canonicalized form — symlinks are preserved so the label matches
+/// what the user can `ls` or edit; this mirrors the
+/// `config::check_default_path` precedent). It is fed into
 /// [`crate::config::parse`] and [`validate_theme_rules`] so downstream
 /// error messages point at the actual source the user can edit.
-#[allow(dead_code)]
-// reason: consumed by Task 14 (themes::load rewrite) — struct lands
-// first so subsequent helper commits can reference the type if needed.
 #[derive(Debug)]
 pub(crate) struct LoadedTheme {
     pub source: std::borrow::Cow<'static, str>,
+    #[allow(dead_code)]
+    // reason: read by Task 16 (rules.rs:504 final adapter) — bridge in this
+    // commit keeps the synthetic-path label so the tree compiles; promoted
+    // to `loaded.path_label` in the next task, gating diagnostics on the
+    // real on-disk theme file rather than the embedded synthetic.
     pub path_label: String,
 }
 
@@ -76,10 +80,6 @@ pub(crate) struct LoadedTheme {
 /// like `../../etc/passwd` would still be caught by the canonical-base
 /// whitelist downstream, but failing here keeps the error message clear
 /// (`Error::Theme` "not found" rather than `Error::Config` "symlink out").
-#[allow(dead_code)]
-// reason: consumed by Task 14 (themes::load rewrite); tests in the
-// same module exercise it but clippy's dead_code lint fires on lib
-// builds because the production call site lands in the next commit.
 fn name_is_valid(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
@@ -108,10 +108,6 @@ fn name_is_valid(name: &str) -> bool {
 /// symlink to `/elsewhere/themes`, both sides resolve into `/elsewhere/`
 /// and the file is accepted (user intentionally redirected the entire
 /// directory).
-#[allow(dead_code)]
-// reason: consumed by Task 14 (themes::load rewrite); tests in the
-// same module exercise it but clippy's dead_code lint fires on lib
-// builds because the production call site lands in the next commit.
 fn resolve_disk_path_in_base(
     name: &str,
     base: &std::path::Path,
@@ -168,10 +164,6 @@ fn resolve_disk_path_in_base(
 /// not-found list?" gets a signal without polluting stderr by default
 /// (Rev2 N-3). The crate-local logger does not yet expose a
 /// `debug_msg!` macro, so `info` is the lowest gate available.
-#[allow(dead_code)]
-// reason: consumed by Task 14 (themes::load rewrite); tests in the
-// same module exercise it but clippy's dead_code lint fires on lib
-// builds because the production call site lands in the next commit.
 fn discover_disk_themes(base: &std::path::Path) -> Vec<String> {
     let themes_dir = base.join("themes");
     let entries = match std::fs::read_dir(&themes_dir) {
@@ -209,10 +201,6 @@ fn discover_disk_themes(base: &std::path::Path) -> Vec<String> {
 ///
 /// `base` is the already-resolved config base (`<config_base>`). `None`
 /// means no `$XDG_CONFIG_HOME` and no `$HOME`; only built-ins are listed.
-#[allow(dead_code)]
-// reason: consumed by Task 14 (themes::load rewrite); tests in the
-// same module exercise it but clippy's dead_code lint fires on lib
-// builds because the production call site lands in the next commit.
 fn available_theme_names_from_base(base: Option<&std::path::Path>) -> Vec<String> {
     let mut names: Vec<String> = REGISTRY.iter().map(|(n, _)| (*n).to_owned()).collect();
     if let Some(base) = base {
@@ -234,10 +222,6 @@ fn available_theme_names_from_base(base: Option<&std::path::Path>) -> Vec<String
 /// file shares a built-in name. Message carries the disk path so the
 /// user knows exactly which file to rename, plus a concrete hint for a
 /// safe replacement name.
-#[allow(dead_code)]
-// reason: consumed by Task 14 (themes::load rewrite); tests in the
-// same module exercise it but clippy's dead_code lint fires on lib
-// builds because the production call site lands in the next commit.
 fn collision_error(name: &str, disk_path: &std::path::Path) -> Error {
     Error::Config {
         path: disk_path.display().to_string(),
@@ -263,22 +247,102 @@ const THEME_NAMES: [&str; 2] = ["dark", "light"];
 /// list.
 const REGISTRY: &[(&str, &str)] = &[(THEME_NAMES[0], DARK_SRC), (THEME_NAMES[1], LIGHT_SRC)];
 
-/// Resolve a theme name to its embedded TOML source.
+/// Resolve a theme name to its TOML source, preferring disk themes over
+/// built-in presets when both exist for the same `name`. Production
+/// entry — reads `$XDG_CONFIG_HOME` and `$HOME` from the environment.
 ///
 /// # Errors
-/// Returns [`Error::Theme`] with the sorted list of available theme names
-/// when `name` is not in the registry.
-pub(crate) fn load(name: &str) -> Result<&'static str> {
-    if let Some((_, src)) = REGISTRY.iter().find(|(n, _)| *n == name) {
-        return Ok(*src);
+/// - [`Error::Config`] when a disk theme exists for a built-in name
+///   (F2 collision policy; case-insensitive — `--theme DARK` with disk
+///   `dark.toml` errors on case-insensitive filesystems too).
+/// - [`Error::Config`] when the disk theme cannot be read, is too large,
+///   resolves outside the canonical themes base (symlink-out reject),
+///   or is not a regular file.
+/// - [`Error::Theme`] when neither a disk theme nor a built-in by this
+///   name exists; the `available` list contains built-ins ∪
+///   disk-discovered names, deduplicated and alphabetically sorted
+///   (collisions excluded).
+pub(crate) fn load(name: &str) -> Result<LoadedTheme> {
+    load_with(
+        name,
+        || std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from),
+        || std::env::var_os("HOME").map(std::path::PathBuf::from),
+    )
+}
+
+/// Testable variant of [`load`]; accepts env-var closures so unit tests
+/// can scope `$XDG_CONFIG_HOME` and `$HOME` to a `tempdir` without
+/// mutating the process environment.
+pub(crate) fn load_with(
+    name: &str,
+    xdg: impl FnOnce() -> Option<std::path::PathBuf>,
+    home: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<LoadedTheme> {
+    // Resolve base ONCE — closures consumed here, never re-used downstream.
+    // `base` may be None (neither XDG nor HOME set, or both empty) — that
+    // short-circuits disk lookup but built-in registry still works.
+    let base = crate::config::config_base(xdg, home);
+
+    // Name shape — fail-fast on path separators / traversal / empty.
+    // Defense-in-depth: name reaches us from CLI args or config TOML, both
+    // of which could carry adversarial values. Available list reuses
+    // `base` (None → built-ins only).
+    if !name_is_valid(name) {
+        return Err(Error::Theme {
+            name: name.to_owned(),
+            available: available_theme_names_from_base(base.as_deref()),
+        });
     }
+
+    // Disk lookup — `resolve_disk_path_in_base` runs the symlink-out +
+    // regular-file gates. Returns `Ok(None)` cleanly when the themes/
+    // subdir or the specific theme file doesn't exist.
+    let disk = match base.as_deref() {
+        Some(b) => resolve_disk_path_in_base(name, b)?,
+        None => None,
+    };
+
+    // F2 collision check (Rev2 I-1 — case-insensitive).
+    // macOS APFS / HFS+ default is case-insensitive; `dark.toml` matches
+    // `--theme DARK` at the filesystem layer. Without
+    // `eq_ignore_ascii_case` the registry compare misses, and the user
+    // accidentally bypasses the F2 protection by typo'ing case.
+    let is_builtin = REGISTRY.iter().any(|(n, _)| name.eq_ignore_ascii_case(n));
+    if let Some(ref disk_path) = disk {
+        if is_builtin {
+            return Err(collision_error(name, disk_path));
+        }
+    }
+
+    // Disk theme — read with cap, wrap in Cow::Owned.
+    if let Some(disk_path) = disk {
+        let body = crate::config::read_capped(&disk_path)?;
+        let path_label = disk_path.display().to_string();
+        return Ok(LoadedTheme { source: std::borrow::Cow::Owned(body), path_label });
+    }
+
+    // Built-in registry (case-sensitive — only the lowercase canonical
+    // names match; user typing `--theme DARK` without a disk file still
+    // errors with `Error::Theme` so the casing rule stays predictable).
+    if let Some((_, src)) = REGISTRY.iter().find(|(n, _)| *n == name) {
+        return Ok(LoadedTheme {
+            source: std::borrow::Cow::Borrowed(*src),
+            path_label: synthetic_path(name),
+        });
+    }
+
+    // Unknown — Error::Theme with full available list reusing cached base.
     Err(Error::Theme {
         name: name.to_owned(),
-        available: names().iter().map(|s| (*s).to_owned()).collect(),
+        available: available_theme_names_from_base(base.as_deref()),
     })
 }
 
-/// Alphabetically-sorted slice of available theme names.
+/// Alphabetically-sorted slice of BUILT-IN theme names. Production code
+/// no longer calls this — disk + built-in merging happens via
+/// [`available_theme_names_from_base`]. Retained for the in-module test
+/// suite (built-in registry sort-order + shipped-theme integrity checks).
+#[cfg(test)]
 pub(crate) fn names() -> &'static [&'static str] {
     &THEME_NAMES
 }
@@ -384,14 +448,20 @@ mod tests {
     #[test]
     fn load_known_themes_returns_non_empty_source() {
         for &name in names() {
-            let src = load(name).expect("known theme should load");
-            assert!(!src.trim().is_empty(), "theme {name:?} embedded source must not be empty");
+            let loaded = load(name).expect("known theme should load");
+            assert!(
+                !loaded.source.trim().is_empty(),
+                "theme {name:?} embedded source must not be empty"
+            );
         }
     }
 
     #[test]
     fn load_unknown_theme_returns_error_theme_with_available() {
-        let err = load("nope").expect_err("unknown theme must error");
+        // Use `load_with` with no disk base so the available list is
+        // deterministic across dev machines (a real `~/.config/tayf/themes`
+        // on the dev's box would otherwise leak into this assertion).
+        let err = load_with("nope", || None, || None).expect_err("unknown theme must error");
         match err {
             Error::Theme { name, available } => {
                 assert_eq!(name, "nope");
@@ -464,15 +534,12 @@ mod tests {
 
     #[test]
     fn shipped_theme_files_parse_and_validate() {
-        // Each shipped theme must (a) parse as TOML matching the user-config schema,
-        // and (b) pass theme-specific validation. This catches accidental drift
-        // between the embedded TOML and the validation rules at unit-test time.
         for &name in names() {
-            let src = load(name).unwrap();
-            let synth = synthetic_path(name);
-            let cfg = crate::config::parse(&synth, src)
+            let loaded = load(name).unwrap();
+            let src: &str = &loaded.source;
+            let cfg = crate::config::parse(&synthetic_path(name), src)
                 .unwrap_or_else(|e| panic!("theme {name:?} did not parse: {e}"));
-            validate_theme_rules(name, &synth, &cfg)
+            validate_theme_rules(name, &synthetic_path(name), &cfg)
                 .unwrap_or_else(|e| panic!("theme {name:?} failed validation: {e}"));
             assert_eq!(
                 cfg.rules.len(),
@@ -815,5 +882,140 @@ mod tests {
         assert!(s.contains("shadows the built-in"), "rationale: {s}");
         assert!(s.contains("rename"), "actionable hint: {s}");
         assert!(s.contains("/tmp/themes/dark.toml"), "should include disk path: {s}");
+    }
+
+    #[test]
+    fn load_built_in_returns_borrowed_cow() {
+        let loaded = load("dark").expect("built-in load");
+        assert!(matches!(loaded.source, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(loaded.path_label, "<embedded:theme/dark>");
+        assert!(!loaded.source.is_empty());
+    }
+
+    #[test]
+    fn load_with_disk_overrides_returns_owned_cow() {
+        let dir = tmp();
+        // `config_base` appends `tayf` to the XDG value, so the themes
+        // dir we write into is `<xdg>/tayf/themes/`.
+        let xdg_tayf = dir.path().join("tayf");
+        fs::create_dir_all(&xdg_tayf).unwrap();
+        let path = write_theme(&xdg_tayf, "mine", "# disk theme\n");
+        let loaded =
+            load_with("mine", || Some(dir.path().to_path_buf()), || None).expect("disk load");
+        assert!(matches!(loaded.source, std::borrow::Cow::Owned(_)));
+        assert!(loaded.source.contains("# disk theme"));
+        assert_eq!(loaded.path_label, path.display().to_string());
+    }
+
+    #[test]
+    fn load_with_xdg_unset_falls_back_to_home() {
+        let dir = tmp();
+        let home_themes = dir.path().join(".config").join("tayf");
+        fs::create_dir_all(&home_themes).unwrap();
+        write_theme(&home_themes, "via_home", "# via home\n");
+        let loaded =
+            load_with("via_home", || None, || Some(dir.path().to_path_buf())).expect("home load");
+        assert!(loaded.source.contains("# via home"));
+    }
+
+    #[test]
+    fn load_with_xdg_empty_is_treated_as_unset() {
+        let dir = tmp();
+        let home_themes = dir.path().join(".config").join("tayf");
+        fs::create_dir_all(&home_themes).unwrap();
+        write_theme(&home_themes, "via_home", "# via home\n");
+        let loaded = load_with(
+            "via_home",
+            || Some(std::path::PathBuf::new()), // empty == unset per XDG spec
+            || Some(dir.path().to_path_buf()),
+        )
+        .expect("home load");
+        assert!(loaded.source.contains("# via home"));
+    }
+
+    #[test]
+    fn load_collision_with_builtin_name_errors() {
+        let dir = tmp();
+        let xdg_tayf = dir.path().join("tayf");
+        fs::create_dir_all(&xdg_tayf).unwrap();
+        write_theme(&xdg_tayf, "dark", "# user dark theme\n");
+        let err = load_with("dark", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("disk dark.toml + built-in dark must collide");
+        let msg = err.to_string();
+        assert!(msg.contains("shadows the built-in"), "got: {msg}");
+        assert!(msg.contains("'dark'"), "got: {msg}");
+    }
+
+    #[test]
+    fn load_collision_with_mixed_case_built_in_name_errors() {
+        // Rev2 I-1 — case-insensitive collision protects macOS APFS users.
+        let dir = tmp();
+        let xdg_tayf = dir.path().join("tayf");
+        fs::create_dir_all(&xdg_tayf).unwrap();
+        write_theme(&xdg_tayf, "dark", "# user dark theme\n");
+        let err = load_with("DARK", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("DARK requested with dark.toml on disk must collide");
+        assert!(err.to_string().contains("shadows the built-in"));
+    }
+
+    #[test]
+    fn load_unknown_name_lists_built_ins_and_disk() {
+        let dir = tmp();
+        let xdg_tayf = dir.path().join("tayf");
+        fs::create_dir_all(&xdg_tayf).unwrap();
+        write_theme(&xdg_tayf, "foo", "");
+        write_theme(&xdg_tayf, "bar", "");
+        let err = load_with("baz", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("baz not in built-ins, not on disk");
+        let crate::error::Error::Theme { available, .. } = err else {
+            panic!("expected Error::Theme");
+        };
+        assert_eq!(available, vec!["bar", "dark", "foo", "light"]);
+    }
+
+    #[test]
+    fn load_invalid_name_with_separator_fails_fast() {
+        let dir = tmp();
+        let err = load_with("../etc/passwd", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("path separator name must error");
+        assert!(matches!(err, crate::error::Error::Theme { .. }));
+    }
+
+    #[test]
+    fn load_invalid_name_with_dot_fails_fast() {
+        let dir = tmp();
+        let err = load_with("bad.name", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("dot in name must error");
+        assert!(matches!(err, crate::error::Error::Theme { .. }));
+    }
+
+    #[test]
+    fn load_invalid_name_error_lists_disk_themes_too() {
+        // Rev2 C-2 — fast-fail branch still consumes closures via config_base
+        // and reuses base for the available list.
+        let dir = tmp();
+        let xdg_tayf = dir.path().join("tayf");
+        fs::create_dir_all(&xdg_tayf).unwrap();
+        write_theme(&xdg_tayf, "foo", "");
+        let err = load_with("../bad", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("invalid name");
+        let crate::error::Error::Theme { available, .. } = err else {
+            panic!("expected Error::Theme");
+        };
+        assert!(available.contains(&"foo".to_string()), "disk theme listed: {available:?}");
+        assert!(available.contains(&"dark".to_string()));
+        assert!(available.contains(&"light".to_string()));
+    }
+
+    #[test]
+    fn load_disk_theme_too_large_rejected() {
+        let dir = tmp();
+        let xdg_tayf = dir.path().join("tayf");
+        fs::create_dir_all(&xdg_tayf).unwrap();
+        let big = "a".repeat(crate::config::MAX_CONFIG_BYTES + 1);
+        write_theme(&xdg_tayf, "huge", &big);
+        let err = load_with("huge", || Some(dir.path().to_path_buf()), || None)
+            .expect_err("oversized theme must error");
+        assert!(err.to_string().contains("too large"), "got: {err}");
     }
 }

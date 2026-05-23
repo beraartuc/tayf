@@ -501,7 +501,8 @@ impl Compiled {
         // BEFORE the merge so semantic errors surface against the synthetic
         // theme path rather than mutating the rule set first.
         if let Some(name) = theme {
-            let src = crate::themes::load(name)?;
+            let loaded = crate::themes::load(name)?;
+            let src: &str = &loaded.source;
             let synth = crate::themes::synthetic_path(name);
             let theme_cfg = crate::config::parse(&synth, src)?;
             crate::themes::validate_theme_rules(name, &synth, &theme_cfg)?;

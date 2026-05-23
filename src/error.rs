@@ -121,8 +121,9 @@ pub enum Error {
     },
 
     /// Returned when `--theme <NAME>` or `[general] theme = "..."` names a theme
-    /// that is not in the embedded registry. The available list is computed
-    /// from [`crate::themes::names`] at construction time.
+    /// that is not in the embedded registry and not found on disk. The available
+    /// list merges built-ins with disk-discovered names at construction time,
+    /// minus any case-insensitive collisions (built-ins always win the name).
     #[error("theme '{}' not found; available: {}. Run with --theme <name>.", sanitize_for_display(name), available.join(", "))]
     Theme { name: String, available: Vec<String> },
 
