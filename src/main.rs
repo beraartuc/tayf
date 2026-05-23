@@ -45,11 +45,34 @@ fn map_error_to_exit_code(err: &Error) -> u8 {
         Error::Signal(_) => 71,
         Error::RegexCompile(_) => 70, // EX_SOFTWARE
         Error::BufferOverflow { .. } => 70,
-        Error::Config { .. } => 64, // EX_USAGE
-        Error::Theme { .. } => 64,  // EX_USAGE — unknown --theme value
+        Error::Config { .. } => 64,          // EX_USAGE
+        Error::Theme { .. } => 64,           // EX_USAGE — unknown --theme value
+        Error::ThemeValidation { .. } => 64, // EX_USAGE — disk/preset theme validation
         // reason: `Error` is `#[non_exhaustive]` for forward compat; future
         // variants default to EX_SOFTWARE until explicitly mapped. New
         // variants SHOULD be added above this arm with the appropriate code.
         _ => 70,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_validation_maps_to_ex_usage() {
+        let err = Error::ThemeValidation {
+            theme: "x".into(),
+            source_path: "<x>".into(),
+            errors: vec![tayf::ThemeRuleError {
+                rule_name: "a".into(),
+                kind: tayf::ThemeRuleErrorKind::UnknownName,
+            }],
+        };
+        assert_eq!(
+            map_error_to_exit_code(&err),
+            64,
+            "ThemeValidation is a user-input error; must map to EX_USAGE",
+        );
     }
 }
