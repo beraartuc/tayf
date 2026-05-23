@@ -49,11 +49,22 @@ pub(crate) struct GeneralSection {
     /// surfaces as [`crate::Error::Theme`].
     #[serde(default)]
     pub(crate) theme: Option<String>,
+
+    /// v0.3.3: when `true`, the reload orchestrator writes a one-line dim
+    /// banner (`tayf: config reloaded`) to `/dev/tty` after each
+    /// successful hot reload (file change or `SIGHUP`). Default `false`
+    /// (opt-in). Failures during reload do NOT write the banner; they
+    /// continue to surface via the existing `warn_msg!` log path on
+    /// stderr. The banner is naive about TUI / alt-screen state —
+    /// opt-in users accept the trade-off. Alt-screen-aware queuing is
+    /// deferred to v0.4.
+    #[serde(default)]
+    pub(crate) show_reload_banner: bool,
 }
 
 impl Default for GeneralSection {
     fn default() -> Self {
-        Self { respect_existing_colors: true, theme: None }
+        Self { respect_existing_colors: true, theme: None, show_reload_banner: false }
     }
 }
 
@@ -1079,5 +1090,35 @@ theme = "light"
     fn parse_omits_general_theme_defaults_to_none() {
         let cfg = parse("/x", "").unwrap();
         assert!(cfg.general.theme.is_none());
+    }
+
+    #[test]
+    fn show_reload_banner_defaults_to_false_when_omitted() {
+        let cfg = parse("test", "[general]\n").unwrap();
+        assert!(!cfg.general.show_reload_banner);
+    }
+
+    #[test]
+    fn show_reload_banner_defaults_to_false_when_general_section_missing() {
+        let cfg = parse("test", "").unwrap();
+        assert!(!cfg.general.show_reload_banner);
+    }
+
+    #[test]
+    fn show_reload_banner_parses_true() {
+        let cfg = parse("test", "[general]\nshow_reload_banner = true\n").unwrap();
+        assert!(cfg.general.show_reload_banner);
+    }
+
+    #[test]
+    fn show_reload_banner_parses_false_explicit() {
+        let cfg = parse("test", "[general]\nshow_reload_banner = false\n").unwrap();
+        assert!(!cfg.general.show_reload_banner);
+    }
+
+    #[test]
+    fn show_reload_banner_unknown_typo_rejected() {
+        let err = parse("test", "[general]\nreload_banner = true\n").unwrap_err();
+        assert!(matches!(err, crate::error::Error::Config { .. }));
     }
 }
