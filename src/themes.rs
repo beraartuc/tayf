@@ -56,6 +56,34 @@ pub(crate) struct LoadedTheme {
     pub path_label: String,
 }
 
+/// A theme name must be a single non-empty path-segment-safe identifier.
+/// Allowed characters: ASCII alphanumeric, `-`, `_`. No `.` characters at
+/// all (rejects hidden-file names like `.dark` and disambiguates from
+/// the `.toml` extension we append). No path separators, no traversal.
+///
+/// Leading hyphen (`-foo`) and leading digit (`0`, `123abc`) are accepted
+/// — names are treated as filesystem path segments, not identifier-style
+/// tokens. This is lenient by design; v0.3.5+ may tighten if real user
+/// reports show confusion (Rev2 N-2).
+///
+/// ASCII-only (Rev2 Q2): CLAUDE.md §1 mandates English identifiers in
+/// code; theme names are identifiers (CLI args, registry keys). Unicode
+/// would invite homoglyph attacks against the F2 collision check
+/// (`dark` vs `dаrk` with Cyrillic `а`).
+///
+/// Defense-in-depth: `name` reaches us from CLI args or config TOML and
+/// is interpolated into a disk path (`base/themes/<name>.toml`). A name
+/// like `../../etc/passwd` would still be caught by the canonical-base
+/// whitelist downstream, but failing here keeps the error message clear
+/// (`Error::Theme` "not found" rather than `Error::Config` "symlink out").
+#[allow(dead_code)]
+// reason: consumed by Task 14 (themes::load rewrite); tests in the
+// same module exercise it but clippy's dead_code lint fires on lib
+// builds because the production call site lands in the next commit.
+fn name_is_valid(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 const DARK_SRC: &str = include_str!("../assets/themes/dark.toml");
 const LIGHT_SRC: &str = include_str!("../assets/themes/light.toml");
 
@@ -395,5 +423,58 @@ mod tests {
         let cfg = cfg_with_rules(vec![rule("ipv4")]);
         assert_eq!(cfg.general, crate::config::GeneralSection::default());
         validate_theme_rules("mine", "<mine>", &cfg).expect("default general is fine");
+    }
+
+    #[test]
+    fn name_is_valid_accepts_alphanumeric_and_separators() {
+        assert!(name_is_valid("dark"));
+        assert!(name_is_valid("light"));
+        assert!(name_is_valid("solarized-dark"));
+        assert!(name_is_valid("solarized_dark"));
+        assert!(name_is_valid("my-theme-v2"));
+        assert!(name_is_valid("a1b2c3"));
+        assert!(name_is_valid("-foo"));
+        assert!(name_is_valid("0"));
+        assert!(name_is_valid("123abc"));
+        assert!(name_is_valid("_under"));
+    }
+
+    #[test]
+    fn name_is_valid_rejects_empty() {
+        assert!(!name_is_valid(""));
+    }
+
+    #[test]
+    fn name_is_valid_rejects_path_separators() {
+        assert!(!name_is_valid("x/y"));
+        assert!(!name_is_valid("x\\y"));
+        assert!(!name_is_valid("../etc/passwd"));
+    }
+
+    #[test]
+    fn name_is_valid_rejects_dots() {
+        assert!(!name_is_valid(".dark"));
+        assert!(!name_is_valid("bad.name"));
+        assert!(!name_is_valid("a.b.c"));
+        assert!(!name_is_valid(".."));
+    }
+
+    #[test]
+    fn name_is_valid_rejects_general_sentinel() {
+        assert!(!name_is_valid("<general>"));
+        assert!(!name_is_valid("<anything>"));
+    }
+
+    #[test]
+    fn name_is_valid_rejects_non_ascii() {
+        assert!(!name_is_valid("ışık"));
+        assert!(!name_is_valid("dаrk"));
+    }
+
+    #[test]
+    fn name_is_valid_rejects_whitespace() {
+        assert!(!name_is_valid("my theme"));
+        assert!(!name_is_valid("\tindent"));
+        assert!(!name_is_valid(" leading"));
     }
 }
