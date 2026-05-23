@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — TBD
+
+### Added
+
+- `--bypass` CLI flag and `TAYF_DISABLE` environment variable. When either is set (CLI takes precedence; env truthy values: `1`, `true`, `yes`, case-insensitive), tayf still wraps the PTY, forwards signals, and protects the terminal via its raw-mode RAII guard, but skips all rule matching, SGR injection, automatic background detection, and hot config reloading. Equivalent to running the shell directly except for PTY ownership and signal plumbing. Intended for the `[[ -n "$TAYF_DISABLE" ]] || exec tayf`-style conditional wrap in shell rc files, and for one-shot overrides like `TAYF_DISABLE=1 my-tool`.
+- `--no-hot-reload` CLI flag. When set, the file watcher and reload orchestrator threads are not spawned. Config still loads at startup as usual; only the *re*-load pipeline is off. With no config file present, `--no-hot-reload` is a no-op (no watcher would have spawned anyway).
+- `[general] show_reload_banner` config field (default `false` — opt-in). When set to `true`, a one-line dim banner (`tayf: config reloaded`) is written directly to `/dev/tty` after each successful hot reload (file change or `SIGHUP`). The banner is wrapped in DECSC/DECRC (cursor save/restore) so multi-line shell prompts (zsh ZLE, `RPROMPT`, `PROMPT_SP`) keep their visual cursor position; SGR is balanced via `\x1b[2m` / `\x1b[22m` (dim/bold cancel only — does NOT clobber prompt-side SGR state). Reload *failures* do not write the banner — they continue to surface via the existing `warn_msg!` stderr log path. The banner is naive about TUI / alt-screen state: when an opt-in user is inside vim / less, the banner will be drawn into the alt-screen buffer and vanish when the program exits. Alt-screen-aware queuing is deferred to v0.4.
+
+### Changed
+
+- **BEHAVIOR CHANGE — SIGHUP forwarding.** `SIGHUP` is now forwarded to the child process group in all configurations, mirroring `SIGINT` and `SIGTERM`. Previously (v0.2.1 through v0.3.2), `SIGHUP` was forwarded *only* when the hot-reload pipeline was wired — i.e. when a config file existed AND the reload orchestrator had been spawned. In every other case (no config, or — with v0.3.3 — `--no-hot-reload`), `SIGHUP` was silently dropped by the signal thread, leaving the child shell unaware of tmux detach, terminal-emulator close, or `kill -HUP` and orphaning its foreground processes. v0.3.3 fixes this: the child process group always receives the signal, AND (when hot-reload is wired) the orchestrator additionally receives the reload trigger. Users who relied on the v0.2.1 silent-drop behavior (rare — it was undocumented and arose from the v0.2.1 hot-reload design accidentally intercepting `SIGHUP` without a forwarding fallback) should expect the child shell to terminate or behave per its own `SIGHUP` trap on detach / `kill -HUP`. Most interactive shells (`bash`, `zsh`, `fish`) install a `SIGHUP` trap and tolerate the signal cleanly.
+
+### Notes
+
+- No new dependencies. v0.3.2 (and earlier) config files remain shimless backward-compatible — the new `show_reload_banner` field defaults to `false` when absent.
+- The `env_truthy` helper (formerly `bg_detect::env_truthy`, v0.3.2) was moved from `src/bg_detect.rs` to `src/lib.rs` module root (`crate::env_truthy`) so that both the `TAYF_DISABLE_BG_DETECT` and `TAYF_DISABLE` parse paths share a single-source utility. Parsing semantics are identical (`1` / `true` / `yes`, case-insensitive). Module-private behavior change only; no caller outside the crate exists.
+- `Args` (the parsed CLI surface, `pub use cli::Args;`) gained `#[non_exhaustive]`. Downstream users who construct `Args { ... }` via struct-literal syntax will need to use a parse-from helper (e.g. `Args::try_parse_from(["tayf"])`) instead. One-time minor break that allows future field additions without semver bumps.
+- No new public API surface beyond the additive CLI flags and the additive config field. `Tayf::run` signature unchanged. The internal `ReloadOrchestrator::spawn` (`pub(crate)`) gained a sixth `Option<Box<dyn BannerSink>>` parameter; not part of the public API.
+
+[0.3.3]: https://github.com/beraartuc/tayf/releases/tag/v0.3.3
+
 ## [0.3.2] — 2026-05-23
 
 ### Added
