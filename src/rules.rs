@@ -361,14 +361,20 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
             is_user_supplied: false,
         },
+        // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
+        // Bare units [smhd] match without whitespace (e.g. "5m", "30s"); multi-letter
+        // units (ns/us/μs/ms) keep optional single-space prefix. Compound forms like
+        // kubectl AGE "2d3h" or docker STATUS "1h30m20s" match as a single span via
+        // the repeat group — Rust regex has no lookahead; this shape is the lookahead-
+        // free equivalent and remains linear-time DFA.
+        // SGR collision safety: v0.3.0 ANSI SM separates SGR bytes into sequence_scratch;
+        // with default respect_existing_colors=true, apply_rules skips SGR-bearing lines
+        // entirely. Users opting out (respect_existing_colors=false) re-introduce the
+        // v0.1-class collision (e.g. "49m" inside "\x1b[49m") — known limitation, see
+        // CHANGELOG and spec §1.7.
         BuiltinRule {
             name: "duration".into(),
-            // reason: dropping bare `s`, `m`, `h` units that collide with SGR final
-            // bytes (\x1b[49m, etc.) and produce false-positive duration matches inside
-            // escape sequences. Multi-character units cover the modern use cases
-            // (nanosec, microsec, millisec). Tracked in spec §6.2 — full ANSI awareness
-            // arrives in v0.3 to allow the bare units back safely.
-            pattern: r"\b\d+(?:\.\d+)?\s?(?:ns|us|μs|ms)\b".into(),
+            pattern: r"\b\d+(?:\.\d+)?(?:\s?(?:ns|us|μs|ms)|[smhd])(?:\d+(?:\.\d+)?(?:\s?(?:ns|us|μs|ms)|[smhd]))*\b".into(),
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
             is_user_supplied: false,
         },
@@ -579,9 +585,9 @@ mod tests {
         re.find(input.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned())
     }
 
-    // reason: helper for upcoming v0.3.2 tasks (duration fixture matrix uses
-    // `match list: [...]`); landing both helpers together per the plan.
-    #[allow(dead_code)]
+    // reason: helper for fixture matrices that need the captured match list
+    // (e.g. duration §4.2 "match list: [...]"); paired with `matches` for
+    // boolean-only fixtures.
     fn all_matches(pattern_name: &str, input: &str) -> Vec<String> {
         let re = regex::bytes::Regex::new(&find_rule(pattern_name)).unwrap();
         re.find_iter(input.as_bytes())
@@ -641,46 +647,102 @@ mod tests {
         assert!(!matches("fqdn", "localhost"));
     }
 
+    // === Duration pattern (rule "duration") — see spec §4.2 ===
+
     #[test]
-    fn duration_matches() {
-        assert!(matches("duration", "took 20.291 ms"));
-        assert!(matches("duration", "elapsed 1500 ms"));
-        assert!(matches("duration", "150ms"));
-        assert!(matches("duration", "2.5 us"));
-        assert!(matches("duration", "100 μs"));
-        assert!(matches("duration", "50 ns"));
-        // v0.1 drops bare `s` / `m` / `h` units because they collide with SGR
-        // final bytes; these intentionally do NOT match anymore:
-        assert!(!matches("duration", "took 1m"));
-        assert!(!matches("duration", "took 1h"));
-        assert!(!matches("duration", "took 1s"));
-        assert!(!matches("duration", "milliseconds"));
+    fn duration_matches_bare_units() {
+        // NEW in v0.3.2: bare [smhd] units.
+        assert_eq!(all_matches("duration", "took 5s"), vec!["5s".to_string()]);
+        assert_eq!(all_matches("duration", "elapsed 30m"), vec!["30m".to_string()]);
+        assert_eq!(all_matches("duration", "uptime 2h"), vec!["2h".to_string()]);
+        assert_eq!(all_matches("duration", "retention 7d"), vec!["7d".to_string()]);
     }
 
     #[test]
-    fn duration_does_not_match_sgr_parameters() {
-        // Regression test for v0.1 SGR-collision bug.
-        // Bytes like "\x1b[0m", "\x1b[49m" must NOT contain a duration match
-        // when scanned as raw bytes — otherwise apply_rules will inject an
-        // escape mid-sequence and break Powerlevel10k-style prompts.
+    fn duration_matches_compound_forms() {
+        // NEW in v0.3.2: compound via repeat group, single span per match.
+        // Drives kubectl AGE and docker ps STATUS columns.
+        assert_eq!(all_matches("duration", "AGE 2d3h"), vec!["2d3h".to_string()]);
+        assert_eq!(all_matches("duration", "STATUS 1h30m20s"), vec!["1h30m20s".to_string()]);
+        assert_eq!(all_matches("duration", "elapsed 1h30m500ms"), vec!["1h30m500ms".to_string()]);
+        assert_eq!(all_matches("duration", "uptime 7d12h30m"), vec!["7d12h30m".to_string()]);
+    }
+
+    #[test]
+    fn duration_matches_multi_letter_units_preserved() {
+        // v0.2.2 multi-letter units carry over.
+        assert_eq!(all_matches("duration", "took 20.291 ms"), vec!["20.291 ms".to_string()]);
+        assert_eq!(all_matches("duration", "took 50ns"), vec!["50ns".to_string()]);
+        assert_eq!(all_matches("duration", "took 100 μs"), vec!["100 μs".to_string()]);
+        assert_eq!(all_matches("duration", "took 2.5 us"), vec!["2.5 us".to_string()]);
+    }
+
+    #[test]
+    fn duration_rejects_word_continuation() {
+        // FP guards: \b after [smhd] fails when next char is also a word char.
+        assert!(all_matches("duration", "5min ago").is_empty());
+        assert!(all_matches("duration", "5seconds").is_empty());
+        assert!(all_matches("duration", "5days").is_empty());
+        assert!(all_matches("duration", "5hours").is_empty());
+    }
+
+    #[test]
+    fn duration_rejects_bare_unit_with_whitespace() {
+        // FP guards: bare units require NO space; multi-letter units may have one.
+        assert!(all_matches("duration", "5 m of cable").is_empty());
+        assert!(all_matches("duration", "took 5 s").is_empty());
+        assert!(all_matches("duration", "took 5 h").is_empty());
+        assert!(all_matches("duration", "took 5 d").is_empty());
+    }
+
+    #[test]
+    fn duration_accepts_decade_plural_as_fp_tradeoff() {
+        // Documented accepted FP — too rare in CLI output to suppress; spec §1.7.
+        assert_eq!(all_matches("duration", "in the 200s"), vec!["200s".to_string()]);
+    }
+
+    #[test]
+    fn duration_multiple_non_adjacent_matches() {
+        assert_eq!(
+            all_matches("duration", "first 5s then 30m later"),
+            vec!["5s".to_string(), "30m".to_string()]
+        );
+    }
+
+    #[test]
+    fn bare_units_collide_with_sgr_when_respect_existing_colors_is_false() {
+        // KNOWN LIMITATION: spec §1.3, §1.7 — when the user opts out of the
+        // v0.3.0 default (respect_existing_colors=true), apply_rules sees SGR
+        // bytes and the bare-unit pattern matches `49m` inside `\x1b[49m`.
+        // This test pins the (broken) behavior so a future change cannot
+        // silently flip it.
+        use crate::config::{Config, GeneralSection, UserRule};
         use crate::pipeline::apply_rules;
+        use crate::terminfo::ColorDepth;
         use arc_swap::ArcSwap;
-        let compiled = Compiled::load_builtins().unwrap();
+
+        let cfg = Config {
+            general: GeneralSection { respect_existing_colors: false, ..GeneralSection::default() },
+            rules: Vec::<UserRule>::new(),
+        };
+        let compiled = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/cfg.toml"),
+            None,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         let rules = ArcSwap::from_pointee(compiled);
-        let inputs: &[&[u8]] =
-            &[b"\x1b[0m", b"\x1b[49m", b"\x1b[1;39m", b"prefix \x1b[44m text \x1b[0m suffix"];
-        for input in inputs {
-            let mut out = Vec::new();
-            apply_rules(input, &rules, &mut out).unwrap();
-            // Output must equal input — no SGR injection inside escape sequences.
-            assert_eq!(
-                out,
-                *input,
-                "apply_rules must not modify SGR sequences: input={:?} got={:?}",
-                String::from_utf8_lossy(input),
-                String::from_utf8_lossy(&out)
-            );
-        }
+        let mut out = Vec::new();
+        apply_rules(b"\x1b[49m", &rules, &mut out).unwrap();
+        // Duration style fg is Green = SGR 32. With respect=false, the bare-`m`
+        // bit of `49m` matches the duration rule and an SGR wrap appears.
+        let s = String::from_utf8_lossy(&out).into_owned();
+        assert!(
+            s.contains("\x1b[32m") || s.contains(";32m") || s.contains("[32"),
+            "expected Green SGR somewhere in output (the documented v0.1-class \
+             collision): {s:?}"
+        );
     }
 
     #[test]
@@ -1191,24 +1253,49 @@ mod tests {
     }
 
     #[test]
-    fn new_builtins_do_not_match_sgr_parameters() {
-        // Regression: ensure none of the v0.2.2 new built-ins (permission,
-        // timestamp, uuid, url, email) inject SGR codes inside an existing
-        // escape sequence. apply_rules must not modify any SGR bytes —
-        // mid-sequence injection would break tools like Powerlevel10k.
+    fn non_duration_builtins_do_not_match_sgr_parameters() {
+        // Regression for the v0.2.2 built-ins (permission, timestamp, uuid,
+        // url, email): their regex shapes are restrictive enough that raw
+        // SGR bytes cannot match, so apply_rules is a no-op on a bare SGR
+        // sequence even at the regex layer.
+        //
+        // Duration is intentionally EXCLUDED from this test: v0.3.2 restored
+        // bare [smhd] units (5m, 30s, ...) which collide with SGR final bytes
+        // (\x1b[49m, etc.) at the regex layer. The Pipeline-layer
+        // `respect_existing_colors=true` default (v0.3.0) is what keeps real
+        // sessions safe. See `bare_units_collide_with_sgr_when_respect_existing_colors_is_false`
+        // (this module) for the pinned collision and
+        // `pipeline::pipeline_tests::sgr_in_line_with_respect_true_skips_rules`
+        // for the default-on protection.
+        use crate::config::{Config, GeneralSection, UserRule};
         use crate::pipeline::apply_rules;
         use arc_swap::ArcSwap;
-        let compiled = Compiled::load_builtins().unwrap();
+
+        // Build a Compiled with ONLY the non-duration built-ins by disabling
+        // duration through a user rule. This isolates the regex-layer
+        // property we still want to assert.
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "duration".into(),
+                pattern: None,
+                style: None,
+                enabled: false,
+            }],
+        };
+        let compiled = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/cfg.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap();
         let rules = ArcSwap::from_pointee(compiled);
-        // Each input is a raw SGR sequence or a sequence wrapped in plain
-        // text. The output of apply_rules must equal the input (no SGR
-        // injection inside escape bytes).
         let inputs: &[&[u8]] = &[
             b"\x1b[0m",
             b"\x1b[1;39m",
             b"\x1b[38;5;202m",
             b"\x1b[38;2;255;136;0m",
-            // Escape sequences sandwiched in plain text:
             b"prefix \x1b[44m text \x1b[0m suffix",
         ];
         for input in inputs {
