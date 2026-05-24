@@ -168,7 +168,12 @@ fn disk_theme_with_builtin_name_errors_at_startup() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn disk_theme_collision_case_insensitive_errors() {
+    // Guarded to macOS: case-sensitive filesystems (Linux ext4 / tmpfs) do
+    // not find `dark.toml` when `--theme DARK` is requested, so the
+    // collision arm in `themes::load_with` cannot fire. The production
+    // guard exists for APFS / HFS+ users where the OS does open the file.
     let xdg = tempfile::tempdir().expect("tmpdir");
     write_disk_theme(xdg.path(), "dark", "");
 

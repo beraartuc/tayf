@@ -942,8 +942,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn load_collision_with_mixed_case_built_in_name_errors() {
         // Rev2 I-1 — case-insensitive collision protects macOS APFS users.
+        // Guarded to macOS because case-sensitive filesystems (Linux ext4 /
+        // tmpfs) cannot trigger the collision arm in the first place: when
+        // only `dark.toml` exists on disk and `--theme DARK` is requested,
+        // `resolve_disk_path_in_base` returns `Ok(None)` and the collision
+        // check is dead. The production guard exists for APFS / HFS+ users.
         let dir = tmp();
         let xdg_tayf = dir.path().join("tayf");
         fs::create_dir_all(&xdg_tayf).unwrap();
