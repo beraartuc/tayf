@@ -928,14 +928,11 @@ fn resolve_group_styles_for_rule(
                     continue;
                 }
                 RuleSource::UserConfig => {
+                    let kind = crate::error::ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden;
                     return Err(Error::Config {
                         path: user_cfg_path_or_sentinel.to_owned(),
                         line: 0,
-                        message: format!(
-                            "rule '{}': styles.\"0\": group 0 is the entire match; \
-                             use the 'style' field instead",
-                            rule.name
-                        ),
+                        message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
                 RuleSource::Builtin => unreachable!(
@@ -2129,6 +2126,43 @@ fg = "red"
             // Regression guard: raw BEL byte (0x07) must not appear; the
             // Display impl routes the key through sanitize_for_display.
             assert!(!message.as_bytes().contains(&0x07), "raw control byte leaked: {message:?}");
+        } else {
+            panic!("expected Error::Config; got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn compiled_load_with_theme_emits_config_error_for_user_config_zero_forbidden() {
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use std::collections::BTreeMap;
+        let mut user_styles: BTreeMap<String, UserStyle> = BTreeMap::new();
+        // styles."0" on any rule — group 0 is the entire match, forbidden.
+        user_styles.insert(
+            "0".to_owned(),
+            UserStyle { fg: Some("red".to_owned()), ..UserStyle::default() },
+        );
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "ipv4".to_owned(),
+                pattern: None,
+                enabled: true,
+                style: None,
+                styles: Some(user_styles),
+            }],
+        };
+        let err = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/config.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect_err("should fail with Config");
+        if let crate::error::Error::Config { message, .. } = &err {
+            assert!(message.contains("rule 'ipv4'"), "got: {message}");
+            assert!(message.contains("styles.\"0\""), "got: {message}");
+            assert!(message.contains("group 0 is the entire match"), "got: {message}");
+            assert!(message.contains("use the 'style' field instead"), "got: {message}");
         } else {
             panic!("expected Error::Config; got: {err:?}");
         }
