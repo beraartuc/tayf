@@ -155,6 +155,31 @@ fn parse_color_field(
     })
 }
 
+/// Returns `Some(n)` if `key` is a valid v0.3.5 positive-decimal capture-
+/// group index (grammar: `^[1-9][0-9]*$`); `None` otherwise. The caller
+/// decides how to route the rejection (theme vs config error variant).
+///
+/// `"0"` is NOT accepted here — group 0 has dedicated semantics (the
+/// entire match, covered by the rule's `style` field). Callers
+/// special-case `key == "0"` BEFORE invoking this helper to emit
+/// `ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden`.
+#[allow(dead_code)] // reason: Task 9 + Task 10 consume this helper.
+pub(crate) fn validate_styles_map_key(key: &str) -> Option<usize> {
+    if key.is_empty() {
+        return None;
+    }
+    let bytes = key.as_bytes();
+    if bytes[0] == b'0' {
+        // Leading-zero (including bare "0") rejected; "0" callers intercept
+        // earlier for a dedicated diagnostic.
+        return None;
+    }
+    if !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    key.parse::<usize>().ok()
+}
+
 /// Parse the TOML body. Caller supplies `path` for error context.
 pub(crate) fn parse(path: &str, source: &str) -> Result<Config> {
     toml::from_str::<Config>(source).map_err(|e| Error::config_from_toml(path.into(), source, e))
@@ -1172,5 +1197,39 @@ theme = "light"
     fn config_base_treats_empty_home_as_unset() {
         let base = config_base(|| None, || Some(std::path::PathBuf::new()));
         assert!(base.is_none());
+    }
+
+    #[test]
+    fn validate_styles_map_key_accepts_positive_decimals() {
+        assert_eq!(validate_styles_map_key("1"), Some(1));
+        assert_eq!(validate_styles_map_key("2"), Some(2));
+        assert_eq!(validate_styles_map_key("99"), Some(99));
+        assert_eq!(validate_styles_map_key("100"), Some(100));
+    }
+
+    #[test]
+    fn validate_styles_map_key_rejects_zero_and_leading_zero() {
+        assert_eq!(validate_styles_map_key("0"), None);
+        assert_eq!(validate_styles_map_key("01"), None);
+        assert_eq!(validate_styles_map_key("00"), None);
+        assert_eq!(validate_styles_map_key("099"), None);
+    }
+
+    #[test]
+    fn validate_styles_map_key_rejects_empty_and_whitespace() {
+        assert_eq!(validate_styles_map_key(""), None);
+        assert_eq!(validate_styles_map_key(" "), None);
+        assert_eq!(validate_styles_map_key(" 1"), None);
+        assert_eq!(validate_styles_map_key("1 "), None);
+    }
+
+    #[test]
+    fn validate_styles_map_key_rejects_signs_and_decimals_and_alpha() {
+        assert_eq!(validate_styles_map_key("+1"), None);
+        assert_eq!(validate_styles_map_key("-1"), None);
+        assert_eq!(validate_styles_map_key("1.0"), None);
+        assert_eq!(validate_styles_map_key("abc"), None);
+        assert_eq!(validate_styles_map_key("1abc"), None);
+        assert_eq!(validate_styles_map_key("a1"), None);
     }
 }
