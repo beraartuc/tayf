@@ -60,7 +60,15 @@ pub(crate) fn apply_rules<W: Write>(
     scratch.active_scratch.clear();
     scratch.set_match_scratch.clear();
 
-    for (i, re) in compiled.individuals.iter().enumerate() {
+    // Pre-filter: ask RegexSet which rule indices CAN hit; skip the rest.
+    // `SetMatches::iter()` yields indices in pattern-definition order
+    // (regex 1.12 stable contract). NO HashSet/BTreeSet here — first-match-
+    // wins overlap kontrat'ı pattern order'a bağlı (spec §2.4 + cross-rule
+    // pattern-order regression guard).
+    scratch.set_match_scratch.extend(compiled.set.matches(line).iter());
+
+    for &i in &scratch.set_match_scratch {
+        let re = &compiled.individuals[i];
         if compiled.uses_capture_styling[i] {
             for caps in re.captures_iter(line) {
                 let m = caps.get(0).expect("capture 0 is always the full match");

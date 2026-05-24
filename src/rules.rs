@@ -538,15 +538,15 @@ mod builtin_names_test {
 ///
 /// `individuals` and `styles` are parallel — index `i` of `individuals` carries
 /// the regex; index `i` of `styles` carries the style to apply. `set` is the
-/// equivalent `RegexSet` populated for v0.4's planned fast-path; v0.1 ignores
-/// it but the storage shape stays stable.
+/// equivalent `RegexSet` consumed by [`crate::pipeline::apply_rules`] as a
+/// per-line pre-filter; `RegexSet::matches(line).iter()` yields hit indices
+/// in pattern-definition order (regex 1.12 stable contract), and downstream
+/// dispatch reads only those indices.
 // reason: required by `.expect_err()` in tests. Do NOT log a `Compiled`
 // instance directly — `Regex`'s Debug output echoes the pattern source,
 // which may include user-supplied patterns (mild info-leak surface).
 #[derive(Debug)]
 pub(crate) struct Compiled {
-    #[allow(dead_code)]
-    // reason: reserved for v0.4 RegexSet fast-path; populated now to keep the shape stable
     pub(crate) set: RegexSet,
     pub(crate) individuals: Vec<Regex>,
     pub(crate) styles: Vec<Style>,
