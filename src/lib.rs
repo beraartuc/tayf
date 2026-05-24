@@ -2,6 +2,36 @@
 //!
 //! Public entry point: [`Tayf::run`]. See
 //! `docs/superpowers/specs/2026-05-21-tayf-v0.1-design.md` for the full design.
+//!
+//! ## Capture-group styling (v0.3.5)
+//!
+//! A `[[rules]]` entry in either the user config or a theme TOML may set a
+//! per-capture-group style overlay via the `styles` map. Two equivalent
+//! TOML forms are accepted (inline-table for compactness; dotted-table
+//! for multi-line clarity):
+//!
+//! ```toml
+//! # Inline-table form — keep on one line.
+//! [[rules]]
+//! name = "timestamp"
+//! style  = { fg = "bright_black" }
+//! styles = { "1" = { fg = "yellow" }, "3" = { fg = "green" } }
+//!
+//! # Dotted-table form — equivalent, easier to grow.
+//! [[rules]]
+//! name = "timestamp"
+//! style = { fg = "bright_black" }
+//! [rules.styles."1"]
+//! fg = "yellow"
+//! [rules.styles."3"]
+//! fg = "green"
+//! ```
+//!
+//! Keys are 1-based capture-group indices encoded as positive-decimal
+//! strings (grammar `^[1-9][0-9]*$`). Group 0 (the entire match) is
+//! reserved for the `style` field. An empty `styles = {}` map is silently
+//! accepted as a no-op. Range validation against the rule's regex
+//! `captures_len()` happens at config load.
 
 // Crate-wide policy: unsafe is permitted only with a SAFETY comment;
 // reviewer enforces. See `src/terminfo.rs::winsize` (TIOCGWINSZ ioctl) and

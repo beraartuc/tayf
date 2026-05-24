@@ -4,6 +4,61 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] — TBD
+
+### Added
+- Per-capture-group styling. Regex `[[rules]]` blocks (built-in, user
+  config, or disk themes) may now wrap individual capture groups of a
+  match with separate styles via a new `styles = { "1" = { fg = "..." } }`
+  inline-table map (also supported as the dotted-table form
+  `[rules.styles."1"]`). Keys are 1-based positive-decimal indices
+  encoded as strings; the entire match (group 0) is reserved for the
+  existing `style` field. An empty `styles = {}` is silently accepted
+  as a no-op. Validation against the rule's regex `captures_len`
+  happens at config load. Feature forward-pulled from the v0.5 roadmap
+  to satisfy real-world need for segmented timestamp rendering.
+- Public error variants `tayf::ThemeRuleErrorKind::CaptureGroupKeyMalformed`,
+  `CaptureGroupIndexZeroForbidden`, `CaptureGroupIndexOutOfRange` —
+  additive to the existing `#[non_exhaustive]` enum.
+- v0.3.4 configs that already (erroneously) included a `styles` field
+  on a `[[rules]]` block would have failed parse with
+  `unknown field 'styles'` — they now succeed.
+
+### Changed
+- The `timestamp`, `url`, and `permission` built-in patterns now expose
+  capture groups (date / T-separator / time / milliseconds / timezone
+  for ISO timestamps; scheme / "://" / host+path for HTTP-style URLs;
+  type / user / group / other for permission triplets). Each group
+  carries an ANSI Basic16-safe default color so downgrade is a no-op
+  on every supported terminal.
+- The non-ISO timestamp branches (syslog, Apache, RFC 2822) and the
+  `git@` SSH branch of the URL pattern remain capture-less; their
+  match is wrapped with the rule's default `style` (unchanged from
+  v0.3.4).
+- **BREAKING:** `tayf::ThemeRuleErrorKind` no longer derives `Copy`
+  (two new variants carry `String` / `usize` payload). It still
+  derives `Clone`; consumers that only use `Clone` are unaffected.
+  Consumers that rely on `Copy` (e.g., `match k { ... => copy_it(*k) }`,
+  `[ThemeRuleErrorKind; N]` array literals) must switch to `Clone`.
+
+### Internal
+- `src/pipeline.rs::apply_rules` switched to a selective dispatch:
+  rules whose `group_styles` vector contains at least one `Some` entry
+  go through a new `captures_iter` runs-per-match path; all others
+  retain the v0.3.4 `find_iter` hot path. Match-level overlap detection
+  now uses a sorted-by-start `accepted_spans: Vec<(usize, usize)>` +
+  `partition_point` binary search — `O(log N)` per match regardless of
+  how many runs an accepted match emits. Common-case throughput
+  significantly improved (see `benches/BASELINE.md`).
+- `src/rules.rs` `BuiltinRule` and `Compiled` gained `group_styles`
+  (and `Compiled.uses_capture_styling` cache) fields; `pub(crate)`
+  visibility unchanged.
+- New `emit_capture_runs` boundary-event sweep algorithm — no per-byte
+  paint array, no new dependency (pure `Vec<u32>` active-group stack
+  reused across matches per line).
+- `Compiled::downgrade_for_depth` now also walks `group_styles[*][*]`
+  Some entries through the same depth pipeline as the main styles vec.
+
 ## [0.3.4] — 2026-05-24
 
 ### Added
