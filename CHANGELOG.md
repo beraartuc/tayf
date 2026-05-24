@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] — TBD
+
+### Fixed
+- `ThemeRuleErrorKind::CaptureGroupIndexOutOfRange` Display now produces
+  a meaningful message when the regex has no capture groups at all
+  (`captures_len == 1`). Previously rendered `(valid: 1..=0)` — an
+  empty range with no actionable guidance. New wording:
+  `"rule's regex has no capture groups; styles cannot be set"`.
+  The existing pluralization for `captures_len >= 2` is unchanged.
+- Renamed two misnamed tests (`syslog_timestamp_match_renders_one_sgr`
+  in `src/pipeline.rs` and `tests/integration_capture_groups.rs`) to
+  `syslog_timestamp_substring_survives_colorization`. The bodies only
+  assert substring survival; the previous name overstated what was
+  actually being verified.
+
 ## [0.3.5] — 2026-05-24
 
 ### Added
