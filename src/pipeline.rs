@@ -81,6 +81,35 @@ pub(crate) fn apply_rules<W: Write>(
     Ok(())
 }
 
+/// O(log N) overlap check against sorted-by-start `accepted_spans`. Two
+/// half-open intervals `[a_start, a_end)` and `[b_start, b_end)` overlap
+/// iff `a_start < b_end AND b_start < a_end`. With `accepted_spans`
+/// sorted, the candidate `[start, end)` overlaps an existing entry iff
+/// either the entry immediately preceding `start` extends past `start`,
+/// or the entry immediately at-or-after `start` starts before `end`.
+#[inline]
+#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
+pub(crate) fn overlaps_accepted(spans: &[(usize, usize)], start: usize, end: usize) -> bool {
+    let i = spans.partition_point(|&(s, _)| s < start);
+    if i > 0 && spans[i - 1].1 > start {
+        return true;
+    }
+    if i < spans.len() && spans[i].0 < end {
+        return true;
+    }
+    false
+}
+
+/// Insert `(start, end)` into the sorted-by-start `accepted_spans` vec.
+/// Maintains the sort invariant so subsequent `overlaps_accepted` checks
+/// remain O(log N).
+#[inline]
+#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
+pub(crate) fn insert_accepted(spans: &mut Vec<(usize, usize)>, start: usize, end: usize) {
+    let i = spans.partition_point(|&(s, _)| s < start);
+    spans.insert(i, (start, end));
+}
+
 /// Output pipeline. Owns the ANSI state machine, line buffer, sequence
 /// scratch (for accumulating CSI/ESC sequence bytes whose destination is
 /// decided at completion), and an `ArcSwap` handle to the rule set.
@@ -356,6 +385,44 @@ mod rule_tests {
         let mut out = Vec::new();
         apply_rules(b"plain text line\n", &rules, &mut out).unwrap();
         assert_eq!(out, b"plain text line\n");
+    }
+
+    #[test]
+    fn overlaps_accepted_empty_never_overlaps() {
+        assert!(!overlaps_accepted(&[], 0, 10));
+        assert!(!overlaps_accepted(&[], 5, 7));
+    }
+
+    #[test]
+    fn overlaps_accepted_finds_immediate_predecessor() {
+        let spans = vec![(0usize, 5usize), (10, 15), (20, 25)];
+        assert!(overlaps_accepted(&spans, 4, 8)); // overlaps (0,5)
+        assert!(!overlaps_accepted(&spans, 5, 10)); // abuts both sides, no overlap
+        assert!(overlaps_accepted(&spans, 14, 22)); // straddles (10,15) and (20,25)
+        assert!(!overlaps_accepted(&spans, 25, 30)); // abuts (20,25), no overlap
+        assert!(!overlaps_accepted(&spans, 26, 28)); // past everything
+    }
+
+    #[test]
+    fn overlaps_accepted_handles_single_entry() {
+        let spans = vec![(10usize, 20usize)];
+        assert!(!overlaps_accepted(&spans, 0, 5));
+        assert!(!overlaps_accepted(&spans, 0, 10)); // abuts
+        assert!(overlaps_accepted(&spans, 5, 15)); // overlaps left edge
+        assert!(overlaps_accepted(&spans, 12, 18)); // contained
+        assert!(overlaps_accepted(&spans, 15, 25)); // overlaps right edge
+        assert!(!overlaps_accepted(&spans, 20, 30)); // abuts
+        assert!(!overlaps_accepted(&spans, 25, 30));
+    }
+
+    #[test]
+    fn insert_accepted_maintains_sorted_order() {
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        insert_accepted(&mut spans, 10, 15);
+        insert_accepted(&mut spans, 0, 5);
+        insert_accepted(&mut spans, 20, 25);
+        insert_accepted(&mut spans, 5, 10);
+        assert_eq!(spans, vec![(0, 5), (5, 10), (10, 15), (20, 25)]);
     }
 }
 
