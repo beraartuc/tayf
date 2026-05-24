@@ -507,6 +507,19 @@ mod rule_tests {
     }
 
     #[test]
+    fn permission_match_renders_four_distinct_sgrs() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"drwxr-xr-x file.txt\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // Expect 4 distinct non-reset SGRs wrapping type / user / group / other.
+        // (Plus filename rule may fire on "file.txt" — that's 1 extra. Total ≥ 4.)
+        let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert!(intro_count >= 4, "expected ≥ 4 SGRs (type/user/group/other); got: {s:?}");
+    }
+
+    #[test]
     fn apply_rules_with_capture_styling_rule_emits_multi_run_match() {
         // Synthetic captures-styled rule. We assemble a Compiled manually
         // because Phase 6 hasn't restructured permission/timestamp/url yet.

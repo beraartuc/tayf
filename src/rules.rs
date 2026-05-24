@@ -355,9 +355,14 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     vec![
         BuiltinRule {
             name: "permission".into(),
-            pattern: r"(?:^|\s)[dlcbps-][rwxsStT-]{9}\+?(?:\s|$)".into(),
+            pattern: r"(?:^|\s)([dlcbps-])([rwxsStT-]{3})([rwxsStT-]{3})([rwxsStT-]{3})\+?(?:\s|$)".into(),
             style: Style { fg: Some(Color::White), dim: true, ..Style::DEFAULT },
-            group_styles: Vec::new(),
+            group_styles: vec![
+                Some(Style { fg: Some(Color::White),       ..Style::DEFAULT }),  // type
+                Some(Style { fg: Some(Color::BrightRed),   ..Style::DEFAULT }),  // user-rwx
+                Some(Style { fg: Some(Color::Yellow),      ..Style::DEFAULT }),  // group-rwx
+                Some(Style { fg: Some(Color::BrightGreen), ..Style::DEFAULT }),  // other-rwx
+            ],
             is_user_supplied: false,
             styles_override: None,
             styles_override_from_theme: false,
@@ -519,21 +524,6 @@ mod builtin_names_test {
         let rules = builtin_rules();
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, BUILTIN_NAMES);
-    }
-
-    #[test]
-    fn builtin_rules_have_empty_group_styles_by_default_in_phase2() {
-        // Phase 2: group_styles is added but every built-in starts empty.
-        // Phase 6 populates timestamp/url/permission. This test will be
-        // updated then.
-        let rules = builtin_rules();
-        for rule in &rules {
-            assert!(
-                rule.group_styles.is_empty(),
-                "rule '{}' has non-empty group_styles in Phase 2",
-                rule.name
-            );
-        }
     }
 }
 
@@ -1956,20 +1946,11 @@ mod tests {
     }
 
     #[test]
-    fn compiled_uses_capture_styling_all_false_in_phase2() {
-        // Phase 2: no built-in has group_styles populated yet.
-        // Phase 6 flips timestamp/url/permission to true.
+    fn compiled_uses_capture_styling_set_for_permission_after_phase6() {
         let c = Compiled::load_builtins().expect("builtins compile");
-        assert_eq!(c.uses_capture_styling.len(), c.individuals.len());
-        assert!(
-            c.uses_capture_styling.iter().all(|&b| !b),
-            "some uses_capture_styling[i] is true in Phase 2: {:?}",
-            c.uses_capture_styling
-        );
-        assert_eq!(c.group_styles.len(), c.individuals.len());
-        for (i, g) in c.group_styles.iter().enumerate() {
-            assert!(g.is_empty(), "compiled.group_styles[{i}] non-empty in Phase 2");
-        }
+        // permission is at index 0 in BUILTIN_NAMES (first built-in).
+        assert!(c.uses_capture_styling[0]);
+        assert_eq!(c.group_styles[0].len(), 4);
     }
 
     #[test]
