@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "tayf"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arc-swap",
  "clap",
