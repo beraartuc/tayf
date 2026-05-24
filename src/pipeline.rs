@@ -544,6 +544,37 @@ mod rule_tests {
     }
 
     #[test]
+    fn http_url_match_renders_three_sgrs_with_underline_on_path() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"docs at https://example.com/path now\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert!(intro_count >= 3, "expected >= 3 SGRs (scheme/'://'/path); got: {s:?}");
+        // Underline attribute should appear (SGR code 4 for underline).
+        assert!(
+            s.contains("4m") || s.contains("4;") || s.contains(";4m"),
+            "expected underline SGR for path; got: {s:?}"
+        );
+    }
+
+    #[test]
+    fn git_at_url_match_renders_match_via_default_style() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"clone git@github.com:user/repo.git\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // git@ branch has no captures → collapsed to one default-style SGR.
+        // (Filename rule may also fire on "repo.git" — that's separate.)
+        assert!(
+            s.contains("git@github.com:user/repo.git"),
+            "git@ URL must survive in output: {s:?}"
+        );
+    }
+
+    #[test]
     fn apply_rules_with_capture_styling_rule_emits_multi_run_match() {
         // Synthetic captures-styled rule. We assemble a Compiled manually
         // because Phase 6 hasn't restructured permission/timestamp/url yet.

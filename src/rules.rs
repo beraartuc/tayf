@@ -400,12 +400,16 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "url".into(),
             pattern: concat!(
-                r#"\b(?:https?|ssh|ftp)://[^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?]"#,
+                r#"\b(https?|ssh|ftp)(://)([^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?])"#,
                 r#"|"#,
                 r#"\bgit@[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]:[^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?]"#,
             ).into(),
             style: Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT },
-            group_styles: Vec::new(),
+            group_styles: vec![
+                Some(Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT }), // 1: scheme
+                Some(Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT }), // 2: "://"
+                Some(Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT }), // 3: host+path
+            ],
             is_user_supplied: false,
             styles_override: None,
             styles_override_from_theme: false,
