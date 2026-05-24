@@ -162,7 +162,7 @@ fn iso_timestamp_match_renders_five_distinct_sgrs() {
 //    style is applied still must not destroy the substring.
 // ---------------------------------------------------------------------------
 #[test]
-fn syslog_timestamp_match_renders_one_sgr() {
+fn syslog_timestamp_substring_survives_colorization() {
     let xdg = tempfile::tempdir().expect("tmpdir");
     let bytes = run_in_pty(xdg.path(), "May 24 10:30:45 host msg", &[]);
     let s = String::from_utf8_lossy(&bytes);

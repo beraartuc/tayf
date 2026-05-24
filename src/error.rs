@@ -96,14 +96,21 @@ impl std::fmt::Display for ThemeRuleErrorKind {
             ),
             Self::CaptureGroupIndexOutOfRange { group, captures_len } => {
                 let n = captures_len.saturating_sub(1);
-                write!(
-                    f,
-                    "styles.\"{}\": rule's regex has {} capture group{} (valid: 1..={})",
-                    group,
-                    n,
-                    if n == 1 { "" } else { "s" },
-                    n
-                )
+                if n == 0 {
+                    write!(
+                        f,
+                        "styles.\"{group}\": rule's regex has no capture groups; styles cannot be set"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "styles.\"{}\": rule's regex has {} capture group{} (valid: 1..={})",
+                        group,
+                        n,
+                        if n == 1 { "" } else { "s" },
+                        n
+                    )
+                }
             }
         }
     }
@@ -571,6 +578,16 @@ mod tests {
         let s = k.to_string();
         assert!(s.contains("1 capture group ") && !s.contains("groups"), "expect singular: {s}");
         assert!(s.contains("valid: 1..=1"));
+    }
+
+    #[test]
+    fn theme_rule_error_kind_out_of_range_no_capture_groups_specialized() {
+        let k = ThemeRuleErrorKind::CaptureGroupIndexOutOfRange { group: 1, captures_len: 1 };
+        let s = k.to_string();
+        assert!(s.contains("styles.\"1\""), "got: {s}");
+        assert!(s.contains("no capture groups"), "got: {s}");
+        assert!(s.contains("styles cannot be set"), "got: {s}");
+        assert!(!s.contains("valid: 1..=0"), "regression guard: {s}");
     }
 
     #[test]

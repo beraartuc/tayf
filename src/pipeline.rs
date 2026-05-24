@@ -536,15 +536,15 @@ mod rule_tests {
     }
 
     #[test]
-    fn syslog_timestamp_match_renders_one_sgr() {
+    fn syslog_timestamp_substring_survives_colorization() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
         let mut out = Vec::new();
         apply_rules(b"May 24 10:30:45 host service: msg\n", &rules, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // Syslog branch has no captures -> entire match wrapped in one default-style SGR.
-        // Plus log_level rule will catch "msg" — that's an extra SGR.
-        // Assert the substring appears in output (basic survival check).
+        // Syslog branch has no captures -> match wrapped with the rule's default style.
+        // Other rules (e.g., log_level on "msg") may add additional SGRs; this test
+        // only asserts the timestamp substring survives colorization intact.
         assert!(s.contains("May 24 10:30:45"), "syslog timestamp must survive in output: {s:?}");
     }
 
