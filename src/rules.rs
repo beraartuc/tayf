@@ -332,7 +332,7 @@ fn build_filename_pattern() -> String {
 /// Four timestamp formats joined as alternation. Each branch is anchor-
 /// bounded with fixed counts; no backtracking risk under `regex::bytes`.
 const TS_ISO8601: &str =
-    r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:[Zz]|[+-]\d{2}:?\d{2})?\b";
+    r"\b(\d{4}-\d{2}-\d{2})([T ])(\d{2}:\d{2}:\d{2})(\.\d{1,9})?([Zz]|[+-]\d{2}:?\d{2})?\b";
 const TS_SYSLOG: &str =
     r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2}\b";
 const TS_APACHE: &str = r"\b\d{1,2}/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}";
@@ -371,7 +371,13 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             name: "timestamp".into(),
             pattern: build_timestamp_pattern(),
             style: Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT },
-            group_styles: Vec::new(),
+            group_styles: vec![
+                Some(Style { fg: Some(Color::Yellow),      ..Style::DEFAULT }),  // 1: date
+                Some(Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT }),  // 2: T/space sep
+                Some(Style { fg: Some(Color::Green),       ..Style::DEFAULT }),  // 3: time
+                Some(Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT }),  // 4: .ms
+                Some(Style { fg: Some(Color::Magenta),     ..Style::DEFAULT }),  // 5: tz
+            ],
             is_user_supplied: false,
             styles_override: None,
             styles_override_from_theme: false,
