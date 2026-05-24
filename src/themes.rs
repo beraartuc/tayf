@@ -407,6 +407,33 @@ pub(crate) fn validate_theme_rules(
                 kind: crate::error::ThemeRuleErrorKind::EnabledFalseForbidden,
             });
         }
+        if let Some(styles_map) = &r.styles {
+            for key in styles_map.keys() {
+                // Special-case "0" BEFORE grammar validation: group 0 has
+                // a dedicated diagnostic that points at the `style` field.
+                if key == "0" {
+                    errors.push(crate::error::ThemeRuleError {
+                        rule_name: r.name.clone(),
+                        kind: crate::error::ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden,
+                    });
+                    continue;
+                }
+                match crate::config::validate_styles_map_key(key) {
+                    Some(_n) => {
+                        // Valid grammar; range check deferred to
+                        // Compiled::load_with_theme (Task 10).
+                    }
+                    None => {
+                        errors.push(crate::error::ThemeRuleError {
+                            rule_name: r.name.clone(),
+                            kind: crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed {
+                                key: key.clone(),
+                            },
+                        });
+                    }
+                }
+            }
+        }
     }
 
     if errors.is_empty() {
@@ -1007,6 +1034,81 @@ mod tests {
         assert!(available.contains(&"foo".to_string()), "disk theme listed: {available:?}");
         assert!(available.contains(&"dark".to_string()));
         assert!(available.contains(&"light".to_string()));
+    }
+
+    #[test]
+    fn validate_theme_rules_collects_capture_group_zero_forbidden() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+style = { fg = "yellow" }
+styles = { "0" = { fg = "red" } }
+"#;
+        let cfg: crate::config::Config = crate::config::parse("<test>", src).unwrap();
+        let err =
+            validate_theme_rules("dark", "<embedded:theme/dark>", &cfg).expect_err("should fail");
+        if let crate::error::Error::ThemeValidation { errors, .. } = err {
+            assert_eq!(errors.len(), 1);
+            assert!(matches!(
+                errors[0].kind,
+                crate::error::ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden
+            ));
+            assert_eq!(errors[0].rule_name, "ipv4");
+        } else {
+            panic!("expected ThemeValidation");
+        }
+    }
+
+    #[test]
+    fn validate_theme_rules_collects_capture_group_key_malformed() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+styles = { "01" = { fg = "red" } }
+"#;
+        let cfg: crate::config::Config = crate::config::parse("<test>", src).unwrap();
+        let err =
+            validate_theme_rules("dark", "<embedded:theme/dark>", &cfg).expect_err("should fail");
+        if let crate::error::Error::ThemeValidation { errors, .. } = err {
+            assert_eq!(errors.len(), 1);
+            match &errors[0].kind {
+                crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed { key } => {
+                    assert_eq!(key, "01");
+                }
+                other => panic!("unexpected kind: {other:?}"),
+            }
+        } else {
+            panic!("expected ThemeValidation");
+        }
+    }
+
+    #[test]
+    fn validate_theme_rules_collects_multiple_styles_key_errors_in_one_pass() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+styles = { "0" = { fg = "red" }, "abc" = { fg = "blue" } }
+"#;
+        let cfg: crate::config::Config = crate::config::parse("<test>", src).unwrap();
+        let err =
+            validate_theme_rules("dark", "<embedded:theme/dark>", &cfg).expect_err("should fail");
+        if let crate::error::Error::ThemeValidation { errors, .. } = err {
+            assert_eq!(errors.len(), 2, "fail-collected; got: {errors:?}");
+        } else {
+            panic!("expected ThemeValidation");
+        }
+    }
+
+    #[test]
+    fn validate_theme_rules_accepts_valid_styles_keys_defers_range_check() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+styles = { "1" = { fg = "red" }, "10" = { fg = "blue" } }
+"#;
+        let cfg: crate::config::Config = crate::config::parse("<test>", src).unwrap();
+        // Grammar passes; out-of-range check is deferred to Compiled::load_with_theme.
+        validate_theme_rules("dark", "<embedded:theme/dark>", &cfg).expect("grammar ok");
     }
 
     #[test]
