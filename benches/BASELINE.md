@@ -255,3 +255,64 @@ Notes on the v0.3.2 → v0.3.3 delta:
   - The SIGHUP forwarding fix is in the signal-thread handler, never
     on the I/O hot path.
   Observed deltas are consistent with that expectation.
+
+## v0.3.4 measurement (recorded 2026-05-24)
+
+Source: HEAD = 52be695 (mid-session disk-theme collision warn test)
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64) (same as v0.3.3 baseline)
+Input: identical to v0.3.3 (and earlier) above.
+Profile: release (`cargo bench`).
+
+Criterion output excerpt:
+
+```
+apply_rules/ipv4-heavy  time:   [7.7240 ms 7.7326 ms 7.7411 ms]
+                        thrpt:  [8.2541 MiB/s 8.2632 MiB/s 8.2724 MiB/s]
+                 change: time:   [+0.6056% +0.7989% +0.9803%] (p = 0.00 < 0.05)
+                        thrpt:  [−0.9708% −0.7926% −0.6019%]
+                        Change within noise threshold.
+
+passthrough/write_all   time:   [1.1578 µs 1.1653 µs 1.1747 µs]
+                        thrpt:  [53.117 GiB/s 53.547 GiB/s 53.895 GiB/s]
+                 change: time:   [−6.4386% −4.8792% −3.3006%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.4133% +5.1295% +6.8816%]
+                        Performance has improved.
+```
+
+### Regression check vs v0.3.3 baseline
+
+| Bench group | v0.3.3 | v0.3.4 | Delta |
+|---|---|---|---|
+| `apply_rules/ipv4-heavy` | 7.6713 ms (8.3292 MiB/s) | 7.7326 ms (8.2632 MiB/s) | +0.80% time / −0.79% thrpt |
+| `passthrough/write_all` | 1.2252 µs (50.930 GiB/s) | 1.1653 µs (53.547 GiB/s) | −4.89% time / +5.14% thrpt |
+
+Spec budget per §5.2: < 20% regression. Status: PASS on both bench groups
+(`apply_rules` delta within criterion's noise threshold; `passthrough`
+delta is an improvement).
+
+Notes on the v0.3.3 → v0.3.4 delta:
+
+- Disk themes + fail-collected validator. `apply_rules` unchanged (disk
+  load is cold-path, not hot-path). The v0.3.4 changes touch only
+  startup orchestration:
+  - `themes::load_with` extends the search past the built-in preset map
+    to `<config_base>/themes/<name>.toml`. Reads happen once during
+    `Compiled::load` at startup, then never again — the rules struct
+    behind `Pipeline.rules` is immutable per snapshot.
+  - The case-insensitive built-in collision check (`dark`, `light`) and
+    `[general]`-reject guard are early-return validators on the disk
+    path; they never execute when the user names a non-shadowing theme
+    or no theme at all.
+  - `validate_theme_rules` was rewritten to fail-collect every violation
+    in one pass via `Error::ThemeValidation`. Still a startup-only path
+    (theme TOML parse → validate → compile → done). Hot loop sees an
+    already-compiled `Compiled` and never re-enters the validator.
+- `apply_rules/ipv4-heavy` ~0.8% slower (criterion flags "Change within
+  noise threshold"). Consistent with run-to-run jitter on a 7.7 ms
+  measurement; no code change in v0.3.4 plausibly affects the per-line
+  rule scanner.
+- `passthrough/write_all` ~4.9% faster — recovery from v0.3.3's already
+  noisy sub-µs measurement. Cumulative v0.1.1 → v0.3.4 delta on this
+  group is −12.4% time / +14.4% thrpt vs the original baseline, fully
+  within noise for a sub-µs per-iter benchmark.
