@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — TBD
+
+### Changed
+- `apply_rules` hot path now uses `RegexSet` as a pre-filter. The
+  per-line work was a linear scan over every compiled rule's
+  `find_iter`/`captures_iter`; v0.4.0 first asks the `RegexSet` which
+  rule indices can possibly hit, then dispatches only that subset.
+  Pattern-definition order is preserved (regex crate stable contract),
+  so the first-match-wins overlap semantics are byte-identical. Per
+  v0.4.0 measurement on the existing bench fixtures (see
+  `benches/BASELINE.md`):
+  - `apply_rules/ipv4-heavy`: 2.4199 → 2.3335 ms (−3.57%).
+  - `apply_rules/mixed-syslog`: 2.2948 → 1.7974 ms (−21.68%, the
+    real-world headline gain).
+  - `apply_rules/captures-heavy`: 4.5173 → 4.8755 ms (**+7.93%**, a
+    regression on a synthetic worst-case fixture where every line
+    fires ~4/13 patterns; the pre-filter automaton scan cost slightly
+    exceeds the cost of the skipped per-rule scans on this shape).
+  - `passthrough/write_all`: 1.3380 → 1.1563 µs (−13.58%, sub-µs
+    noise band; passthrough path itself unchanged).
+
+  The captures-heavy regression is intrinsic to a uniform RegexSet
+  pre-filter: when most rules hit, the pre-filter pays its cost
+  without recovering it. Users running workloads dominated by
+  capture-styled rules firing on every line may want to evaluate
+  the tradeoff against their input. The geomean across the three
+  `apply_rules/*` rows is ~5.5% faster, dominated by the
+  mixed-syslog gain.
+
+- The per-call scratch `Vec`s inside `apply_rules`
+  (`accepted_spans`, `runs`, `event_scratch`, `active_scratch`, plus
+  the new `set_match_scratch`) are now Pipeline-owned and reused
+  across lines via `Vec::clear()`. Per-line allocation in
+  `PipelineScratch`'s surface is zero (was four `Vec::new` calls per
+  line). `regex::bytes::RegexSet::matches()` itself internally
+  allocates a small bitset per call (regex_automata
+  `PatternSet::new(pattern_len)`); that upstream cost is opaque and
+  unchanged from prior baselines. Capture-group styling output is
+  byte-identical (the v0.3.5 `tests/integration_capture_groups.rs`
+  suite passes without modification).
+
+- The `RuleSource::UserConfig` arm in
+  `rules.rs::resolve_group_styles_for_rule` for the "group 0
+  forbidden" diagnostic now delegates to
+  `ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden`'s `Display`
+  impl, closing the third (and final) duplicate-formatter drift
+  surface that v0.3.6 and v0.3.7 progressively cleaned. Output is
+  byte-identical for benign keys.
+
 ## [0.3.7] — 2026-05-24
 
 ### Fixed
