@@ -4,6 +4,48 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — TBD
+
+### Added
+- Disk-based custom themes. Files placed at
+  `~/.config/tayf/themes/<name>.toml` (honoring `$XDG_CONFIG_HOME`) are
+  loaded through the same 1 MiB read cap and symlink-out whitelist as the
+  user config. Disk themes have the same TOML shape as shipped presets:
+  `[[rules]]` blocks with `name` and `style`, no `pattern` field, no
+  `enabled = false`, no `[general]` section.
+- Public error types `tayf::ThemeRuleError` and `tayf::ThemeRuleErrorKind`,
+  bundled into the new `tayf::Error::ThemeValidation` variant. Theme
+  validation errors are now collected in a single pass so users see every
+  issue at once rather than the previous one-at-a-time loop.
+
+### Changed
+- A disk theme that shadows a built-in preset name (`dark`, `light`) is
+  rejected with an actionable error rather than silently overriding the
+  preset. The check is case-insensitive (protects macOS APFS users from
+  accidentally bypassing the gate via case typos). Rename the file
+  (e.g. `my-dark.toml`) and reference it as `--theme my-dark`.
+- A disk theme that sets `[general]` is rejected — themes only override
+  style, and `[general]` fields belong in the user config.
+- `tayf::themes::load` returns a richer `LoadedTheme` struct (internal
+  API; not part of the public surface). Users of the public `tayf::Tayf`
+  facade see no change.
+- `--theme` `--help` text updated to mention disk-loaded themes.
+
+### Internal
+- `src/config.rs` `config_base` helper extracted from `resolve_path`;
+  shared with `src/themes.rs::load_with`.
+- `src/main.rs::map_error_to_exit_code` maps `Error::ThemeValidation` to
+  EX_USAGE (64).
+- `tests/integration_bypass.rs` doc-comment lowercase "error" → "ERROR"
+  (test was correct; comment was misleading).
+- `benches/BASELINE.md` "TUI passthrough path" claim updated to reflect
+  the v0.3.0 ANSI state-machine routing.
+- New `tests/integration_disk_themes.rs` for PTY-based SGR assertions;
+  `tests/integration_themes.rs` gains no-PTY assertions for the new
+  collision, validation, [general] reject, listing, and help-text paths.
+- `tests/integration_hot_reload.rs` regression guard for mid-session
+  theme-file collisions surfacing as warn-only (no runtime termination).
+
 ## [0.3.3] — 2026-05-23
 
 ### Added
