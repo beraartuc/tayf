@@ -909,6 +909,50 @@ mod rule_tests {
             "PipelineScratch capacities must be preserved across apply_rules calls"
         );
     }
+
+    #[test]
+    fn apply_rules_no_set_hits_emits_line_byte_identical() {
+        // Line content matches NO built-in pattern: pure ASCII narrative with
+        // no IPs, no timestamps, no log levels, no permissions, no URLs/Git URLs.
+        let line = b"the quick brown fox jumps over the lazy dog\n";
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out: Vec<u8> = Vec::new();
+        apply_rules(line, &rules, &mut scratch, &mut out).unwrap();
+        assert_eq!(out, line, "no SGR injected when no rule hits");
+        assert!(scratch.set_match_scratch.is_empty(), "pre-filter found zero hits");
+    }
+
+    #[test]
+    fn apply_rules_preserves_pattern_definition_order_for_overlapping_matches() {
+        // Two synthetic rules where rule 0 and rule 1 both match overlapping
+        // substrings on the same line. First-match-wins must give rule 0 the
+        // span; rule 1's match must be dropped by accepted_spans overlap
+        // detection. If RegexSet iteration ever switched away from pattern
+        // order (e.g. via HashSet), rule 1 could pre-empt rule 0 silently.
+        use crate::style::{Color, Style};
+        use regex::bytes::{Regex, RegexSet};
+        let red = Style { fg: Some(Color::Red), ..Style::DEFAULT };
+        let blue = Style { fg: Some(Color::Blue), ..Style::DEFAULT };
+        let compiled = Compiled {
+            set: RegexSet::new([r"\d{3,5}", r"\d{2}"]).unwrap(),
+            individuals: vec![Regex::new(r"\d{3,5}").unwrap(), Regex::new(r"\d{2}").unwrap()],
+            styles: vec![red, blue],
+            group_styles: vec![vec![], vec![]],
+            uses_capture_styling: vec![false, false],
+            respect_existing_colors: false,
+        };
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out: Vec<u8> = Vec::new();
+        apply_rules(b"value 12345\n", &rules, &mut scratch, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // Rule 0 (red, SGR 31) must wrap "12345"; rule 1 (blue, SGR 34) must
+        // be suppressed by the overlap check — no SGR 34 in output.
+        assert!(s.contains("\x1b[31m"), "rule 0 (red) must fire on '12345': {s:?}");
+        assert!(!s.contains("\x1b[34m"), "rule 1 (blue) must be suppressed by overlap: {s:?}");
+    }
 }
 
 #[cfg(test)]
