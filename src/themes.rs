@@ -472,6 +472,7 @@ mod tests {
             pattern: None,
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }
     }
 

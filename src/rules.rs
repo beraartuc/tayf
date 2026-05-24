@@ -966,6 +966,7 @@ mod tests {
                 pattern: Some(r"\b[0-9a-fA-F]{8}\b".into()),
                 style: Some(UserStyle { fg: Some("#ff8800".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             }],
         };
         // At Basic16 depth, the appended user rule's Rgb fg downgrades to an ANSI color.
@@ -999,6 +1000,7 @@ mod tests {
                 pattern: Some("(unclosed".into()),
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             }],
         };
         let err =
@@ -1024,6 +1026,7 @@ mod tests {
                 pattern: Some("(also-unclosed".into()),
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             }],
         };
         let err =
@@ -1045,7 +1048,13 @@ mod tests {
             general: GeneralSection::default(),
             rules: BUILTIN_NAMES
                 .iter()
-                .map(|n| UserRule { name: (*n).into(), pattern: None, style: None, enabled: false })
+                .map(|n| UserRule {
+                    name: (*n).into(),
+                    pattern: None,
+                    style: None,
+                    enabled: false,
+                    styles: None,
+                })
                 .collect(),
         };
         let c =
@@ -1382,6 +1391,7 @@ mod tests {
                 pattern: None,
                 style: None,
                 enabled: false,
+                styles: None,
             }],
         };
         let compiled = Compiled::load_with_theme(
@@ -1503,6 +1513,7 @@ mod tests {
                     ..crate::config::UserStyle::default()
                 }),
                 enabled: true,
+                styles: None,
             }],
         };
         let c = Compiled::load_with_theme(
@@ -1553,6 +1564,7 @@ mod tests {
                 pattern: Some("[01]{4,1000000}".into()),
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             }],
         };
         let err = Compiled::load_with_theme(Some(&cfg), Some("/x"), None, ColorDepth::Truecolor)

@@ -85,6 +85,14 @@ pub(crate) struct UserRule {
     pub(crate) style: Option<UserStyle>,
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
+    /// Per-capture-group style overlay map. Keys are positive-decimal
+    /// strings (capture-group index, 1-based; grammar `^[1-9][0-9]*$`).
+    /// Both TOML inline-table (`styles = { "1" = {...} }`) and dotted-table
+    /// (`[rules.styles."1"]`) forms parse here via serde. Validation
+    /// against the rule's regex `captures_len()` happens at compile time.
+    /// See spec §1.3 / §3.3.
+    #[serde(default)]
+    pub(crate) styles: Option<std::collections::BTreeMap<String, UserStyle>>,
 }
 
 /// Inline `style = { ... }` table. Field types are strings/bools so user
@@ -558,6 +566,64 @@ style = { fg = "#888888" }
     }
 
     #[test]
+    fn user_rule_parses_inline_styles_map() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+style = { fg = "yellow" }
+styles = { "1" = { fg = "red" }, "2" = { fg = "blue" } }
+"#;
+        let cfg: Config = parse("<test>", src).expect("parse");
+        assert_eq!(cfg.rules.len(), 1);
+        let r = &cfg.rules[0];
+        let styles = r.styles.as_ref().expect("styles set");
+        assert_eq!(styles.len(), 2);
+        assert!(styles.contains_key("1"));
+        assert!(styles.contains_key("2"));
+    }
+
+    #[test]
+    fn user_rule_parses_dotted_table_styles_form() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+style = { fg = "yellow" }
+[rules.styles."1"]
+fg = "red"
+[rules.styles."2"]
+fg = "blue"
+"#;
+        let cfg: Config = parse("<test>", src).expect("parse");
+        assert_eq!(cfg.rules.len(), 1);
+        let r = &cfg.rules[0];
+        let styles = r.styles.as_ref().expect("styles set");
+        assert_eq!(styles.len(), 2);
+    }
+
+    #[test]
+    fn user_rule_parses_empty_styles_map_as_some_empty() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+styles = {}
+"#;
+        let cfg: Config = parse("<test>", src).expect("parse");
+        let r = &cfg.rules[0];
+        assert_eq!(r.styles.as_ref().map(std::collections::BTreeMap::len), Some(0));
+    }
+
+    #[test]
+    fn user_rule_styles_absent_defaults_to_none() {
+        let src = r#"
+[[rules]]
+name = "ipv4"
+"#;
+        let cfg: Config = parse("<test>", src).expect("parse");
+        let r = &cfg.rules[0];
+        assert_eq!(r.styles, None);
+    }
+
+    #[test]
     fn unknown_top_level_field_rejected() {
         let src = "rulez = []\n";
         let err = parse("/x", src).unwrap_err();
@@ -887,7 +953,7 @@ style = { fg = "red" }
     use crate::rules::{builtin_rules, BUILTIN_NAMES};
 
     fn user_rule(name: &str) -> UserRule {
-        UserRule { name: name.into(), pattern: None, style: None, enabled: true }
+        UserRule { name: name.into(), pattern: None, style: None, enabled: true, styles: None }
     }
 
     #[test]
@@ -907,6 +973,7 @@ style = { fg = "red" }
             pattern: None,
             style: Some(UserStyle { fg: Some("yellow".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         let log = rules.iter().find(|r| r.name == "log_level").expect("present");
@@ -930,6 +997,7 @@ style = { fg = "red" }
             pattern: Some(r"\b[0-9a-fA-F]{8}\b".into()),
             style: Some(UserStyle { fg: Some("#888888".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         let appended = rules.last().expect("appended");
@@ -946,12 +1014,14 @@ style = { fg = "red" }
                 pattern: Some("a".into()),
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             },
             UserRule {
                 name: "b".into(),
                 pattern: Some("b".into()),
                 style: Some(UserStyle { fg: Some("blue".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             },
         ];
         apply_user_rules("/x", &mut rules, &user).unwrap();
@@ -967,6 +1037,7 @@ style = { fg = "red" }
             pattern: Some(r"\bX\.X\.X\.X\b".into()),
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         let ipv4 = rules.iter().find(|r| r.name == "ipv4").unwrap();
@@ -981,6 +1052,7 @@ style = { fg = "red" }
             pattern: None,
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -996,6 +1068,7 @@ style = { fg = "red" }
             pattern: Some(r"\b[0-9a-f]{8}\b".into()),
             style: None,
             enabled: true,
+            styles: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         assert!(err.to_string().contains("custom_id"));
@@ -1012,6 +1085,7 @@ style = { fg = "red" }
             pattern: Some("X".into()),
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: false,
+            styles: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         assert_eq!(rules.len(), before_len);
@@ -1034,6 +1108,7 @@ style = { fg = "red" }
             pattern: None,
             style: Some(UserStyle { fg: Some("turquoise".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         let err = apply_user_rules("/x/cfg.toml", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1049,6 +1124,7 @@ style = { fg = "red" }
             pattern: Some("X".into()),
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1063,6 +1139,7 @@ style = { fg = "red" }
             pattern: None,
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
+            styles: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1079,12 +1156,14 @@ style = { fg = "red" }
                 pattern: Some("X".into()),
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             },
             UserRule {
                 name: "uuid".into(),
                 pattern: Some("Y".into()),
                 style: Some(UserStyle { fg: Some("blue".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             },
         ];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
@@ -1107,12 +1186,14 @@ style = { fg = "red" }
                 pattern: None,
                 style: Some(UserStyle { fg: Some("yellow".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             },
             UserRule {
                 name: "log_level".into(),
                 pattern: None,
                 style: Some(UserStyle { fg: Some("cyan".into()), ..UserStyle::default() }),
                 enabled: true,
+                styles: None,
             },
         ];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
