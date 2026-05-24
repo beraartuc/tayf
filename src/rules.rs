@@ -470,6 +470,20 @@ pub(crate) struct Compiled {
     pub(crate) set: RegexSet,
     pub(crate) individuals: Vec<Regex>,
     pub(crate) styles: Vec<Style>,
+    /// Per-rule capture-group style overlay. `group_styles[i]` is the overlay
+    /// for `individuals[i]` (vector length = `individuals[i].captures_len() - 1`,
+    /// or empty for legacy rules). See [`BuiltinRule::group_styles`] for the
+    /// per-entry semantics.
+    #[allow(dead_code)]
+    // reason: Phase 2 wires this empty; Task 6 (apply_rules dispatch) reads it.
+    pub(crate) group_styles: Vec<Vec<Option<Style>>>,
+    /// `uses_capture_styling[i] == true` iff `group_styles[i]` contains at
+    /// least one `Some` entry. Cached at compile time so `apply_rules`'s
+    /// inner loop can branchless dispatch between `find_iter` (hot path)
+    /// and `captures_iter` (runs-per-match) without per-line scanning.
+    #[allow(dead_code)]
+    // reason: Phase 2 wires this empty; Task 6 (apply_rules dispatch) reads it.
+    pub(crate) uses_capture_styling: Vec<bool>,
     /// When `true`, lines containing any SGR (CSI `m`) byte skip rule
     /// application. Read from `[general] respect_existing_colors` and
     /// snapshotted at line boundary via the enclosing `ArcSwap<Compiled>`
@@ -497,6 +511,8 @@ impl Compiled {
             set: RegexSet::empty(),
             individuals: Vec::new(),
             styles: Vec::new(),
+            group_styles: Vec::new(),
+            uses_capture_styling: Vec::new(),
             respect_existing_colors: true,
         }
     }
@@ -603,7 +619,18 @@ impl Compiled {
             |c| c.general.respect_existing_colors,
         );
 
-        Ok(Compiled { set, individuals, styles, respect_existing_colors })
+        // Phase 2: empty group_styles + all-false uses_capture_styling; Phase 5
+        // will populate from BuiltinRule.group_styles + user/theme styles map.
+        let group_styles: Vec<Vec<Option<Style>>> = vec![Vec::new(); individuals.len()];
+        let uses_capture_styling: Vec<bool> = vec![false; individuals.len()];
+        Ok(Compiled {
+            set,
+            individuals,
+            styles,
+            group_styles,
+            uses_capture_styling,
+            respect_existing_colors,
+        })
     }
 
     /// Built-in defaults compiled at Truecolor depth, no theme, no user
@@ -1587,5 +1614,29 @@ mod tests {
         assert_eq!(c.styles.len(), 0);
         assert_eq!(c.set.len(), 0);
         assert!(c.respect_existing_colors, "empty should default to v0.3 safe default");
+    }
+
+    #[test]
+    fn compiled_uses_capture_styling_all_false_in_phase2() {
+        // Phase 2: no built-in has group_styles populated yet.
+        // Phase 6 flips timestamp/url/permission to true.
+        let c = Compiled::load_builtins().expect("builtins compile");
+        assert_eq!(c.uses_capture_styling.len(), c.individuals.len());
+        assert!(
+            c.uses_capture_styling.iter().all(|&b| !b),
+            "some uses_capture_styling[i] is true in Phase 2: {:?}",
+            c.uses_capture_styling
+        );
+        assert_eq!(c.group_styles.len(), c.individuals.len());
+        for (i, g) in c.group_styles.iter().enumerate() {
+            assert!(g.is_empty(), "compiled.group_styles[{i}] non-empty in Phase 2");
+        }
+    }
+
+    #[test]
+    fn compiled_empty_has_empty_group_styles_vecs() {
+        let c = Compiled::empty();
+        assert_eq!(c.group_styles.len(), 0);
+        assert_eq!(c.uses_capture_styling.len(), 0);
     }
 }
