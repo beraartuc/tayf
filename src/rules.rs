@@ -1152,7 +1152,7 @@ mod tests {
         // This test pins the (broken) behavior so a future change cannot
         // silently flip it.
         use crate::config::{Config, GeneralSection, UserRule};
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use crate::terminfo::ColorDepth;
         use arc_swap::ArcSwap;
 
@@ -1168,8 +1168,9 @@ mod tests {
         )
         .unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"\x1b[49m", &rules, &mut out).unwrap();
+        apply_rules(b"\x1b[49m", &rules, &mut scratch, &mut out).unwrap();
         // Duration style fg is Green = SGR 32. With respect=false, the bare-`m`
         // bit of `49m` matches the duration rule and an SGR wrap appears.
         let s = String::from_utf8_lossy(&out).into_owned();
@@ -1221,12 +1222,13 @@ mod tests {
 
     #[test]
     fn filename_wins_over_fqdn_for_known_extensions() {
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"edit claude.md please\n", &rules, &mut out).unwrap();
+        apply_rules(b"edit claude.md please\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // BrightCyan fg = SGR 96; Blue fg = SGR 34. Verify the filename style wins.
         assert!(s.contains("96"), "expected filename SGR 96 (bright cyan), got: {s:?}");
@@ -1235,24 +1237,26 @@ mod tests {
 
     #[test]
     fn filename_wins_for_rust_source() {
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"vim src/main.rs and tests.rs\n", &rules, &mut out).unwrap();
+        apply_rules(b"vim src/main.rs and tests.rs\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("96"), "expected bright cyan: {s:?}");
     }
 
     #[test]
     fn fqdn_still_matches_when_no_filename_competes() {
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"visit api.example.org today\n", &rules, &mut out).unwrap();
+        apply_rules(b"visit api.example.org today\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // Blue SGR 34 should appear (no extension to conflict).
         assert!(s.contains("34"), "expected fqdn SGR 34 (blue): {s:?}");
@@ -1677,12 +1681,13 @@ mod tests {
     #[test]
     fn url_git_at_with_path_wins_over_email() {
         // Spec §3.2 — `apply_rules` is first-rule-wins; url precedes email.
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"clone git@github.com:u/r.git\n", &rules, &mut out).unwrap();
+        apply_rules(b"clone git@github.com:u/r.git\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // BrightBlue fg = SGR 94 (url); BrightGreen fg = SGR 92 (email).
         assert!(s.contains("94"), "expected BrightBlue (url): {s:?}");
@@ -1692,12 +1697,13 @@ mod tests {
     #[test]
     fn url_git_at_without_path_falls_to_email() {
         // Spec §3.2 — without `:path`, url branch fails; email rule matches.
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"clone git@github.com\n", &rules, &mut out).unwrap();
+        apply_rules(b"clone git@github.com\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // BrightGreen fg = SGR 92 (email); BrightBlue fg = SGR 94 (url).
         assert!(s.contains("92"), "expected BrightGreen (email): {s:?}");
@@ -1736,7 +1742,7 @@ mod tests {
         // `pipeline::pipeline_tests::sgr_in_line_with_respect_true_skips_rules`
         // for the default-on protection.
         use crate::config::{Config, GeneralSection, UserRule};
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
 
         // Build a Compiled with ONLY the non-duration built-ins by disabling
@@ -1760,6 +1766,7 @@ mod tests {
         )
         .unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let inputs: &[&[u8]] = &[
             b"\x1b[0m",
             b"\x1b[1;39m",
@@ -1769,7 +1776,7 @@ mod tests {
         ];
         for input in inputs {
             let mut out = Vec::new();
-            apply_rules(input, &rules, &mut out).unwrap();
+            apply_rules(input, &rules, &mut scratch, &mut out).unwrap();
             assert_eq!(
                 out,
                 *input,
@@ -1782,12 +1789,14 @@ mod tests {
 
     #[test]
     fn url_wins_over_fqdn() {
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"go to https://api.example.com today\n", &rules, &mut out).unwrap();
+        apply_rules(b"go to https://api.example.com today\n", &rules, &mut scratch, &mut out)
+            .unwrap();
         let s = String::from_utf8(out).unwrap();
         // BrightBlue fg = SGR 94. Underline = SGR 4. fqdn = Blue (34) — must NOT appear.
         assert!(s.contains("94"), "expected BrightBlue (url): {s:?}");
@@ -1796,12 +1805,13 @@ mod tests {
 
     #[test]
     fn email_wins_over_fqdn() {
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"mail user@example.com soon\n", &rules, &mut out).unwrap();
+        apply_rules(b"mail user@example.com soon\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // BrightGreen = 92, Blue (fqdn) = 34
         assert!(s.contains("92"), "expected BrightGreen (email): {s:?}");
@@ -1812,12 +1822,13 @@ mod tests {
     fn permission_does_not_steal_mac_addresses() {
         // A MAC address like aa:bb:cc:dd:ee:ff must still be styled as mac (Cyan, 36),
         // not consumed by permission (whose char class includes `-` but not `:`).
-        use crate::pipeline::apply_rules;
+        use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"iface aa:bb:cc:dd:ee:ff up\n", &rules, &mut out).unwrap();
+        apply_rules(b"iface aa:bb:cc:dd:ee:ff up\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("36"), "expected Cyan (mac): {s:?}");
     }

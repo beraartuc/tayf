@@ -48,47 +48,46 @@ use crate::style::Style;
 pub(crate) fn apply_rules<W: Write>(
     line: &[u8],
     compiled_handle: &ArcSwap<Compiled>,
+    scratch: &mut PipelineScratch,
     out: &mut W,
 ) -> std::io::Result<()> {
     let snapshot: Arc<Compiled> = compiled_handle.load_full();
     let compiled: &Compiled = snapshot.as_ref();
 
-    // Accepted match spans (sorted by start) — used for overlap detection
-    // only. One entry per accepted match, regardless of how many runs the
-    // match emits via the captures path.
-    let mut accepted_spans: Vec<(usize, usize)> = Vec::new();
-    let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-    let mut event_scratch: Vec<(usize, OpenClose, u32)> = Vec::new();
-    let mut active_scratch: Vec<u32> = Vec::new();
+    scratch.accepted_spans.clear();
+    scratch.runs.clear();
+    scratch.event_scratch.clear();
+    scratch.active_scratch.clear();
+    scratch.set_match_scratch.clear();
 
     for (i, re) in compiled.individuals.iter().enumerate() {
         if compiled.uses_capture_styling[i] {
             for caps in re.captures_iter(line) {
                 let m = caps.get(0).expect("capture 0 is always the full match");
                 let (start, end) = (m.start(), m.end());
-                if overlaps_accepted(&accepted_spans, start, end) {
+                if overlaps_accepted(&scratch.accepted_spans, start, end) {
                     continue;
                 }
                 emit_capture_runs(
                     &caps,
                     start,
                     end,
-                    &compiled.styles[i],
+                    compiled.styles[i],
                     &compiled.group_styles[i],
-                    &mut event_scratch,
-                    &mut active_scratch,
-                    &mut runs,
+                    &mut scratch.event_scratch,
+                    &mut scratch.active_scratch,
+                    &mut scratch.runs,
                 );
-                insert_accepted(&mut accepted_spans, start, end);
+                insert_accepted(&mut scratch.accepted_spans, start, end);
             }
         } else {
             for m in re.find_iter(line) {
                 let (start, end) = (m.start(), m.end());
-                if overlaps_accepted(&accepted_spans, start, end) {
+                if overlaps_accepted(&scratch.accepted_spans, start, end) {
                     continue;
                 }
-                runs.push((start, end, &compiled.styles[i]));
-                insert_accepted(&mut accepted_spans, start, end);
+                scratch.runs.push((start, end, compiled.styles[i]));
+                insert_accepted(&mut scratch.accepted_spans, start, end);
             }
         }
     }
@@ -98,10 +97,10 @@ pub(crate) fn apply_rules<W: Write>(
     // after rule 1 matched at byte 30). Sort once at the end to keep the
     // emit loop monotonic. Within a single rule the iteration order is
     // already start-ascending, but the merge across rules is not.
-    runs.sort_by_key(|&(s, _, _)| s);
+    scratch.runs.sort_by_key(|&(s, _, _)| s);
 
     let mut cursor = 0usize;
-    for (start, end, style) in runs {
+    for &(start, end, style) in &scratch.runs {
         out.write_all(&line[cursor..start])?;
         let sgr = style.to_sgr();
         if !sgr.is_empty() {
@@ -151,22 +150,22 @@ pub(crate) enum OpenClose {
 // position p, the Close-then-Open ordering elides a zero-length gap run.
 
 /// Expand a single captured match into 1..=N non-overlapping
-/// `(start, end, &Style)` runs using a boundary-event sweep. No per-byte
+/// `(start, end, Style)` runs using a boundary-event sweep. No per-byte
 /// allocation; all transient state lives in caller-owned scratch Vecs
 /// that are `.clear()`-reused across matches in the same line.
 ///
 /// Inner (higher-index) groups override outer groups when nested. See
 /// spec §1.1 for the algorithm walkthrough.
 #[allow(clippy::too_many_arguments)] // reason: scratch Vecs are caller-owned to avoid per-match allocation; bundling them into a struct would obscure the reuse pattern.
-pub(crate) fn emit_capture_runs<'r>(
+pub(crate) fn emit_capture_runs(
     caps: &regex::bytes::Captures<'_>,
     match_start: usize,
     match_end: usize,
-    default_style: &'r Style,
-    group_styles: &'r [Option<Style>],
+    default_style: Style,
+    group_styles: &[Option<Style>],
     event_scratch: &mut Vec<(usize, OpenClose, u32)>,
     active_scratch: &mut Vec<u32>,
-    out: &mut Vec<(usize, usize, &'r Style)>,
+    out: &mut Vec<(usize, usize, Style)>,
 ) {
     event_scratch.clear();
     active_scratch.clear();
@@ -191,11 +190,10 @@ pub(crate) fn emit_capture_runs<'r>(
     for &(pos, kind, g) in event_scratch.iter() {
         if pos > prev_pos {
             let active_g = active_scratch.last().copied().unwrap_or(0);
-            let style: &Style = if active_g == 0 {
+            let style: Style = if active_g == 0 {
                 default_style
             } else {
                 group_styles[(active_g - 1) as usize]
-                    .as_ref()
                     .expect("event pushed for Some-styled group; slot is Some")
             };
             out.push((prev_pos, pos, style));
@@ -216,6 +214,27 @@ pub(crate) fn emit_capture_runs<'r>(
     if prev_pos < match_end {
         out.push((prev_pos, match_end, default_style));
     }
+}
+
+/// Per-line scratch surface for `apply_rules`. Owned by `Pipeline` so the
+/// five Vecs allocate at most once per process lifetime; each `apply_rules`
+/// call `.clear()`-reuses them. Capacity grows monotonically to the
+/// worst-case line's allocation (memory pressure bounded by max-line scratch
+/// surface, not unbounded leak).
+///
+/// `runs` carries `Style` by value (Style is Copy + ~16 byte); this
+/// eliminates the per-call `Arc<Compiled>` snapshot borrow that v0.3.5's
+/// `Vec<(usize, usize, &'r Style)>` shape forced.
+///
+/// `set_match_scratch` collects `RegexSet::matches(line).iter()` output;
+/// indices are in pattern-definition order (regex 1.12 stable contract).
+#[derive(Default)]
+pub(crate) struct PipelineScratch {
+    pub(crate) accepted_spans: Vec<(usize, usize)>,
+    pub(crate) runs: Vec<(usize, usize, Style)>,
+    pub(crate) event_scratch: Vec<(usize, OpenClose, u32)>,
+    pub(crate) active_scratch: Vec<u32>,
+    pub(crate) set_match_scratch: Vec<usize>,
 }
 
 /// Output pipeline. Owns the ANSI state machine, line buffer, sequence
@@ -239,6 +258,8 @@ pub(crate) struct Pipeline {
     /// the rest of the line to pass verbatim (no rule application). See
     /// the `StringPayloadByte` arm in `feed` for the buffer-drain rationale.
     line_has_string_payload: bool,
+    /// Per-line scratch for `apply_rules`. See `PipelineScratch` doc-comment.
+    scratch: PipelineScratch,
 }
 
 impl Pipeline {
@@ -250,6 +271,7 @@ impl Pipeline {
             rules,
             line_has_sgr: false,
             line_has_string_payload: false,
+            scratch: PipelineScratch::default(),
         }
     }
 
@@ -418,7 +440,7 @@ impl Pipeline {
         if skip_rules {
             out.write_all(line)?;
         } else {
-            apply_rules(line, &self.rules, out)?;
+            apply_rules(line, &self.rules, &mut self.scratch, out)?;
         }
         self.line_has_sgr = false;
         self.line_has_string_payload = false;
@@ -478,8 +500,9 @@ mod rule_tests {
     fn ipv4_in_line_gets_sgr_wrapping() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"connect to 192.168.1.1 now\n", &rules, &mut out).unwrap();
+        apply_rules(b"connect to 192.168.1.1 now\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("\x1b["), "expected SGR introducer in: {s:?}");
         assert!(s.contains("192.168.1.1"));
@@ -490,8 +513,9 @@ mod rule_tests {
     fn no_match_passes_through_unchanged() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"plain text line\n", &rules, &mut out).unwrap();
+        apply_rules(b"plain text line\n", &rules, &mut scratch, &mut out).unwrap();
         assert_eq!(out, b"plain text line\n");
     }
 
@@ -499,8 +523,9 @@ mod rule_tests {
     fn apply_rules_hot_path_behavior_matches_v0_3_4_for_non_captures_rules() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"connect to 192.168.1.1 now\n", &rules, &mut out).unwrap();
+        apply_rules(b"connect to 192.168.1.1 now\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("\x1b["));
         assert!(s.contains("192.168.1.1"));
@@ -515,8 +540,9 @@ mod rule_tests {
     fn permission_match_renders_four_distinct_sgrs() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"drwxr-xr-x file.txt\n", &rules, &mut out).unwrap();
+        apply_rules(b"drwxr-xr-x file.txt\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // Expect 4 distinct non-reset SGRs wrapping type / user / group / other.
         // (Plus filename rule may fire on "file.txt" — that's 1 extra. Total ≥ 4.)
@@ -528,8 +554,10 @@ mod rule_tests {
     fn iso_timestamp_match_renders_five_distinct_sgrs() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"event at 2026-05-24T10:30:45.123Z fired\n", &rules, &mut out).unwrap();
+        apply_rules(b"event at 2026-05-24T10:30:45.123Z fired\n", &rules, &mut scratch, &mut out)
+            .unwrap();
         let s = String::from_utf8(out).unwrap();
         let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
         assert!(intro_count >= 5, "expected >= 5 SGRs (date/sep/time/ms/tz); got: {s:?}");
@@ -539,8 +567,10 @@ mod rule_tests {
     fn syslog_timestamp_substring_survives_colorization() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"May 24 10:30:45 host service: msg\n", &rules, &mut out).unwrap();
+        apply_rules(b"May 24 10:30:45 host service: msg\n", &rules, &mut scratch, &mut out)
+            .unwrap();
         let s = String::from_utf8(out).unwrap();
         // Syslog branch has no captures -> match wrapped with the rule's default style.
         // Other rules (e.g., log_level on "msg") may add additional SGRs; this test
@@ -552,8 +582,10 @@ mod rule_tests {
     fn http_url_match_renders_three_sgrs_with_underline_on_path() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"docs at https://example.com/path now\n", &rules, &mut out).unwrap();
+        apply_rules(b"docs at https://example.com/path now\n", &rules, &mut scratch, &mut out)
+            .unwrap();
         let s = String::from_utf8(out).unwrap();
         let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
         assert!(intro_count >= 3, "expected >= 3 SGRs (scheme/'://'/path); got: {s:?}");
@@ -568,8 +600,10 @@ mod rule_tests {
     fn git_at_url_match_renders_match_via_default_style() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"clone git@github.com:user/repo.git\n", &rules, &mut out).unwrap();
+        apply_rules(b"clone git@github.com:user/repo.git\n", &rules, &mut scratch, &mut out)
+            .unwrap();
         let s = String::from_utf8(out).unwrap();
         // git@ branch has no captures → collapsed to one default-style SGR.
         // (Filename rule may also fire on "repo.git" — that's separate.)
@@ -598,8 +632,9 @@ mod rule_tests {
             respect_existing_colors: false,
         };
         let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
-        apply_rules(b"X 12-34 Y\n", &rules, &mut out).unwrap();
+        apply_rules(b"X 12-34 Y\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         // Expect at least 2 non-reset SGRs (red and blue for the two groups).
         let sgr_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
@@ -656,12 +691,12 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![None];
         let mut event_scratch = Vec::new();
         let mut active_scratch = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
         emit_capture_runs(
             &caps,
             4,
             7,
-            &default,
+            default,
             &group_styles,
             &mut event_scratch,
             &mut active_scratch,
@@ -670,7 +705,7 @@ mod rule_tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].0, 4);
         assert_eq!(runs[0].1, 7);
-        assert!(std::ptr::eq(runs[0].2, &default));
+        assert_eq!(runs[0].2, default);
     }
 
     #[test]
@@ -683,13 +718,13 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-        emit_capture_runs(&caps, 4, 7, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
+        emit_capture_runs(&caps, 4, 7, default, &group_styles, &mut es, &mut as_, &mut runs);
         // Group 1 covers [4,7) — exactly the match. Single run = group style.
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].0, 4);
         assert_eq!(runs[0].1, 7);
-        assert!(std::ptr::eq(runs[0].2, group_styles[0].as_ref().unwrap()));
+        assert_eq!(runs[0].2, group_styles[0].unwrap());
     }
 
     #[test]
@@ -703,8 +738,8 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red), Some(blue)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-        emit_capture_runs(&caps, 0, 2, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 2, default, &group_styles, &mut es, &mut as_, &mut runs);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].0, 0);
         assert_eq!(runs[0].1, 1);
@@ -723,21 +758,21 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red), Some(blue)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-        emit_capture_runs(&caps, 0, 3, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 3, default, &group_styles, &mut es, &mut as_, &mut runs);
         assert_eq!(runs.len(), 3);
         // a → outer (red)
         assert_eq!(runs[0].0, 0);
         assert_eq!(runs[0].1, 1);
-        assert!(std::ptr::eq(runs[0].2, group_styles[0].as_ref().unwrap()));
+        assert_eq!(runs[0].2, group_styles[0].unwrap());
         // b → inner (blue)
         assert_eq!(runs[1].0, 1);
         assert_eq!(runs[1].1, 2);
-        assert!(std::ptr::eq(runs[1].2, group_styles[1].as_ref().unwrap()));
+        assert_eq!(runs[1].2, group_styles[1].unwrap());
         // c → outer (red) again
         assert_eq!(runs[2].0, 2);
         assert_eq!(runs[2].1, 3);
-        assert!(std::ptr::eq(runs[2].2, group_styles[0].as_ref().unwrap()));
+        assert_eq!(runs[2].2, group_styles[0].unwrap());
     }
 
     #[test]
@@ -750,10 +785,10 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-        emit_capture_runs(&caps, 0, 1, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 1, default, &group_styles, &mut es, &mut as_, &mut runs);
         assert_eq!(runs.len(), 1);
-        assert!(std::ptr::eq(runs[0].2, &default));
+        assert_eq!(runs[0].2, default);
     }
 
     #[test]
@@ -766,12 +801,12 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-        emit_capture_runs(&caps, 0, 3, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 3, default, &group_styles, &mut es, &mut as_, &mut runs);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].0, 0);
         assert_eq!(runs[0].1, 2);
-        assert!(std::ptr::eq(runs[0].2, &default));
+        assert_eq!(runs[0].2, default);
         assert_eq!(runs[1].0, 2);
         assert_eq!(runs[1].1, 3);
     }
@@ -786,14 +821,14 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
-        emit_capture_runs(&caps, 0, 3, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 3, default, &group_styles, &mut es, &mut as_, &mut runs);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].0, 0);
         assert_eq!(runs[0].1, 1);
         assert_eq!(runs[1].0, 1);
         assert_eq!(runs[1].1, 3);
-        assert!(std::ptr::eq(runs[1].2, &default));
+        assert_eq!(runs[1].2, default);
     }
 
     #[test]
@@ -805,14 +840,14 @@ mod rule_tests {
         let group_styles: Vec<Option<Style>> = vec![Some(red)];
         let mut es = Vec::new();
         let mut as_ = Vec::new();
-        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        let mut runs: Vec<(usize, usize, Style)> = Vec::new();
         for caps in re.captures_iter(line) {
             let m = caps.get(0).unwrap();
             emit_capture_runs(
                 &caps,
                 m.start(),
                 m.end(),
-                &default,
+                default,
                 &group_styles,
                 &mut es,
                 &mut as_,
@@ -824,6 +859,47 @@ mod rule_tests {
         assert_eq!(runs[0].1, 7);
         assert_eq!(runs[1].0, 12);
         assert_eq!(runs[1].1, 15);
+    }
+
+    /// Verifies that the caller-owned `PipelineScratch` Vecs retain their capacity
+    /// across `apply_rules` calls (the `.clear()` reuse contract). NOT a zero-
+    /// allocation invariant overall — `regex::bytes::RegexSet::matches` itself
+    /// allocates a small bitset (~`pattern_count` word) per call internally; that
+    /// is a fixed upstream cost outside `PipelineScratch`'s surface.
+    #[test]
+    fn pipeline_scratch_capacity_preserved_across_apply_rules_calls() {
+        // Inline pattern mirrors existing apply_rules unit tests; no shared helper.
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out: Vec<u8> = Vec::new();
+
+        // First call: populate.
+        apply_rules(b"connect 192.168.1.1 now\n", &rules, &mut scratch, &mut out).unwrap();
+        let cap_after_first = (
+            scratch.accepted_spans.capacity(),
+            scratch.runs.capacity(),
+            scratch.event_scratch.capacity(),
+            scratch.active_scratch.capacity(),
+            scratch.set_match_scratch.capacity(),
+        );
+        out.clear();
+
+        // Second call with a smaller line: capacities must NOT shrink (Vec::clear
+        // preserves capacity). PipelineScratch surface stays allocation-free.
+        apply_rules(b"\n", &rules, &mut scratch, &mut out).unwrap();
+        let cap_after_second = (
+            scratch.accepted_spans.capacity(),
+            scratch.runs.capacity(),
+            scratch.event_scratch.capacity(),
+            scratch.active_scratch.capacity(),
+            scratch.set_match_scratch.capacity(),
+        );
+
+        assert_eq!(
+            cap_after_first, cap_after_second,
+            "PipelineScratch capacities must be preserved across apply_rules calls"
+        );
     }
 }
 

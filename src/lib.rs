@@ -323,6 +323,14 @@ pub mod __bench__ {
     /// via [`load_builtin_rules`] and passed back into [`apply_rules`].
     pub struct CompiledRules(std::sync::Arc<arc_swap::ArcSwap<crate::rules::Compiled>>);
 
+    /// Bench-only scratch container. Wraps `crate::pipeline::PipelineScratch`
+    /// so the `benches/` crate (an external crate from rustc's perspective)
+    /// can hoist scratch allocation outside `b.iter` loops, matching the
+    /// production Pipeline's per-call PipelineScratch-surface zero-allocation
+    /// contract. Not part of the public API.
+    #[derive(Default)]
+    pub struct BenchScratch(crate::pipeline::PipelineScratch);
+
     /// Compile the v0.1 built-in rule set (same path the production runtime
     /// uses). See `src/rules.rs::Compiled::load_builtins`.
     ///
@@ -334,16 +342,18 @@ pub mod __bench__ {
             .map(|c| CompiledRules(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(c))))
     }
 
-    /// Run the per-line rule scanner against `line`, emitting the SGR-wrapped
-    /// output to `out`. Mirrors `src/pipeline.rs::apply_rules`.
+    /// Drive the rule scanner against `line`. Scratch is caller-owned and
+    /// MUST be hoisted outside any `b.iter` loop so the measurement reflects
+    /// the scanner, not the allocator.
     ///
     /// # Errors
     /// Forwards any `std::io::Error` produced by `out`.
     pub fn apply_rules<W: Write>(
         line: &[u8],
         rules: &CompiledRules,
+        scratch: &mut BenchScratch,
         out: &mut W,
     ) -> std::io::Result<()> {
-        crate::pipeline::apply_rules(line, &rules.0, out)
+        crate::pipeline::apply_rules(line, &rules.0, &mut scratch.0, out)
     }
 }

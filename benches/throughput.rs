@@ -39,7 +39,7 @@ use std::io::{Cursor, Write};
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 
-use tayf::__bench__::{apply_rules, load_builtin_rules};
+use tayf::__bench__::{apply_rules, load_builtin_rules, BenchScratch};
 
 /// Synthetic IPv4-heavy input. Three IPv4 addresses, one HTTP status code,
 /// and one log-level token per line — five non-overlapping matches total,
@@ -52,6 +52,7 @@ fn ipv4_heavy_input() -> Vec<u8> {
 fn bench_apply_rules_ipv4_heavy(c: &mut Criterion) {
     let compiled = load_builtin_rules().expect("builtin rules compile");
     let input = ipv4_heavy_input();
+    let mut scratch = BenchScratch::default();
 
     let mut group = c.benchmark_group("apply_rules");
     group.throughput(Throughput::Bytes(input.len() as u64));
@@ -61,7 +62,7 @@ fn bench_apply_rules_ipv4_heavy(c: &mut Criterion) {
             // on the scanner, not the allocator. `Cursor` writes are infallible
             // here, but propagate the result so the optimizer can't elide it.
             let mut out = Cursor::new(Vec::with_capacity(input.len() * 2));
-            apply_rules(black_box(input.as_slice()), &compiled, &mut out)
+            apply_rules(black_box(input.as_slice()), &compiled, &mut scratch, &mut out)
                 .expect("write to in-memory Cursor cannot fail");
             black_box(out);
         });
@@ -80,6 +81,7 @@ fn bench_apply_rules_mixed_syslog(c: &mut Criterion) {
     // to the same ~67 KB scale as the IPv4-heavy bench above.
     let fixture: &[u8] = include_bytes!("../tests/fixtures/mixed_syslog.txt");
     let input = fixture.repeat(20);
+    let mut scratch = BenchScratch::default();
 
     let mut group = c.benchmark_group("apply_rules");
     group.throughput(Throughput::Bytes(input.len() as u64));
@@ -90,7 +92,7 @@ fn bench_apply_rules_mixed_syslog(c: &mut Criterion) {
                 if line.is_empty() {
                     continue;
                 }
-                apply_rules(black_box(line), &compiled, &mut out)
+                apply_rules(black_box(line), &compiled, &mut scratch, &mut out)
                     .expect("write to in-memory Cursor cannot fail");
             }
             black_box(out);
@@ -107,6 +109,7 @@ fn bench_apply_rules_captures_heavy(c: &mut Criterion) {
     let compiled = load_builtin_rules().expect("builtin rules compile");
     let fixture: &[u8] = include_bytes!("../tests/fixtures/captures_heavy.txt");
     let input = fixture.repeat(20);
+    let mut scratch = BenchScratch::default();
 
     let mut group = c.benchmark_group("apply_rules");
     group.throughput(Throughput::Bytes(input.len() as u64));
@@ -117,7 +120,7 @@ fn bench_apply_rules_captures_heavy(c: &mut Criterion) {
                 if line.is_empty() {
                     continue;
                 }
-                apply_rules(black_box(line), &compiled, &mut out)
+                apply_rules(black_box(line), &compiled, &mut scratch, &mut out)
                     .expect("write to in-memory Cursor cannot fail");
             }
             black_box(out);
