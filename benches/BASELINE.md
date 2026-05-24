@@ -298,8 +298,8 @@ Notes on the v0.3.3 → v0.3.4 delta:
   startup orchestration:
   - `themes::load_with` extends the search past the built-in preset map
     to `<config_base>/themes/<name>.toml`. Reads happen once during
-    `Compiled::load` at startup, then never again — the rules struct
-    behind `Pipeline.rules` is immutable per snapshot.
+    `Compiled::load_with_theme` at startup, then never again — the rules
+    struct behind `Pipeline.rules` is immutable per snapshot.
   - The case-insensitive built-in collision check (`dark`, `light`) and
     `[general]`-reject guard are early-return validators on the disk
     path; they never execute when the user names a non-shadowing theme

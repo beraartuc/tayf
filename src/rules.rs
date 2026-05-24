@@ -467,10 +467,12 @@ impl Compiled {
     /// After merging, every style is downgraded for `depth` and then compiled.
     ///
     /// The theme layer is validated by [`crate::themes::validate_theme_rules`]
-    /// before it is merged so semantic errors (unknown rule name, stray
-    /// `pattern` or `enabled = false`) surface as [`crate::Error::Config`]
-    /// pointing at the embedded source label rather than the user's config
-    /// path.
+    /// before it is merged so schema violations (unknown rule name, stray
+    /// `pattern` or `enabled = false`, stray `[general]` section) surface as
+    /// [`crate::Error::ThemeValidation`] pointing at the embedded source
+    /// label or the disk path, rather than at the user's config path. F2
+    /// collisions and disk-load IO still produce [`crate::Error::Config`]
+    /// (see `# Errors` below).
     ///
     /// Each pattern is compiled with `regex::bytes::RegexBuilder::size_limit`
     /// capped at 1 MiB to bound the memory a single user regex can consume.

@@ -64,8 +64,8 @@ pub struct Args {
     /// of `[general] theme`. Built-in themes: `dark`, `light`. Disk
     /// themes loaded from `<config_base>/themes/<name>.toml` are also
     /// accepted (`$XDG_CONFIG_HOME/tayf/themes/` or
-    /// `$HOME/.config/tayf/themes/`). Unknown names exit with
-    /// `EX_USAGE` (64) and a list of known names.
+    /// `$HOME/.config/tayf/themes/`). Unknown names, built-in name
+    /// collisions, and theme validation errors all exit `EX_USAGE` (64).
     #[arg(long, value_name = "NAME")]
     pub theme: Option<String>,
 
