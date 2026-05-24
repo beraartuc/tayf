@@ -63,8 +63,8 @@ pub(crate) fn apply_rules<W: Write>(
     // Pre-filter: ask RegexSet which rule indices CAN hit; skip the rest.
     // `SetMatches::iter()` yields indices in pattern-definition order
     // (regex 1.12 stable contract). NO HashSet/BTreeSet here — first-match-
-    // wins overlap kontrat'ı pattern order'a bağlı (spec §2.4 + cross-rule
-    // pattern-order regression guard).
+    // wins overlap resolution depends on pattern order (spec §2.4 +
+    // cross-rule pattern-order regression guard).
     scratch.set_match_scratch.extend(compiled.set.matches(line).iter());
 
     for &i in &scratch.set_match_scratch {
