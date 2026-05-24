@@ -36,38 +36,67 @@ use crate::style::Style;
 /// with SGR wrappers inserted around the first non-overlapping match of each
 /// rule (in rule definition order).
 ///
-/// v0.1 strategy: "first match wins" — overlapping matches from later rules
-/// are dropped. Conflict resolution as configurable priority lands in v0.5.
+/// "First match wins" — overlapping matches from later rules are dropped.
+/// Overlap detection uses `accepted_spans` (sorted by start) + binary search:
+/// O(log N) per candidate match, was O(runs²) in v0.3.4.
+///
+/// Selective dispatch per rule: if `uses_capture_styling[i]` is set, the rule
+/// goes through `captures_iter` + `emit_capture_runs` (one match expands to
+/// 1..=N styled runs, inner groups overriding outer); otherwise `find_iter`
+/// pushes a single run per match — byte-identical to v0.3.4 on this path.
+/// Conflict resolution as configurable priority lands in v0.5.
 pub(crate) fn apply_rules<W: Write>(
     line: &[u8],
     compiled_handle: &ArcSwap<Compiled>,
     out: &mut W,
 ) -> std::io::Result<()> {
-    // Snapshot the rule set for the duration of this line. Reloads landing
-    // mid-line take effect on the NEXT line, never split the current one.
-    // The `Arc` clone behind `load_full` is a single AcqRel atomic — cheap.
     let snapshot: Arc<Compiled> = compiled_handle.load_full();
     let compiled: &Compiled = snapshot.as_ref();
 
-    // Collect (start, end, style) spans without overlapping.
-    let mut spans: Vec<(usize, usize, &Style)> = Vec::new();
+    // Accepted match spans (sorted by start) — used for overlap detection
+    // only. One entry per accepted match, regardless of how many runs the
+    // match emits via the captures path.
+    let mut accepted_spans: Vec<(usize, usize)> = Vec::new();
+    let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+    let mut event_scratch: Vec<(usize, OpenClose, u32)> = Vec::new();
+    let mut active_scratch: Vec<u32> = Vec::new();
 
     for (i, re) in compiled.individuals.iter().enumerate() {
-        for m in re.find_iter(line) {
-            let (start, end) = (m.start(), m.end());
-            // Reject if it overlaps any existing accepted span.
-            if spans.iter().any(|&(s, e, _)| !(end <= s || start >= e)) {
-                continue;
+        if compiled.uses_capture_styling[i] {
+            for caps in re.captures_iter(line) {
+                let m = caps.get(0).expect("capture 0 is always the full match");
+                let (start, end) = (m.start(), m.end());
+                if overlaps_accepted(&accepted_spans, start, end) {
+                    continue;
+                }
+                emit_capture_runs(
+                    &caps,
+                    start,
+                    end,
+                    &compiled.styles[i],
+                    &compiled.group_styles[i],
+                    &mut event_scratch,
+                    &mut active_scratch,
+                    &mut runs,
+                );
+                insert_accepted(&mut accepted_spans, start, end);
             }
-            spans.push((start, end, &compiled.styles[i]));
+        } else {
+            for m in re.find_iter(line) {
+                let (start, end) = (m.start(), m.end());
+                if overlaps_accepted(&accepted_spans, start, end) {
+                    continue;
+                }
+                runs.push((start, end, &compiled.styles[i]));
+                insert_accepted(&mut accepted_spans, start, end);
+            }
         }
     }
 
-    // Sort spans by start position.
-    spans.sort_by_key(|&(s, _, _)| s);
+    runs.sort_by_key(|&(s, _, _)| s);
 
     let mut cursor = 0usize;
-    for (start, end, style) in spans {
+    for (start, end, style) in runs {
         out.write_all(&line[cursor..start])?;
         let sgr = style.to_sgr();
         if !sgr.is_empty() {
@@ -88,7 +117,6 @@ pub(crate) fn apply_rules<W: Write>(
 /// either the entry immediately preceding `start` extends past `start`,
 /// or the entry immediately at-or-after `start` starts before `end`.
 #[inline]
-#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
 pub(crate) fn overlaps_accepted(spans: &[(usize, usize)], start: usize, end: usize) -> bool {
     let i = spans.partition_point(|&(s, _)| s < start);
     if i > 0 && spans[i - 1].1 > start {
@@ -104,14 +132,12 @@ pub(crate) fn overlaps_accepted(spans: &[(usize, usize)], start: usize, end: usi
 /// Maintains the sort invariant so subsequent `overlaps_accepted` checks
 /// remain O(log N).
 #[inline]
-#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
 pub(crate) fn insert_accepted(spans: &mut Vec<(usize, usize)>, start: usize, end: usize) {
     let i = spans.partition_point(|&(s, _)| s < start);
     spans.insert(i, (start, end));
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
 pub(crate) enum OpenClose {
     Close,
     Open,
@@ -126,7 +152,6 @@ pub(crate) enum OpenClose {
 ///
 /// Inner (higher-index) groups override outer groups when nested. See
 /// spec §1.1 for the algorithm walkthrough.
-#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
 #[allow(clippy::too_many_arguments)] // reason: scratch Vecs are caller-owned to avoid per-match allocation; bundling them into a struct would obscure the reuse pattern.
 pub(crate) fn emit_capture_runs<'r>(
     caps: &regex::bytes::Captures<'_>,
@@ -463,6 +488,50 @@ mod rule_tests {
         let mut out = Vec::new();
         apply_rules(b"plain text line\n", &rules, &mut out).unwrap();
         assert_eq!(out, b"plain text line\n");
+    }
+
+    #[test]
+    fn apply_rules_hot_path_behavior_matches_v0_3_4_for_non_captures_rules() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"connect to 192.168.1.1 now\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("\x1b["));
+        assert!(s.contains("192.168.1.1"));
+        assert!(s.contains("\x1b[0m"));
+        // Exactly ONE SGR introducer + ONE reset, because no built-in is
+        // captures-styled in Phase 3 (no group_styles populated yet).
+        let introducers = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert_eq!(introducers, 1, "expected one non-reset SGR; got: {s:?}");
+    }
+
+    #[test]
+    fn apply_rules_with_capture_styling_rule_emits_multi_run_match() {
+        // Synthetic captures-styled rule. We assemble a Compiled manually
+        // because Phase 6 hasn't restructured permission/timestamp/url yet.
+        use crate::style::{Color, Style};
+        use regex::bytes::{Regex, RegexSet};
+        let re = Regex::new(r"(\d+)-(\d+)").unwrap();
+        let red = Style { fg: Some(Color::Red), ..Style::DEFAULT };
+        let blue = Style { fg: Some(Color::Blue), ..Style::DEFAULT };
+        let default = Style::DEFAULT;
+        let compiled = Compiled {
+            set: RegexSet::new([r"(\d+)-(\d+)"]).unwrap(),
+            individuals: vec![re],
+            styles: vec![default],
+            group_styles: vec![vec![Some(red), Some(blue)]],
+            uses_capture_styling: vec![true],
+            respect_existing_colors: false,
+        };
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut out = Vec::new();
+        apply_rules(b"X 12-34 Y\n", &rules, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // Expect at least 2 non-reset SGRs (red and blue for the two groups).
+        let sgr_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert!(sgr_count >= 2, "expected >= 2 non-reset SGRs (red + blue); got: {s:?}");
+        assert!(s.contains("12") && s.contains("34") && s.contains('-'));
     }
 
     #[test]
