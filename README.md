@@ -134,6 +134,43 @@ Unknown theme names exit with code 64 (`EX_USAGE`) and list the known themes on 
 
 The theme selection is fixed at startup: changing `[general] theme` in your config does **not** take effect on hot reload, so restart tayf to switch themes. Your `[[rules]]` edits still hot-reload as usual.
 
+### Custom themes (v0.3.4)
+
+In addition to the built-in `dark` and `light` presets, you can drop
+your own theme files into `~/.config/tayf/themes/<name>.toml` (or
+`$XDG_CONFIG_HOME/tayf/themes/<name>.toml`) and reference them by name:
+
+```toml
+# ~/.config/tayf/themes/my-dark.toml
+[[rules]]
+name = "log_level"
+style = { fg = "cyan", bold = true }
+
+[[rules]]
+name = "ipv4"
+style = { fg = "#ffaa00" }
+```
+
+```sh
+tayf --theme my-dark
+```
+
+A disk theme follows the same schema as a built-in preset — it's a list
+of `[[rules]]` blocks that override the style of an existing built-in
+pattern. The following constraints apply:
+
+- The file name **must not** match a built-in (`dark`, `light`); use
+  a different name (`my-dark`, `solarized-dark`) and reference it with
+  `--theme <name>`. The check is case-insensitive.
+- Theme rules **must** name an existing built-in pattern; they cannot
+  introduce new patterns. Use the user config (`config.toml`) to add
+  patterns.
+- Theme rules **must not** set `pattern` or `enabled = false`.
+- The theme file **must not** carry a `[general]` section.
+
+Validation surfaces every violation in one pass — fix all of them in a
+single editor cycle. Invalid theme files exit `EX_USAGE` (64).
+
 ### Automatic background detection (best-effort, v0.3.1)
 
 When you haven't pinned a theme via `--theme <name>` or `[general] theme`, tayf tries to detect your terminal's background color at startup and apply the matching preset:
@@ -146,7 +183,7 @@ When you haven't pinned a theme via `--theme <name>` or `[general] theme`, tayf 
 
 **Opt-out.** Pin a theme explicitly with `--theme dark` (or `light`) on the CLI, or set `[general] theme = "dark"` in your config. Explicit choices always win over detection.
 
-**Custom palettes.** For fine-grained matching to a specific terminal palette, override rule styles in your config under `[[rules]]`. Full custom themes loaded from `~/.config/tayf/themes/<name>.toml` are on the roadmap (v0.3.4).
+**Custom palettes.** For fine-grained matching to a specific terminal palette, override rule styles in your config under `[[rules]]`, or drop a full theme file under `~/.config/tayf/themes/<name>.toml` (see [Custom themes](#custom-themes-v034) above).
 
 **Multiplexers.** tmux is supported when passthrough is enabled — tmux ≤3.2 enables it by default; tmux ≥3.3 requires `set -g allow-passthrough on`. GNU screen is not supported (the OSC 11 path is skipped and tayf falls back to `dark`). Detection is also skipped when stdout is not a TTY, when `--no-color` is set, or when `TERM=dumb`.
 
