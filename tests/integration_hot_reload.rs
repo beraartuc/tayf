@@ -297,3 +297,157 @@ style = { fg = "red", bold = true }
         String::from_utf8_lossy(after)
     );
 }
+
+/// Rev2 I-6 regression: a user drops a disk theme file that collides
+/// with a built-in name (`<xdg>/tayf/themes/dark.toml`) mid-session.
+/// The next reload — triggered here by touching `config.toml` — must:
+/// (a) surface `collision_error` via `warn_msg!` to stderr,
+/// (b) keep the runtime alive with the previously-compiled rules, and
+/// (c) leave the child shell responsive.
+///
+/// The PTY's slave fd backs the child's stdin/stdout/stderr, so
+/// tayf's stderr (where `warn_msg!` writes) merges into the master
+/// read stream alongside the shell's stdout. `TAYF_LOG=warn` opts
+/// the logger in — without it, `warn_msg!` is a silent no-op.
+///
+/// `TAYF_DISABLE_BG_DETECT=1` makes `bg_detect::resolve()` deterministic
+/// (returns Dark across macOS/Linux), so the orchestrator threads
+/// "dark" through every reload and the collision fires on the first
+/// reload after the disk file appears.
+#[test]
+#[cfg(unix)]
+fn mid_session_disk_theme_with_builtin_name_warns_and_continues() {
+    if !require_sh() {
+        return;
+    }
+    let tayf = env!("CARGO_BIN_EXE_tayf");
+
+    // XDG-isolated tempdir: config + themes/ subdir share the same
+    // <xdg>/tayf/ base, mirroring real on-disk layout. Rev2 I-2 env
+    // isolation is applied via the per-child env override below.
+    let xdg = tempfile::tempdir().expect("tempdir");
+    let xdg_str = xdg.path().display().to_string();
+    let tayf_cfg_dir = xdg.path().join("tayf");
+    std::fs::create_dir_all(&tayf_cfg_dir).expect("mkdir tayf");
+    let cfg_path = tayf_cfg_dir.join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"
+[[rules]]
+name = "log_level"
+style = { fg = "yellow", bold = true }
+"#,
+    )
+    .expect("write initial config");
+
+    // Compose env: TRUECOLOR + XDG isolation + warn-level logger so
+    // collision warnings reach stderr + bg-detect disabled so the
+    // effective theme is deterministically "dark" on every platform.
+    let env: &[(&str, &str)] = &[
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("HOME", &xdg_str),
+        ("XDG_CONFIG_HOME", &xdg_str),
+        ("TAYF_LOG", "warn"),
+        ("TAYF_DISABLE_BG_DETECT", "1"),
+    ];
+
+    // NOTE: tayf's CLI has no positional command argument — never pass
+    // `-- echo hi`. The shell runs commands fed through the PTY master.
+    let (master, mut child) = common::spawn_for_interaction_with_env(
+        tayf,
+        &["--shell", "/bin/sh"],
+        env,
+        PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
+    );
+
+    let mut writer = master.take_writer().expect("take writer");
+    let mut reader = master.try_clone_reader().expect("clone reader");
+
+    // Settle: tayf spawns sh, signal/watch/reload threads come up.
+    thread::sleep(Duration::from_millis(300));
+
+    // Pre-collision sanity: rules are live (yellow ERROR).
+    writer.write_all(b"echo ERROR before-collision\n").expect("write before");
+    writer.write_all(b"echo TAYFMARK_PRECOLLISION\n").expect("write pre marker");
+
+    // Drop a colliding disk theme into <xdg>/tayf/themes/. This file
+    // didn't exist when tayf started, so the first reload after this
+    // point will trip `themes::load("dark")` → `collision_error`.
+    let themes_dir = tayf_cfg_dir.join("themes");
+    std::fs::create_dir_all(&themes_dir).expect("mkdir themes");
+    std::fs::write(
+        themes_dir.join("dark.toml"),
+        r#"
+[[rules]]
+name = "log_level"
+style = { fg = "cyan" }
+"#,
+    )
+    .expect("write colliding theme");
+
+    // Touch config.toml — the notify watcher fires, debounces ~200ms,
+    // then the orchestrator runs reload_once → themes::load("dark")
+    // → Err(collision_error) → warn_msg! on stderr; rules Arc untouched.
+    std::fs::write(
+        &cfg_path,
+        r#"
+[[rules]]
+name = "log_level"
+style = { fg = "yellow", bold = true }
+# trivial touch to invalidate the watcher quiescent window
+"#,
+    )
+    .expect("touch config");
+
+    // Generous window so the 200ms debounce + reload_once + stderr
+    // emit + Pipeline's next-line boundary all complete before we
+    // inject the post-collision marker. macOS CI has historically
+    // raced shorter waits here (see feedback_flaky_watch_test).
+    thread::sleep(Duration::from_millis(800));
+
+    // Post-collision: child shell must still respond. Yellow rule
+    // must still be active (the collision error rejected the swap).
+    writer.write_all(b"echo ERROR after-collision\n").expect("write after");
+    writer.write_all(b"echo TAYFMARK_POSTCOLLISION\n").expect("write post marker");
+    writer.write_all(b"exit\n").expect("write exit");
+    drop(writer);
+
+    let out = drain_until_eof(&mut reader, Duration::from_secs(10));
+    let _ = child.wait();
+
+    // (a) Collision warning surfaced via warn_msg! → merged into the
+    //     PTY master read because slave stderr == slave stdout fd.
+    let s = String::from_utf8_lossy(&out);
+    assert!(
+        s.contains("shadows the built-in"),
+        "expected collision warn_msg! in stream; got: {s:?}"
+    );
+
+    // (b) Runtime kept going — both markers reached the shell.
+    let pre_marker = b"TAYFMARK_PRECOLLISION";
+    let post_marker = b"TAYFMARK_POSTCOLLISION";
+    let pre_pos = out
+        .windows(pre_marker.len())
+        .position(|w| w == pre_marker)
+        .expect("pre-collision marker missing — shell never ran first echo");
+    let post_pos = out
+        .windows(post_marker.len())
+        .position(|w| w == post_marker)
+        .expect("post-collision marker missing — tayf terminated on collision");
+    assert!(post_pos > pre_pos, "post marker must follow pre marker");
+
+    // (c) Previously-compiled rules still active: the `ERROR` token
+    //     emitted AFTER the failed reload is still wrapped in yellow
+    //     SGR. Split on the PRE marker so the post-section captures the
+    //     post-collision `echo ERROR ...` output (which precedes the
+    //     post marker in the stream).
+    let pre_end = pre_pos + pre_marker.len();
+    let post_section = &out[pre_end..];
+    assert!(
+        yellow_sgr_present(post_section),
+        "previously-compiled yellow rule must remain active after collision; \
+         got: {:?}",
+        String::from_utf8_lossy(post_section)
+    );
+}
