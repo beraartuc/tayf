@@ -110,6 +110,84 @@ pub(crate) fn insert_accepted(spans: &mut Vec<(usize, usize)>, start: usize, end
     spans.insert(i, (start, end));
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
+pub(crate) enum OpenClose {
+    Close,
+    Open,
+}
+// Close < Open: when a group ends at position p and another starts at
+// position p, the Close-then-Open ordering elides a zero-length gap run.
+
+/// Expand a single captured match into 1..=N non-overlapping
+/// `(start, end, &Style)` runs using a boundary-event sweep. No per-byte
+/// allocation; all transient state lives in caller-owned scratch Vecs
+/// that are `.clear()`-reused across matches in the same line.
+///
+/// Inner (higher-index) groups override outer groups when nested. See
+/// spec §1.1 for the algorithm walkthrough.
+#[allow(dead_code)] // reason: Task 6 wires apply_rules to call this.
+#[allow(clippy::too_many_arguments)] // reason: scratch Vecs are caller-owned to avoid per-match allocation; bundling them into a struct would obscure the reuse pattern.
+pub(crate) fn emit_capture_runs<'r>(
+    caps: &regex::bytes::Captures<'_>,
+    match_start: usize,
+    match_end: usize,
+    default_style: &'r Style,
+    group_styles: &'r [Option<Style>],
+    event_scratch: &mut Vec<(usize, OpenClose, u32)>,
+    active_scratch: &mut Vec<u32>,
+    out: &mut Vec<(usize, usize, &'r Style)>,
+) {
+    event_scratch.clear();
+    active_scratch.clear();
+    for (gi, slot) in group_styles.iter().enumerate() {
+        if slot.is_none() {
+            continue;
+        }
+        let Some(sub) = caps.get(gi + 1) else { continue };
+        #[allow(clippy::cast_possible_truncation)]
+        // reason: regex caps capture count well below u32::MAX; group_styles.len() bounded by pattern.
+        let g = (gi + 1) as u32;
+        event_scratch.push((sub.start(), OpenClose::Open, g));
+        event_scratch.push((sub.end(), OpenClose::Close, g));
+    }
+    if event_scratch.is_empty() {
+        out.push((match_start, match_end, default_style));
+        return;
+    }
+    event_scratch.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut prev_pos = match_start;
+    for &(pos, kind, g) in event_scratch.iter() {
+        if pos > prev_pos {
+            let active_g = active_scratch.last().copied().unwrap_or(0);
+            let style: &Style = if active_g == 0 {
+                default_style
+            } else {
+                group_styles[(active_g - 1) as usize]
+                    .as_ref()
+                    .expect("event pushed for Some-styled group; slot is Some")
+            };
+            out.push((prev_pos, pos, style));
+            prev_pos = pos;
+        }
+        match kind {
+            OpenClose::Open => {
+                let ip = active_scratch.iter().position(|&x| x > g).unwrap_or(active_scratch.len());
+                active_scratch.insert(ip, g);
+            }
+            OpenClose::Close => {
+                if let Some(rp) = active_scratch.iter().position(|&x| x == g) {
+                    active_scratch.remove(rp);
+                }
+            }
+        }
+    }
+    if prev_pos < match_end {
+        out.push((prev_pos, match_end, default_style));
+    }
+}
+
 /// Output pipeline. Owns the ANSI state machine, line buffer, sequence
 /// scratch (for accumulating CSI/ESC sequence bytes whose destination is
 /// decided at completion), and an `ArcSwap` handle to the rule set.
@@ -423,6 +501,187 @@ mod rule_tests {
         insert_accepted(&mut spans, 20, 25);
         insert_accepted(&mut spans, 5, 10);
         assert_eq!(spans, vec![(0, 5), (5, 10), (10, 15), (20, 25)]);
+    }
+
+    #[test]
+    fn emit_capture_runs_no_styled_groups_emits_single_default_run() {
+        // Synthetic pattern with one capture group, but group_styles is None
+        // for that index — so no boundary events fire.
+        let re = regex::bytes::Regex::new(r"(\d+)").unwrap();
+        let line = b"abc 123 xyz";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let group_styles: Vec<Option<Style>> = vec![None];
+        let mut event_scratch = Vec::new();
+        let mut active_scratch = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(
+            &caps,
+            4,
+            7,
+            &default,
+            &group_styles,
+            &mut event_scratch,
+            &mut active_scratch,
+            &mut runs,
+        );
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].0, 4);
+        assert_eq!(runs[0].1, 7);
+        assert!(std::ptr::eq(runs[0].2, &default));
+    }
+
+    #[test]
+    fn emit_capture_runs_single_group_emits_one_run() {
+        let re = regex::bytes::Regex::new(r"(\d+)").unwrap();
+        let line = b"abc 123 xyz";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(&caps, 4, 7, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        // Group 1 covers [4,7) — exactly the match. Single run = group style.
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].0, 4);
+        assert_eq!(runs[0].1, 7);
+        assert!(std::ptr::eq(runs[0].2, group_styles[0].as_ref().unwrap()));
+    }
+
+    #[test]
+    fn emit_capture_runs_two_adjacent_groups_emit_two_runs_no_gap() {
+        let re = regex::bytes::Regex::new(r"(a)(b)").unwrap();
+        let line = b"ab";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let blue = Style { fg: Some(crate::style::Color::Blue), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red), Some(blue)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 2, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].0, 0);
+        assert_eq!(runs[0].1, 1);
+        assert_eq!(runs[1].0, 1);
+        assert_eq!(runs[1].1, 2);
+    }
+
+    #[test]
+    fn emit_capture_runs_nested_groups_inner_wins_three_runs() {
+        let re = regex::bytes::Regex::new(r"(a(b)c)").unwrap();
+        let line = b"abc";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let blue = Style { fg: Some(crate::style::Color::Blue), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red), Some(blue)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 3, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        assert_eq!(runs.len(), 3);
+        // a → outer (red)
+        assert_eq!(runs[0].0, 0);
+        assert_eq!(runs[0].1, 1);
+        assert!(std::ptr::eq(runs[0].2, group_styles[0].as_ref().unwrap()));
+        // b → inner (blue)
+        assert_eq!(runs[1].0, 1);
+        assert_eq!(runs[1].1, 2);
+        assert!(std::ptr::eq(runs[1].2, group_styles[1].as_ref().unwrap()));
+        // c → outer (red) again
+        assert_eq!(runs[2].0, 2);
+        assert_eq!(runs[2].1, 3);
+        assert!(std::ptr::eq(runs[2].2, group_styles[0].as_ref().unwrap()));
+    }
+
+    #[test]
+    fn emit_capture_runs_unfired_alternation_group_treated_as_none() {
+        let re = regex::bytes::Regex::new(r"(?:(x)|y)").unwrap();
+        let line = b"y";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 1, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        assert_eq!(runs.len(), 1);
+        assert!(std::ptr::eq(runs[0].2, &default));
+    }
+
+    #[test]
+    fn emit_capture_runs_capture_with_gap_before_emits_default_then_group() {
+        let re = regex::bytes::Regex::new(r"ab(c)").unwrap();
+        let line = b"abc";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 3, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].0, 0);
+        assert_eq!(runs[0].1, 2);
+        assert!(std::ptr::eq(runs[0].2, &default));
+        assert_eq!(runs[1].0, 2);
+        assert_eq!(runs[1].1, 3);
+    }
+
+    #[test]
+    fn emit_capture_runs_capture_with_gap_after_emits_group_then_default() {
+        let re = regex::bytes::Regex::new(r"(a)bc").unwrap();
+        let line = b"abc";
+        let caps = re.captures(line).unwrap();
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        emit_capture_runs(&caps, 0, 3, &default, &group_styles, &mut es, &mut as_, &mut runs);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].0, 0);
+        assert_eq!(runs[0].1, 1);
+        assert_eq!(runs[1].0, 1);
+        assert_eq!(runs[1].1, 3);
+        assert!(std::ptr::eq(runs[1].2, &default));
+    }
+
+    #[test]
+    fn emit_capture_runs_scratch_reused_across_calls_correctly() {
+        let re = regex::bytes::Regex::new(r"(\d+)").unwrap();
+        let line = b"abc 123 xyz 456";
+        let default = Style::DEFAULT;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Style::DEFAULT };
+        let group_styles: Vec<Option<Style>> = vec![Some(red)];
+        let mut es = Vec::new();
+        let mut as_ = Vec::new();
+        let mut runs: Vec<(usize, usize, &Style)> = Vec::new();
+        for caps in re.captures_iter(line) {
+            let m = caps.get(0).unwrap();
+            emit_capture_runs(
+                &caps,
+                m.start(),
+                m.end(),
+                &default,
+                &group_styles,
+                &mut es,
+                &mut as_,
+                &mut runs,
+            );
+        }
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].0, 4);
+        assert_eq!(runs[0].1, 7);
+        assert_eq!(runs[1].0, 12);
+        assert_eq!(runs[1].1, 15);
     }
 }
 
