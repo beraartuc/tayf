@@ -30,7 +30,7 @@ pub struct ThemeRuleError {
 ///
 /// `#[non_exhaustive]` so v0.4+ can add new validation rules (e.g.
 /// `RuleNameWhitespace`) without a major version bump.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ThemeRuleErrorKind {
     /// `name` does not match any entry in [`crate::rules::BUILTIN_NAMES`].
@@ -45,6 +45,28 @@ pub enum ThemeRuleErrorKind {
     /// accompanying [`ThemeRuleError::rule_name`] is set to the sentinel
     /// `"<general>"`.
     GeneralSectionForbidden,
+    /// A `styles` map key is not a positive decimal. v0.3.5 grammar:
+    /// `^[1-9][0-9]*$`. The raw user-supplied key is echoed via
+    /// [`sanitize_for_display`] so the diagnostic shows what the user typed.
+    /// See spec §1.3.3.
+    CaptureGroupKeyMalformed {
+        /// The raw `styles` map key as written in the user's TOML. Passed
+        /// through [`sanitize_for_display`] by the `Display` impl so any
+        /// embedded control bytes are escaped before reaching a terminal.
+        key: String,
+    },
+    /// A `styles` map sets key `"0"`. Group 0 is the entire match, which
+    /// is already covered by the rule's `style` field. See spec §1.3.1.
+    CaptureGroupIndexZeroForbidden,
+    /// A `styles` map sets a key whose integer value is `>=` the rule's
+    /// regex `captures_len()`. Valid range is `1..=captures_len - 1`.
+    /// See spec §1.3.2.
+    CaptureGroupIndexOutOfRange {
+        /// The offending integer key from the user's `styles` map.
+        group: usize,
+        /// The rule's regex `captures_len()` (group count + 1).
+        captures_len: usize,
+    },
 }
 
 impl std::fmt::Display for ThemeRuleErrorKind {
@@ -63,6 +85,26 @@ impl std::fmt::Display for ThemeRuleErrorKind {
                 "themes must not set [general] (themes only override style; \
                  use the user config for [general] fields)",
             ),
+            Self::CaptureGroupKeyMalformed { key } => write!(
+                f,
+                "styles.\"{}\": capture-group key must be a positive decimal \
+                 (1, 2, ..., N) with no leading zeros",
+                sanitize_for_display(key)
+            ),
+            Self::CaptureGroupIndexZeroForbidden => f.write_str(
+                "styles.\"0\": group 0 is the entire match; use the 'style' field instead",
+            ),
+            Self::CaptureGroupIndexOutOfRange { group, captures_len } => {
+                let n = captures_len.saturating_sub(1);
+                write!(
+                    f,
+                    "styles.\"{}\": rule's regex has {} capture group{} (valid: 1..={})",
+                    group,
+                    n,
+                    if n == 1 { "" } else { "s" },
+                    n
+                )
+            }
         }
     }
 }
@@ -492,10 +534,59 @@ mod tests {
     }
 
     #[test]
-    fn theme_rule_error_kind_is_copy() {
-        // Compile-time check: if `Copy` were removed, this would not compile.
-        fn assert_copy<T: Copy>() {}
-        assert_copy::<ThemeRuleErrorKind>();
+    fn theme_rule_error_kind_capture_group_key_malformed_display() {
+        let k = ThemeRuleErrorKind::CaptureGroupKeyMalformed { key: "01".to_owned() };
+        let s = k.to_string();
+        assert!(
+            s.contains("styles.\"01\"")
+                && s.contains("capture-group key must be a positive decimal"),
+            "got: {s}"
+        );
+    }
+
+    #[test]
+    fn theme_rule_error_kind_capture_group_index_zero_forbidden_display() {
+        let s = ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden.to_string();
+        assert!(
+            s.contains("styles.\"0\"") && s.contains("entire match") && s.contains("'style' field"),
+            "got: {s}"
+        );
+    }
+
+    #[test]
+    fn theme_rule_error_kind_capture_group_index_out_of_range_display() {
+        let k = ThemeRuleErrorKind::CaptureGroupIndexOutOfRange { group: 7, captures_len: 4 };
+        let s = k.to_string();
+        assert!(
+            s.contains("styles.\"7\"")
+                && s.contains("3 capture groups")
+                && s.contains("valid: 1..=3"),
+            "got: {s}"
+        );
+    }
+
+    #[test]
+    fn theme_rule_error_kind_out_of_range_singular_one_group() {
+        let k = ThemeRuleErrorKind::CaptureGroupIndexOutOfRange { group: 5, captures_len: 2 };
+        let s = k.to_string();
+        assert!(s.contains("1 capture group ") && !s.contains("groups"), "expect singular: {s}");
+        assert!(s.contains("valid: 1..=1"));
+    }
+
+    #[test]
+    fn theme_rule_error_kind_capture_group_key_sanitized() {
+        let k = ThemeRuleErrorKind::CaptureGroupKeyMalformed { key: "\x07abc".to_owned() };
+        let s = k.to_string();
+        // sanitize_for_display escapes control bytes — the literal \x07 must not appear.
+        assert!(!s.as_bytes().contains(&0x07), "raw control byte leaked: {s:?}");
+    }
+
+    #[test]
+    fn theme_rule_error_kind_implements_clone_not_copy() {
+        // Sanity: ThemeRuleErrorKind no longer impl Copy (two new variants carry payload).
+        // The `assert_copy` test from v0.3.4 is removed; assert_clone retained below.
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<ThemeRuleErrorKind>();
     }
 
     fn rule_err(name: &str, kind: ThemeRuleErrorKind) -> ThemeRuleError {
