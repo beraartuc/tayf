@@ -398,17 +398,17 @@ jitter, still inside the 20% ceiling).
 Notes on the v0.3.4 → v0.3.5 delta:
 
 - `apply_rules/ipv4-heavy` ~68.7% **faster**. The v0.3.5 hot path
-  (Task 12, commit `078b4c1`) rewrote `apply_rules` to:
-  1. Skip rules whose `RegexSet::matches` doesn't fire on the line (the
-     IPv4-heavy input only triggers 3 of the 13 builtins per line, so
-     ~10 `find_iter` calls per line are now elided entirely).
-  2. Replace the previous O(runs²) overlap scan with a sorted
-     `accepted_spans` vec + `partition_point` binary search — O(log N)
-     per match against the live span set.
-  The synthetic fixture's 5 matches × 1000 lines fully amortizes the
-  benefit. This is the headline number that gates Rev2's claim that
-  selective dispatch keeps the captures-styling feature zero-cost when
-  no captures-styled rule fires.
+  (Task 6, commit `078b4c1`) replaced the previous `spans.iter().any(...)`
+  linear overlap scan inside `apply_rules` with a sorted `accepted_spans`
+  vec plus `partition_point` binary search — O(log N) per match against
+  the live span set, instead of O(runs²) over the growing run vector.
+  The synthetic fixture's 5 matches × 1000 lines × 13 rules ≈ 65 000
+  overlap checks fully amortizes the change. `Compiled.set` (RegexSet)
+  is still unused by `apply_rules` — the dead-code field is reserved for
+  the v0.4 RegexSet fast-path, so do NOT credit the speedup to RegexSet
+  pre-filtering. This is the headline number that gates Rev2's claim
+  that selective dispatch keeps the captures-styling feature zero-cost
+  when no captures-styled rule fires.
 - `apply_rules/mixed-syslog` lands at 2.29 ms over the repeated-20×
   fixture (~67 KB total). One captures-styled rule (`timestamp`) fires
   on roughly half the lines via the ISO branch; the partition_point

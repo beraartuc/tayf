@@ -93,6 +93,11 @@ pub(crate) fn apply_rules<W: Write>(
         }
     }
 
+    // Cross-rule interleaving: a later rule's match can land before an
+    // earlier rule's match in start order (e.g. rule N matches at byte 5
+    // after rule 1 matched at byte 30). Sort once at the end to keep the
+    // emit loop monotonic. Within a single rule the iteration order is
+    // already start-ascending, but the merge across rules is not.
     runs.sort_by_key(|&(s, _, _)| s);
 
     let mut cursor = 0usize;

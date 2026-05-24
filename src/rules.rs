@@ -35,9 +35,6 @@ pub(crate) struct BuiltinRule {
     /// no capture groups (e.g., the syslog branch of the `timestamp`
     /// pattern), all `caps.get(i)` for `i in 1..=N` return `None` when that
     /// branch matches; the match collapses to a single default-style run.
-    #[allow(dead_code)]
-    // reason: v0.3.5 Phase 2 lands the field; Phase 3 (apply_rules selective
-    // dispatch) reads it; Phase 6 populates timestamp/url/permission.
     pub(crate) group_styles: Vec<Option<Style>>,
     /// `true` if `pattern` came from a user TOML config (either an appended
     /// custom rule OR an override of a built-in's pattern). `false` for the
@@ -557,15 +554,11 @@ pub(crate) struct Compiled {
     /// for `individuals[i]` (vector length = `individuals[i].captures_len() - 1`,
     /// or empty for legacy rules). See [`BuiltinRule::group_styles`] for the
     /// per-entry semantics.
-    #[allow(dead_code)]
-    // reason: Phase 2 wires this empty; Task 6 (apply_rules dispatch) reads it.
     pub(crate) group_styles: Vec<Vec<Option<Style>>>,
     /// `uses_capture_styling[i] == true` iff `group_styles[i]` contains at
     /// least one `Some` entry. Cached at compile time so `apply_rules`'s
     /// inner loop can branchless dispatch between `find_iter` (hot path)
     /// and `captures_iter` (runs-per-match) without per-line scanning.
-    #[allow(dead_code)]
-    // reason: Phase 2 wires this empty; Task 6 (apply_rules dispatch) reads it.
     pub(crate) uses_capture_styling: Vec<bool>,
     /// When `true`, lines containing any SGR (CSI `m`) byte skip rule
     /// application. Read from `[general] respect_existing_colors` and
