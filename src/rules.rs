@@ -608,7 +608,9 @@ impl Compiled {
     /// 2. Optional preset theme resolved by [`crate::themes::load`].
     /// 3. Optional user config (`config`).
     ///
-    /// After merging, every style is downgraded for `depth` and then compiled.
+    /// After merging, the patterns are compiled and every style slot
+    /// (both per-rule default and per-capture-group overlay) is reduced
+    /// to `depth` via [`Self::downgrade_for_depth`].
     ///
     /// The theme layer is validated by [`crate::themes::validate_theme_rules`]
     /// before it is merged so schema violations (unknown rule name, stray
@@ -706,11 +708,6 @@ impl Compiled {
             crate::config::apply_user_rules_with_source(path, &mut rules, &c.rules, false)?;
         }
 
-        // Bake depth into every style.
-        for rule in &mut rules {
-            rule.style = rule.style.downgrade(depth);
-        }
-
         let theme_name = loaded_theme.map(|(n, _)| n);
         let theme_path = loaded_theme.map(|(_, l)| l.path_label.as_str());
         let compiled_rules = compile_merged_rules(&rules, config_path, theme_name, theme_path)?;
@@ -722,14 +719,17 @@ impl Compiled {
             |c| c.general.respect_existing_colors,
         );
 
-        Ok(Compiled {
+        let mut compiled = Compiled {
             set: compiled_rules.set,
             individuals: compiled_rules.individuals,
             styles: compiled_rules.styles,
             group_styles: compiled_rules.group_styles,
             uses_capture_styling: compiled_rules.uses_capture_styling,
             respect_existing_colors,
-        })
+        };
+        // Bake depth into every style slot — both default and per-group.
+        compiled.downgrade_for_depth(depth);
+        Ok(compiled)
     }
 
     /// Built-in defaults compiled at Truecolor depth, no theme, no user
@@ -740,6 +740,29 @@ impl Compiled {
     /// As for [`Self::load_with_theme`].
     pub(crate) fn load_builtins() -> Result<Self> {
         Self::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+    }
+
+    /// Walk every style slot in the compiled rule set and reduce it to
+    /// the colors representable at `depth`. This covers both the per-rule
+    /// default style (`styles[i]`) and the per-capture-group overlay
+    /// (`group_styles[i][j]`, `Some` entries only — `None` slots are
+    /// preserved as-is, since they fall through to the rule's default).
+    ///
+    /// Idempotent and depth-monotonic: calling at the same depth twice
+    /// produces the same result; calling at a lower depth after a higher
+    /// one is well-defined via [`Style::downgrade`].
+    ///
+    /// Spec ref: §1.2.5 — depth downgrade contract; §3.1.D — extension
+    /// to `group_styles`.
+    pub(crate) fn downgrade_for_depth(&mut self, depth: crate::terminfo::ColorDepth) {
+        for style in &mut self.styles {
+            *style = style.downgrade(depth);
+        }
+        for group_vec in &mut self.group_styles {
+            for s in group_vec.iter_mut().flatten() {
+                *s = s.downgrade(depth);
+            }
+        }
     }
 }
 
@@ -1280,6 +1303,30 @@ mod tests {
         let log_idx = builtin_rules().iter().position(|r| r.name == "log_level").unwrap();
         // Built-in log_level fg is BrightRed (ANSI) — unchanged at Basic16.
         assert_eq!(c.styles[log_idx].fg, Some(crate::style::Color::BrightRed));
+    }
+
+    #[test]
+    fn downgrade_for_depth_walks_group_styles_basic16() {
+        let mut c = Compiled::load_builtins().unwrap();
+        c.downgrade_for_depth(crate::terminfo::ColorDepth::Basic16);
+        // permission's group_styles entries should all still be Some after
+        // downgrade (Basic16-safe palette is a no-op).
+        let perm_idx = 0; // permission is at index 0
+        for slot in &c.group_styles[perm_idx] {
+            assert!(slot.is_some(), "group_style slot dropped during downgrade");
+        }
+    }
+
+    #[test]
+    fn downgrade_for_depth_none_zeroes_all_group_style_colors() {
+        let mut c = Compiled::load_builtins().unwrap();
+        c.downgrade_for_depth(crate::terminfo::ColorDepth::None);
+        // After None-depth downgrade, every group_style fg should be None.
+        for vec in &c.group_styles {
+            for s in vec.iter().flatten() {
+                assert!(s.fg.is_none(), "fg leaked through None-depth downgrade: {s:?}");
+            }
+        }
     }
 
     #[test]
