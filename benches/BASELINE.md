@@ -316,3 +316,117 @@ Notes on the v0.3.3 → v0.3.4 delta:
   noisy sub-µs measurement. Cumulative v0.1.1 → v0.3.4 delta on this
   group is −12.4% time / +14.4% thrpt vs the original baseline, fully
   within noise for a sub-µs per-iter benchmark.
+
+## v0.3.5 (2026-05-24) — Capture-group styling
+
+Source: HEAD = e969024 (Task 15 just landed; mid-implementation, pre-release-prep)
+Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64) (same as v0.3.4 baseline)
+Profile: release (`cargo bench`).
+
+Two new bench groups landed alongside the legacy `ipv4-heavy` and
+`passthrough/write_all` rows so that v0.3.5's selective-dispatch hot path
+gets a per-shape regression tripwire (Rev2 I-7):
+
+- `apply_rules/ipv4-heavy` — unchanged synthetic input (1000-copy
+  `connect 192.168.1.1 …`); none of the firing builtins carry capture-group
+  styles, so the line takes the zero-captures-styled hot path.
+- `apply_rules/mixed-syslog` — `tests/fixtures/mixed_syslog.txt` repeated
+  20×; ISO timestamps on every other line trigger one captures-styled
+  rule (the worst-case I-7 mixed shape), the rest exercise IPv4 / log
+  levels / file paths only. This is the row that proves the Rev2 C-1
+  `accepted_spans` + `partition_point` fix: a regression here means the
+  match-level overlap check has come loose and hot-path rules' linear
+  scans are inflating against captures-emitted runs.
+- `apply_rules/captures-heavy` — `tests/fixtures/captures_heavy.txt`
+  repeated 20×; every line fires all three v0.3.5 captures-styled
+  builtins (timestamp + permission + url), exercising
+  `emit_capture_runs`'s boundary-event sweep + active-stack reuse.
+- `passthrough/write_all` — unchanged sub-µs `Cursor::write_all`
+  reference.
+
+Criterion output excerpt:
+
+```
+apply_rules/ipv4-heavy     time:   [2.4073 ms 2.4199 ms 2.4324 ms]
+                           thrpt:  [26.269 MiB/s 26.404 MiB/s 26.543 MiB/s]
+                    change: time:   [−68.862% −68.705% −68.522%] (p = 0.00 < 0.05)
+                           thrpt:  [+217.68% +219.54% +221.16%]
+                           Performance has improved.
+
+apply_rules/mixed-syslog   time:   [2.2775 ms 2.2948 ms 2.3127 ms]
+                           thrpt:  [31.423 MiB/s 31.668 MiB/s 31.907 MiB/s]
+
+apply_rules/captures-heavy time:   [4.4762 ms 4.5173 ms 4.5606 ms]
+                           thrpt:  [16.695 MiB/s 16.855 MiB/s 17.010 MiB/s]
+
+passthrough/write_all      time:   [1.2946 µs 1.3380 µs 1.3864 µs]
+                           thrpt:  [45.006 GiB/s 46.635 GiB/s 48.200 GiB/s]
+                    change: time:   [+12.928% +16.404% +20.168%] (p = 0.00 < 0.05)
+                           thrpt:  [−16.783% −14.092% −11.448%]
+                           Performance has regressed.
+```
+
+### v0.3.5 per-shape summary
+
+- apply_rules (hot path, zero capture rules):     2.4199 ms / iter
+- apply_rules (mixed: 1 captures rule active):    2.2948 ms / iter
+- apply_rules (captures-heavy: 3 captures rules): 4.5173 ms / iter
+- passthrough:                                    1.3380 µs / iter
+
+### Targets met (spec §4.3)
+
+| Shape          | Target (v0.3.4 + N%) | Actual    | Status |
+|----------------|----------------------|-----------|--------|
+| Hot path       | ≤ 7.95 ms (+3%)      | 2.4199 ms | PASS — −68.7% vs v0.3.4 |
+| Mixed          | ≤ 8.5  ms (+10%)     | 2.2948 ms | PASS — far below ceiling |
+| Captures-heavy | ≤ 11.5 ms (+50%)     | 4.5173 ms | PASS — ~42% under ceiling |
+| Hard limit     | ≤ 9.27 ms (+20%)     | 2.4199 ms | PASS by wide margin |
+
+### Regression check vs v0.3.4 baseline
+
+| Bench group               | v0.3.4    | v0.3.5    | Delta |
+|---------------------------|-----------|-----------|-------|
+| `apply_rules/ipv4-heavy`  | 7.7326 ms | 2.4199 ms | −68.71% time / +219.54% thrpt |
+| `passthrough/write_all`   | 1.1653 µs | 1.3380 µs | +14.81% time / −12.91% thrpt  |
+
+Spec budget per §5.2: < 20% regression on existing bench rows. Status:
+PASS on both pre-existing groups (`apply_rules/ipv4-heavy` is a large
+improvement; `passthrough/write_all` regression is sub-µs scheduler
+jitter, still inside the 20% ceiling).
+
+Notes on the v0.3.4 → v0.3.5 delta:
+
+- `apply_rules/ipv4-heavy` ~68.7% **faster**. The v0.3.5 hot path
+  (Task 12, commit `078b4c1`) rewrote `apply_rules` to:
+  1. Skip rules whose `RegexSet::matches` doesn't fire on the line (the
+     IPv4-heavy input only triggers 3 of the 13 builtins per line, so
+     ~10 `find_iter` calls per line are now elided entirely).
+  2. Replace the previous O(runs²) overlap scan with a sorted
+     `accepted_spans` vec + `partition_point` binary search — O(log N)
+     per match against the live span set.
+  The synthetic fixture's 5 matches × 1000 lines fully amortizes the
+  benefit. This is the headline number that gates Rev2's claim that
+  selective dispatch keeps the captures-styling feature zero-cost when
+  no captures-styled rule fires.
+- `apply_rules/mixed-syslog` lands at 2.29 ms over the repeated-20×
+  fixture (~67 KB total). One captures-styled rule (`timestamp`) fires
+  on roughly half the lines via the ISO branch; the partition_point
+  overlap path stays well inside its budget. No prior measurement to
+  compare against — this row is established as the v0.3.5 baseline for
+  future PRs.
+- `apply_rules/captures-heavy` lands at 4.52 ms over the same input
+  scale (50 lines × 20). Every line fires three captures-styled rules
+  with 4–5 group-style overlays each — measured slowdown vs the
+  zero-captures hot path is ~1.87× (4.52 ms / 2.42 ms), comfortably
+  below the spec's accepted 2× opt-in cost ceiling and ~61% under the
+  11.5 ms hard target. Established as the v0.3.5 baseline.
+- `passthrough/write_all` ~14.8% slower (~1.17 µs → ~1.34 µs).
+  Criterion flags this as statistically significant but it is well
+  inside the < 20% spec ceiling and consistent with the cumulative
+  sub-µs jitter pattern documented at every prior version. No code
+  change in v0.3.5 touches the passthrough path — the AnsiSm step
+  loop, the `TuiMode` short-circuit, and the `out.write_all` call site
+  are byte-identical to v0.3.4. Cumulative v0.1.1 → v0.3.5 delta on
+  this group is +0.6% time / −0.3% thrpt vs the original baseline,
+  fully within noise.

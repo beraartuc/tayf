@@ -1,10 +1,23 @@
-//! Throughput baseline benchmarks. Measures the two hot paths that gate
+//! Throughput baseline benchmarks. Measures the hot paths that gate
 //! tayf's spec §7 perf target (<20% overhead vs native `cat`):
 //!
-//! 1. `apply_rules` — the per-line rule scanner that wraps matches in SGR.
-//!    Driven against an IPv4-heavy synthetic input that exercises the
-//!    IPv4, `log_level`, and `http_status` builtins simultaneously.
-//! 2. `passthrough` — the no-op write path tayf takes once a TUI mode is
+//! 1. `apply_rules / ipv4-heavy` — the per-line rule scanner against an
+//!    IPv4-heavy synthetic input that exercises the IPv4, `http_status`,
+//!    and `log_level` builtins simultaneously. None of these builtins
+//!    carry capture-group styles, so the line is the "zero captures-styled
+//!    rule" hot path: pure span emission, no `emit_capture_runs` work.
+//! 2. `apply_rules / mixed-syslog` — realistic syslog-style fixture
+//!    blending ISO timestamps (the one captures-styled built-in this
+//!    fixture exercises) with syslog-format timestamps, IPs, log levels,
+//!    and file paths. This is the bench that exposes the v0.3.5 Rev2 C-1
+//!    overlap-vec regression class: if `accepted_spans` / `partition_point`
+//!    isn't wired correctly, hot-path rules' linear scans inflate against
+//!    captures-emitted runs.
+//! 3. `apply_rules / captures-heavy` — every line carries an ISO timestamp,
+//!    a POSIX-style permission string, and an HTTPS URL. All three v0.3.5
+//!    built-ins with capture-group styles fire, exercising the boundary-
+//!    event sweep + active-stack reuse under load.
+//! 4. `passthrough` — the no-op write path tayf takes once a TUI mode is
 //!    active (alt-screen / bracketed paste / mouse). Modelled as a raw
 //!    `Write::write_all` to a `Cursor<Vec<u8>>`. Effectively the spec
 //!    target's denominator (`cat`-equivalent).
@@ -56,6 +69,63 @@ fn bench_apply_rules_ipv4_heavy(c: &mut Criterion) {
     group.finish();
 }
 
+/// Mixed syslog-style fixture: half the lines have an ISO timestamp
+/// (the one captures-styled built-in active here), half are syslog-format
+/// with IPs, log levels, and file paths. Exercises the v0.3.5 selective
+/// dispatch + match-level `partition_point` overlap check on a realistic
+/// input distribution.
+fn bench_apply_rules_mixed_syslog(c: &mut Criterion) {
+    let compiled = load_builtin_rules().expect("builtin rules compile");
+    // Repeat the fixture so per-iter work amortizes criterion's loop overhead
+    // to the same ~67 KB scale as the IPv4-heavy bench above.
+    let fixture: &[u8] = include_bytes!("../tests/fixtures/mixed_syslog.txt");
+    let input = fixture.repeat(20);
+
+    let mut group = c.benchmark_group("apply_rules");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("mixed-syslog", |b| {
+        b.iter(|| {
+            let mut out = Cursor::new(Vec::with_capacity(input.len() * 2));
+            for line in input.split(|&byte| byte == b'\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                apply_rules(black_box(line), &compiled, &mut out)
+                    .expect("write to in-memory Cursor cannot fail");
+            }
+            black_box(out);
+        });
+    });
+    group.finish();
+}
+
+/// Captures-heavy fixture: every line fires all three v0.3.5 captures-styled
+/// built-ins (timestamp + permission + url). Exercises `emit_capture_runs`
+/// boundary-event sweep + active-group stack reuse under load; reusable
+/// scratch vectors should keep per-line allocations to a single resize.
+fn bench_apply_rules_captures_heavy(c: &mut Criterion) {
+    let compiled = load_builtin_rules().expect("builtin rules compile");
+    let fixture: &[u8] = include_bytes!("../tests/fixtures/captures_heavy.txt");
+    let input = fixture.repeat(20);
+
+    let mut group = c.benchmark_group("apply_rules");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("captures-heavy", |b| {
+        b.iter(|| {
+            let mut out = Cursor::new(Vec::with_capacity(input.len() * 2));
+            for line in input.split(|&byte| byte == b'\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                apply_rules(black_box(line), &compiled, &mut out)
+                    .expect("write to in-memory Cursor cannot fail");
+            }
+            black_box(out);
+        });
+    });
+    group.finish();
+}
+
 fn bench_passthrough(c: &mut Criterion) {
     // Models tayf's TUI passthrough mode: the output thread writes the PTY
     // chunk straight to stdout (`out.write_all(segment)?` in
@@ -77,5 +147,11 @@ fn bench_passthrough(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_apply_rules_ipv4_heavy, bench_passthrough);
+criterion_group!(
+    benches,
+    bench_apply_rules_ipv4_heavy,
+    bench_apply_rules_mixed_syslog,
+    bench_apply_rules_captures_heavy,
+    bench_passthrough,
+);
 criterion_main!(benches);
