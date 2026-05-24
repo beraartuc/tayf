@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] — TBD
+
+### Fixed
+- v0.3.6's `CaptureGroupIndexOutOfRange` Display fix now also reaches
+  the user-config error path. Previously, a `~/.config/tayf/config.toml`
+  with `styles = { "N" = ... }` on a rule whose regex has no capture
+  groups (e.g., `ipv4`) would still emit `(valid: 1..=0)` because
+  `src/rules.rs` carried a duplicate formatter that bypassed the
+  `Display` impl. v0.3.7 routes that path through the same
+  `ThemeRuleErrorKind` variant, producing
+  `"rule's regex has no capture groups; styles cannot be set"`
+  uniformly. The theme-config error path (fixed in v0.3.6) is
+  unchanged.
+- The parallel user-config diagnostic for malformed `styles` keys
+  (e.g., `styles = { "01" = ... }` with a leading zero) is now also
+  routed through the shared `ThemeRuleErrorKind::CaptureGroupKeyMalformed`
+  Display impl. Benign keys produce byte-identical output; **adversarial
+  keys containing control bytes are now sanitized** instead of being
+  printed raw to stderr (previously a minor escape-sequence-injection
+  risk per CLAUDE.md §3 mandate).
+
+> [Note] v0.3.6's CHANGELOG read as if both Display fix paths were
+> covered; in practice the parallel user-config formatters in
+> `src/rules.rs::resolve_group_styles_for_rule` were literal copies
+> that bypassed `ThemeRuleErrorKind::Display`. v0.3.7 closes both
+> gaps in one commit and adds unit + integration regression guards
+> sharp enough to catch this drift class going forward.
+
 ## [0.3.6] — 2026-05-24
 
 ### Fixed
