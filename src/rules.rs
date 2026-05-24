@@ -45,6 +45,59 @@ pub(crate) struct BuiltinRule {
     /// `compile_error_for`: built-in compile failures are `RegexCompile` (a
     /// tayf bug), user-supplied compile failures are `Config` (user error).
     pub(crate) is_user_supplied: bool,
+    /// User-supplied `styles` map (per-capture-group overlay) parsed from a
+    /// `[[rules]]` entry's `styles = { ... }` table. `None` means no user/
+    /// theme override of per-group styles; the rule's built-in
+    /// [`Self::group_styles`] applies as-is. `Some(map)` means: at
+    /// `Compiled::load_with_theme` build time, validate each key against
+    /// the compiled regex's `captures_len()` and overlay the user's
+    /// styles into `group_styles[i]` REPLACING the built-in defaults
+    /// (REPLACE semantics, Rev2 Karar 27).
+    ///
+    /// Keys are positive-decimal capture-group indexes (1-based; grammar
+    /// `^[1-9][0-9]*$`); `validate_styles_map_key` enforces the grammar
+    /// upstream in `config::parse` / `themes::validate_theme_rules`.
+    /// Range validation against `captures_len` happens in
+    /// `resolve_group_styles_for_rule` at compile time.
+    pub(crate) styles_override:
+        Option<std::collections::BTreeMap<String, crate::config::UserStyle>>,
+    /// `true` iff [`Self::styles_override`] was last written by the theme
+    /// layer (preset or disk theme). `false` for user-config writes and for
+    /// the default built-in shape. Drives error routing in
+    /// `resolve_group_styles_for_rule`: theme-sourced range/key errors
+    /// collect into `Vec<ThemeRuleError>` for [`Error::ThemeValidation`];
+    /// user-config-sourced errors fail-fast as [`Error::Config`].
+    ///
+    /// Since the user-config layer applies AFTER the theme layer and
+    /// REPLACES `styles_override` wholesale (Rev2 Karar 27), a `true` value
+    /// here unambiguously means "this map originated from the theme and
+    /// was never overwritten by user config".
+    pub(crate) styles_override_from_theme: bool,
+}
+
+/// Provenance of a rule during [`Compiled::load_with_theme`] build. Determines
+/// how validation errors are routed: theme-sourced errors collect into a
+/// `Vec<ThemeRuleError>` for fail-collected [`Error::ThemeValidation`];
+/// user-config-sourced errors fail-fast as [`Error::Config`]. Built-in rules
+/// pass validation by construction (asserted by `builtin_rules_*` tests).
+///
+/// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing) + Rev2 Karar 27
+/// (REPLACE semantics for `styles` map overlays).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum RuleSource {
+    /// Canonical pattern shipped by tayf. Compile failures are
+    /// `Error::RegexCompile` (tayf bug); range validation cannot fire
+    /// (built-ins ship empty `styles_override`).
+    Builtin,
+    /// `pattern`/`style`/`styles` from the user's TOML config (override of a
+    /// built-in OR appended custom rule). Range/key errors fail-fast as
+    /// `Error::Config` so the user sees one problem at a time on the path
+    /// they own.
+    UserConfig,
+    /// `styles` from a preset or disk-loaded theme. Range/key errors collect
+    /// into a `Vec<ThemeRuleError>` for a single fail-collected
+    /// `Error::ThemeValidation` at loop end (matches v0.3.4 contract).
+    Theme,
 }
 
 /// File extensions colored by the `filename` built-in rule. See spec §3.8 for
@@ -294,6 +347,10 @@ fn build_timestamp_pattern() -> String {
 /// Construct the built-in rules. Returns a fresh `Vec` because the
 /// filename rule contains a dynamically built pattern string. See spec §3.6
 /// and §3.8.
+#[allow(clippy::too_many_lines)]
+// reason: this is a registry — one struct literal per built-in rule, with
+// fixed-shape fields. Splitting it across helpers would just rename the
+// data, not reduce it; the rule set is the source of truth.
 pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     vec![
         BuiltinRule {
@@ -302,6 +359,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::White), dim: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "timestamp".into(),
@@ -309,6 +368,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "uuid".into(),
@@ -316,6 +377,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightMagenta), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
         // Char classes here are byte classes under regex::bytes — bytes 0x80..0xFF
@@ -333,6 +396,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "email".into(),
@@ -340,6 +405,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightGreen), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "ipv4".into(),
@@ -347,6 +414,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "ipv6".into(),
@@ -354,6 +423,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightYellow), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "mac".into(),
@@ -361,6 +432,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Cyan), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "log_level".into(),
@@ -368,6 +441,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightRed), bold: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "http_status".into(),
@@ -375,6 +450,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Magenta), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "filename".into(),
@@ -382,6 +459,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         BuiltinRule {
             name: "fqdn".into(),
@@ -389,6 +468,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
         // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
         // Bare units [smhd] match without whitespace (e.g. "5m", "30s"); multi-letter
@@ -407,6 +488,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
             group_styles: Vec::new(),
             is_user_supplied: false,
+            styles_override: None,
+            styles_override_from_theme: false,
         },
     ]
 }
@@ -562,27 +645,65 @@ impl Compiled {
         theme: Option<&str>,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
+        // Resolve theme name (if any) to a LoadedTheme before delegating to
+        // the source-aware builder. `themes::load` validates the name shape,
+        // enforces the F2 collision policy, and yields the canonical source
+        // + path_label pair. Validation against the theme contract still
+        // runs inside `build_from_loaded`.
+        let loaded_theme = match theme {
+            Some(name) => Some((name.to_owned(), crate::themes::load(name)?)),
+            None => None,
+        };
+        let loaded_ref = loaded_theme.as_ref().map(|(n, l)| (n.as_str(), l));
+        Self::build_from_loaded(config, config_path, loaded_ref, depth)
+    }
+
+    /// Internal builder that takes a pre-resolved [`crate::themes::LoadedTheme`]
+    /// (paired with the requested theme name for diagnostics) instead of a
+    /// theme name to look up. Public entry [`Self::load_with_theme`] is a
+    /// thin wrapper that calls [`crate::themes::load`] first; this split
+    /// exists so unit tests can inject a synthetic theme TOML without
+    /// touching disk or the env-var lookup.
+    ///
+    /// All validation, merge ordering, and error-routing semantics are
+    /// identical to the public entry — see [`Self::load_with_theme`].
+    fn build_from_loaded(
+        config: Option<&crate::config::Config>,
+        config_path: Option<&str>,
+        loaded_theme: Option<(&str, &crate::themes::LoadedTheme)>,
+        depth: crate::terminfo::ColorDepth,
+    ) -> Result<Self> {
         let mut rules = builtin_rules();
 
         // Layer 1: optional preset theme. Applied BEFORE the user config so
         // user rules win on conflict (spec §2 decision 5). Validation runs
         // BEFORE the merge so semantic errors surface against the synthetic
         // theme path rather than mutating the rule set first.
-        if let Some(name) = theme {
-            let loaded = crate::themes::load(name)?;
+        if let Some((name, loaded)) = loaded_theme {
             let theme_cfg = crate::config::parse(&loaded.path_label, &loaded.source)?;
             crate::themes::validate_theme_rules(name, &loaded.path_label, &theme_cfg)?;
-            crate::config::apply_user_rules(&loaded.path_label, &mut rules, &theme_cfg.rules)?;
+            // `from_theme = true` so any `styles_override` map written here
+            // is tagged for theme-routed error collection downstream.
+            crate::config::apply_user_rules_with_source(
+                &loaded.path_label,
+                &mut rules,
+                &theme_cfg.rules,
+                true,
+            )?;
         }
 
-        // Layer 2: user config.
+        // Layer 2: user config. `from_theme = false` — user-config writes
+        // overwrite any prior theme-tagged `styles_override` (REPLACE
+        // semantics, Rev2 Karar 27), and any subsequent range/key errors
+        // surface as `Error::Config` so the user sees them on their own
+        // config path.
         if let Some(c) = config {
             // `config_path` flows into Error::Config messages produced inside
             // apply_user_rules (and any nested UserStyle::to_style call) so
             // users see `config error in /home/u/.config/tayf/config.toml: ...`
             // rather than the empty-path sentinel.
             let path = config_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
-            crate::config::apply_user_rules(path, &mut rules, &c.rules)?;
+            crate::config::apply_user_rules_with_source(path, &mut rules, &c.rules, false)?;
         }
 
         // Bake depth into every style.
@@ -590,27 +711,9 @@ impl Compiled {
             rule.style = rule.style.downgrade(depth);
         }
 
-        // Compile.
-        let mut individuals = Vec::with_capacity(rules.len());
-        let mut styles = Vec::with_capacity(rules.len());
-        let mut sources = Vec::with_capacity(rules.len());
-        for rule in &rules {
-            let re = regex::bytes::RegexBuilder::new(&rule.pattern)
-                .size_limit(REGEX_SIZE_LIMIT_BYTES)
-                .dfa_size_limit(REGEX_SIZE_LIMIT_BYTES)
-                .build()
-                .map_err(|e| {
-                    compile_error_for(rule.is_user_supplied, &rule.name, config_path, e)
-                })?;
-            individuals.push(re);
-            styles.push(rule.style);
-            sources.push(rule.pattern.clone());
-        }
-        // `sources` are the same patterns we just compiled individually — RegexSet
-        // over the same set cannot raise a syntax error, and tayf's per-rule
-        // size_limit keeps the aggregate well under RegexSet's default cap. The
-        // error path is preserved for forward-compat (e.g. larger rule sets in v0.4).
-        let set = RegexSet::new(&sources).map_err(Error::from)?;
+        let theme_name = loaded_theme.map(|(n, _)| n);
+        let theme_path = loaded_theme.map(|(_, l)| l.path_label.as_str());
+        let compiled_rules = compile_merged_rules(&rules, config_path, theme_name, theme_path)?;
 
         // Karar 11: snapshot config value into Compiled so reads happen at
         // line boundary via ArcSwap<Compiled>, no separate atomic needed.
@@ -619,16 +722,12 @@ impl Compiled {
             |c| c.general.respect_existing_colors,
         );
 
-        // Phase 2: empty group_styles + all-false uses_capture_styling; Phase 5
-        // will populate from BuiltinRule.group_styles + user/theme styles map.
-        let group_styles: Vec<Vec<Option<Style>>> = vec![Vec::new(); individuals.len()];
-        let uses_capture_styling: Vec<bool> = vec![false; individuals.len()];
         Ok(Compiled {
-            set,
-            individuals,
-            styles,
-            group_styles,
-            uses_capture_styling,
+            set: compiled_rules.set,
+            individuals: compiled_rules.individuals,
+            styles: compiled_rules.styles,
+            group_styles: compiled_rules.group_styles,
+            uses_capture_styling: compiled_rules.uses_capture_styling,
             respect_existing_colors,
         })
     }
@@ -666,6 +765,234 @@ fn compile_error_for(
     } else {
         Error::from(source)
     }
+}
+
+/// Classify a [`BuiltinRule`]'s provenance for error-routing purposes.
+///
+/// `styles_override_from_theme` wins over `is_user_supplied`: a built-in
+/// whose `styles` map was set by a preset theme but whose pattern/style
+/// remain at the built-in defaults must route `styles`-map range errors
+/// through [`Error::ThemeValidation`], even though `is_user_supplied` is
+/// `false` for the unchanged pattern.
+///
+/// Spec ref: §3.6, Rev2 I-1.
+fn rule_source_of(rule: &BuiltinRule) -> RuleSource {
+    if rule.styles_override.is_some() {
+        if rule.styles_override_from_theme {
+            RuleSource::Theme
+        } else {
+            RuleSource::UserConfig
+        }
+    } else if rule.is_user_supplied {
+        // No styles_override but is_user_supplied (pattern/style was
+        // overridden by user config) — still UserConfig for diagnostic
+        // routing, even though the early-return path inside the resolver
+        // means we won't actually emit any range/key errors.
+        RuleSource::UserConfig
+    } else {
+        RuleSource::Builtin
+    }
+}
+
+/// Output of [`compile_merged_rules`]: parallel vectors plus the aggregated
+/// `RegexSet` and the `uses_capture_styling` cache. Internal-only; the
+/// caller in [`Compiled::build_from_loaded`] zips this with
+/// `respect_existing_colors` to populate the final `Compiled` struct.
+struct CompiledRules {
+    set: RegexSet,
+    individuals: Vec<Regex>,
+    styles: Vec<Style>,
+    group_styles: Vec<Vec<Option<Style>>>,
+    uses_capture_styling: Vec<bool>,
+}
+
+/// Compile each merged rule, build the parallel style/regex/group-styles
+/// vectors, and aggregate theme-routed validation errors into a single
+/// [`Error::ThemeValidation`]. User-config-routed errors and built-in
+/// compile failures fail-fast via `?` inside the loop.
+///
+/// `theme_name` / `theme_path` flow into the `Error::ThemeValidation`
+/// payload when at least one theme-routed error is collected; they're
+/// otherwise unused. Both are `Some(...)` together or both `None`.
+fn compile_merged_rules(
+    rules: &[BuiltinRule],
+    config_path: Option<&str>,
+    theme_name: Option<&str>,
+    theme_path: Option<&str>,
+) -> Result<CompiledRules> {
+    let mut individuals: Vec<Regex> = Vec::with_capacity(rules.len());
+    let mut styles: Vec<Style> = Vec::with_capacity(rules.len());
+    let mut sources: Vec<String> = Vec::with_capacity(rules.len());
+    let mut group_styles: Vec<Vec<Option<Style>>> = Vec::with_capacity(rules.len());
+    let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
+
+    for rule in rules {
+        let regex = regex::bytes::RegexBuilder::new(&rule.pattern)
+            .size_limit(REGEX_SIZE_LIMIT_BYTES)
+            .dfa_size_limit(REGEX_SIZE_LIMIT_BYTES)
+            .build()
+            .map_err(|e| compile_error_for(rule.is_user_supplied, &rule.name, config_path, e))?;
+        let captures_len = regex.captures_len();
+        let final_group_styles = resolve_group_styles_for_rule(
+            rule,
+            rule_source_of(rule),
+            captures_len,
+            config_path,
+            &mut theme_errors,
+        )?;
+        sources.push(rule.pattern.clone());
+        individuals.push(regex);
+        styles.push(rule.style);
+        group_styles.push(final_group_styles);
+    }
+
+    if !theme_errors.is_empty() {
+        return Err(Error::ThemeValidation {
+            theme: theme_name.unwrap_or("<unknown>").to_owned(),
+            source_path: theme_path.unwrap_or("").to_owned(),
+            errors: theme_errors,
+        });
+    }
+
+    // `sources` are the same patterns we just compiled individually — RegexSet
+    // over the same set cannot raise a syntax error, and tayf's per-rule
+    // size_limit keeps the aggregate well under RegexSet's default cap. The
+    // error path is preserved for forward-compat (e.g. larger rule sets in v0.4).
+    let set = RegexSet::new(&sources).map_err(Error::from)?;
+
+    // Cache the any-Some scan so apply_rules's inner loop can branchless
+    // dispatch between find_iter (hot path) and captures_iter (overlay).
+    let uses_capture_styling: Vec<bool> =
+        group_styles.iter().map(|gs| gs.iter().any(Option::is_some)).collect();
+
+    Ok(CompiledRules { set, individuals, styles, group_styles, uses_capture_styling })
+}
+
+/// Resolve the per-capture-group style overlay vector for a single rule,
+/// routing range/key validation errors to either a collected
+/// `Vec<ThemeRuleError>` (theme provenance) or a fail-fast
+/// [`Error::Config`] (user-config provenance). Built-in rules with no
+/// `styles_override` short-circuit to a clone of their pre-populated
+/// `group_styles` (Phase 6 will make those non-empty for permission /
+/// timestamp / url).
+///
+/// `captures_len` is `regex.captures_len()` for the rule's compiled regex
+/// — i.e. `1 + (number of capture groups)`. A rule with no groups has
+/// `captures_len == 1` and any non-empty `styles_override` map is
+/// out-of-range by definition.
+///
+/// Spec ref: §3.6, §1.3.5, Rev2 I-1, Rev2 Karar 27.
+fn resolve_group_styles_for_rule(
+    rule: &BuiltinRule,
+    source: RuleSource,
+    captures_len: usize,
+    user_cfg_path: Option<&str>,
+    theme_errors: &mut Vec<crate::error::ThemeRuleError>,
+) -> Result<Vec<Option<Style>>> {
+    // Built-in with no user/theme override: inherit the built-in's pre-
+    // populated overlay (Phase 6 populates timestamp/url/permission).
+    let Some(map) = rule.styles_override.as_ref() else {
+        return Ok(rule.group_styles.clone());
+    };
+
+    // We always have at least one capture group entry for the entire match;
+    // overlay vector covers groups 1..captures_len-1 (length = captures_len - 1).
+    let mut vec: Vec<Option<Style>> = vec![None; captures_len.saturating_sub(1)];
+
+    let user_cfg_path_or_sentinel = user_cfg_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
+
+    for (key, user_style) in map {
+        // Special-case "0" BEFORE grammar validation: group 0 has a dedicated
+        // diagnostic that points at the `style` field.
+        if key == "0" {
+            match source {
+                RuleSource::Theme => {
+                    // Already collected by `themes::validate_theme_rules`
+                    // (Phase 1); skip here to avoid duplicate diagnostics.
+                    continue;
+                }
+                RuleSource::UserConfig => {
+                    return Err(Error::Config {
+                        path: user_cfg_path_or_sentinel.to_owned(),
+                        line: 0,
+                        message: format!(
+                            "rule '{}': styles.\"0\": group 0 is the entire match; \
+                             use the 'style' field instead",
+                            rule.name
+                        ),
+                    });
+                }
+                RuleSource::Builtin => unreachable!(
+                    "Builtin rules ship with styles_override == None; reached the \
+                     map iteration only for UserConfig/Theme. styles_override on \
+                     a Builtin would be a constructor bug."
+                ),
+            }
+        }
+
+        // Grammar check (positive decimal, no leading zeros, `^[1-9][0-9]*$`).
+        let Some(parsed) = crate::config::validate_styles_map_key(key) else {
+            match source {
+                RuleSource::Theme => {
+                    // Already collected by `themes::validate_theme_rules`
+                    // (Phase 1) with the original key bytes. Skip silently.
+                    continue;
+                }
+                RuleSource::UserConfig => {
+                    return Err(Error::Config {
+                        path: user_cfg_path_or_sentinel.to_owned(),
+                        line: 0,
+                        message: format!(
+                            "rule '{}': styles.\"{}\": capture-group key must be a \
+                             positive decimal (1, 2, ..., N) with no leading zeros",
+                            rule.name, key,
+                        ),
+                    });
+                }
+                RuleSource::Builtin => unreachable!(),
+            }
+        };
+
+        // Range check: key must be < captures_len. `captures_len` is
+        // 1 + group_count, so valid integer keys are 1..=captures_len-1.
+        if parsed >= captures_len {
+            match source {
+                RuleSource::Theme => {
+                    theme_errors.push(crate::error::ThemeRuleError {
+                        rule_name: rule.name.clone(),
+                        kind: crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
+                            group: parsed,
+                            captures_len,
+                        },
+                    });
+                    continue;
+                }
+                RuleSource::UserConfig => {
+                    let n = captures_len.saturating_sub(1);
+                    return Err(Error::Config {
+                        path: user_cfg_path_or_sentinel.to_owned(),
+                        line: 0,
+                        message: format!(
+                            "rule '{}': styles.\"{}\": rule's regex has {} capture \
+                             group{} (valid: 1..={})",
+                            rule.name,
+                            parsed,
+                            n,
+                            if n == 1 { "" } else { "s" },
+                            n
+                        ),
+                    });
+                }
+                RuleSource::Builtin => unreachable!(),
+            }
+        }
+
+        let style = user_style.to_style(user_cfg_path_or_sentinel, &rule.name)?;
+        // parsed >= 1 (grammar excludes "0" and leading zeros), so the
+        // subtraction is safe; index is < captures_len - 1 == vec.len().
+        vec[parsed - 1] = Some(style);
+    }
+    Ok(vec)
 }
 
 #[cfg(test)]
@@ -1650,5 +1977,122 @@ mod tests {
         let c = Compiled::empty();
         assert_eq!(c.group_styles.len(), 0);
         assert_eq!(c.uses_capture_styling.len(), 0);
+    }
+
+    // === Task 10: RuleSource + captures-len validation routing ===
+    //
+    // These three tests pin the two-way error routing that
+    // `Compiled::load_with_theme` adopted in v0.3.5:
+    //   - theme-sourced `styles` map errors collect into
+    //     `Error::ThemeValidation` (fail-collected, Rev2 I-1);
+    //   - user-config-sourced errors fail-fast as `Error::Config`;
+    //   - user `styles` REPLACE the built-in's `group_styles` wholesale
+    //     (Rev2 Karar 27).
+
+    #[test]
+    fn compiled_load_with_theme_collects_theme_captures_index_out_of_range() {
+        // Synthetic theme TOML: targets ipv4 (built-in has no capture groups,
+        // so captures_len == 1) with a styles map at key "99". Grammar passes
+        // `validate_styles_map_key`; range check in
+        // `resolve_group_styles_for_rule` must reject it via
+        // `Error::ThemeValidation` (fail-collected, theme-routed).
+        let toml_src = r#"
+[[rules]]
+name = "ipv4"
+
+[rules.styles."99"]
+fg = "red"
+"#;
+        let loaded = crate::themes::LoadedTheme {
+            source: std::borrow::Cow::Borrowed(toml_src),
+            path_label: "<test:synthetic>".to_owned(),
+        };
+        let err = Compiled::build_from_loaded(
+            None,
+            None,
+            Some(("synthetic", &loaded)),
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect_err("should fail with ThemeValidation");
+        if let crate::error::Error::ThemeValidation { errors, theme, .. } = err {
+            assert_eq!(theme, "synthetic");
+            assert!(
+                errors.iter().any(|e| matches!(
+                    e.kind,
+                    crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange { group: 99, .. }
+                )),
+                "expected CaptureGroupIndexOutOfRange {{ group: 99 }} in: {errors:?}"
+            );
+        } else {
+            panic!("expected ThemeValidation; got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn compiled_load_with_theme_emits_config_error_for_user_config_out_of_range() {
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use std::collections::BTreeMap;
+        let mut user_styles: BTreeMap<String, UserStyle> = BTreeMap::new();
+        user_styles.insert(
+            "99".to_owned(),
+            UserStyle { fg: Some("red".to_owned()), ..UserStyle::default() },
+        );
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "ipv4".to_owned(),
+                pattern: None,
+                enabled: true,
+                style: None,
+                styles: Some(user_styles),
+            }],
+        };
+        let err = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/config.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect_err("should fail with Config");
+        if let crate::error::Error::Config { message, .. } = &err {
+            assert!(message.contains("99"), "got: {message}");
+            assert!(message.contains("valid: 1..="), "got: {message}");
+        } else {
+            panic!("expected Error::Config; got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn compiled_load_with_theme_user_styles_replace_semantics() {
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use std::collections::BTreeMap;
+        let red = UserStyle { fg: Some("red".to_owned()), ..UserStyle::default() };
+        let mut user_styles: BTreeMap<String, UserStyle> = BTreeMap::new();
+        user_styles.insert("1".to_owned(), red);
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "ipv4".to_owned(),
+                pattern: Some(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})".to_owned()),
+                enabled: true,
+                style: Some(UserStyle { fg: Some("yellow".to_owned()), ..UserStyle::default() }),
+                styles: Some(user_styles),
+            }],
+        };
+        let c = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/config.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile");
+        let idx = BUILTIN_NAMES.iter().position(|n| *n == "ipv4").expect("ipv4 present");
+        let g = &c.group_styles[idx];
+        assert_eq!(g.len(), 4, "captures_len - 1 == 4 for 4-octet ipv4 override");
+        assert!(g[0].is_some(), "group 1 set by user styles map");
+        assert!(g[1].is_none(), "group 2 inherits rule default (no user entry)");
+        assert!(g[2].is_none(), "group 3 inherits rule default");
+        assert!(g[3].is_none(), "group 4 inherits rule default");
+        assert!(c.uses_capture_styling[idx], "any-Some scan must flip the cache");
     }
 }

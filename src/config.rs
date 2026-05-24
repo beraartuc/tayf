@@ -407,10 +407,31 @@ pub(crate) fn read_capped(path: &Path) -> Result<String> {
 ///   custom) without further inspection of `pattern`/`style`.
 ///
 /// `path` flows into error messages so users see file/rule context.
+#[cfg(test)]
+// reason: production code now calls `apply_user_rules_with_source` directly
+// (Task 10), but the test suite in this module exercises the two-arg shape
+// extensively. Wrapping cfg(test) keeps the surface honest in release builds.
 pub(crate) fn apply_user_rules(
     path: &str,
     builtins: &mut Vec<crate::rules::BuiltinRule>,
     user: &[UserRule],
+) -> Result<()> {
+    apply_user_rules_with_source(path, builtins, user, false)
+}
+
+/// Variant of [`apply_user_rules`] that tags any `styles` map writes with
+/// the supplied `from_theme` flag, so `Compiled::load_with_theme` can route
+/// later range/key errors to either [`Error::ThemeValidation`] (theme) or
+/// [`Error::Config`] (user config). The base [`apply_user_rules`] calls
+/// through with `from_theme = false`; the theme layer in
+/// `Compiled::load_with_theme` calls through with `from_theme = true`.
+///
+/// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing).
+pub(crate) fn apply_user_rules_with_source(
+    path: &str,
+    builtins: &mut Vec<crate::rules::BuiltinRule>,
+    user: &[UserRule],
+    from_theme: bool,
 ) -> Result<()> {
     let known: std::collections::HashSet<&str> =
         crate::rules::BUILTIN_NAMES.iter().copied().collect();
@@ -480,6 +501,17 @@ pub(crate) fn apply_user_rules(
             if let Some(s) = &ur.style {
                 existing.style = s.to_style(path, &ur.name)?;
             }
+            // v0.3.5: REPLACE semantics (Rev2 Karar 27). When a user/theme
+            // entry supplies a `styles = { ... }` map for a built-in, the
+            // built-in's pre-populated `group_styles` is REPLACED in full —
+            // not merged — at `Compiled::load_with_theme` build time. We
+            // plumb the raw map here; range/key validation against the
+            // compiled regex's `captures_len()` happens in
+            // `rules::resolve_group_styles_for_rule`.
+            if ur.styles.is_some() {
+                existing.styles_override.clone_from(&ur.styles);
+                existing.styles_override_from_theme = from_theme;
+            }
         } else {
             // New custom rule — both pattern and style required.
             let Some(pattern) = ur.pattern.clone() else {
@@ -509,6 +541,12 @@ pub(crate) fn apply_user_rules(
                 style,
                 group_styles: Vec::new(),
                 is_user_supplied: true,
+                styles_override: ur.styles.clone(),
+                // New custom rule from theme TOML is currently unreachable —
+                // `themes::validate_theme_rules` rejects names not in
+                // `BUILTIN_NAMES` before this point. We still propagate
+                // `from_theme` for forward-compat (defensive).
+                styles_override_from_theme: from_theme,
             });
         }
     }
