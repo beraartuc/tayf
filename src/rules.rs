@@ -955,14 +955,13 @@ fn resolve_group_styles_for_rule(
                     continue;
                 }
                 RuleSource::UserConfig => {
+                    let kind = crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed {
+                        key: key.to_owned(),
+                    };
                     return Err(Error::Config {
                         path: user_cfg_path_or_sentinel.to_owned(),
                         line: 0,
-                        message: format!(
-                            "rule '{}': styles.\"{}\": capture-group key must be a \
-                             positive decimal (1, 2, ..., N) with no leading zeros",
-                            rule.name, key,
-                        ),
+                        message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
                 RuleSource::Builtin => unreachable!(),
@@ -984,19 +983,14 @@ fn resolve_group_styles_for_rule(
                     continue;
                 }
                 RuleSource::UserConfig => {
-                    let n = captures_len.saturating_sub(1);
+                    let kind = crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
+                        group: parsed,
+                        captures_len,
+                    };
                     return Err(Error::Config {
                         path: user_cfg_path_or_sentinel.to_owned(),
                         line: 0,
-                        message: format!(
-                            "rule '{}': styles.\"{}\": rule's regex has {} capture \
-                             group{} (valid: 1..={})",
-                            rule.name,
-                            parsed,
-                            n,
-                            if n == 1 { "" } else { "s" },
-                            n
-                        ),
+                        message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
                 RuleSource::Builtin => unreachable!(),
@@ -2086,8 +2080,55 @@ fg = "red"
         )
         .expect_err("should fail with Config");
         if let crate::error::Error::Config { message, .. } = &err {
-            assert!(message.contains("99"), "got: {message}");
-            assert!(message.contains("valid: 1..="), "got: {message}");
+            assert!(message.contains("rule 'ipv4'"), "got: {message}");
+            assert!(message.contains("styles.\"99\""), "got: {message}");
+            assert!(message.contains("no capture groups"), "got: {message}");
+            assert!(message.contains("styles cannot be set"), "got: {message}");
+            assert!(!message.contains("valid: 1..=0"), "regression guard: {message}");
+        } else {
+            panic!("expected ThemeValidation; got: {err:?}");
+        }
+    }
+
+    #[test]
+    fn compiled_load_with_theme_sanitizes_malformed_styles_key_in_user_config() {
+        use crate::config::{Config, GeneralSection, UserRule, UserStyle};
+        use std::collections::BTreeMap;
+        // Adversarial key: leading zero (grammar fail) + BEL control byte.
+        // Before Fix A2: raw key leaks BEL into Error::Config.message.
+        // After Fix A2: routed through sanitize_for_display, BEL becomes
+        // literal "\x07" text (4 ASCII chars), no raw 0x07 byte in message.
+        let mut user_styles: BTreeMap<String, UserStyle> = BTreeMap::new();
+        user_styles.insert(
+            "0\x07evil".to_owned(),
+            UserStyle { fg: Some("red".to_owned()), ..UserStyle::default() },
+        );
+        let cfg = Config {
+            general: GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "ipv4".to_owned(),
+                pattern: None,
+                enabled: true,
+                style: None,
+                styles: Some(user_styles),
+            }],
+        };
+        let err = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/test/config.toml"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect_err("should fail with Config");
+        if let crate::error::Error::Config { message, .. } = &err {
+            assert!(message.contains("rule 'ipv4'"), "got: {message}");
+            assert!(
+                message.contains("capture-group key must be a positive decimal"),
+                "got: {message}"
+            );
+            // Regression guard: raw BEL byte (0x07) must not appear; the
+            // Display impl routes the key through sanitize_for_display.
+            assert!(!message.as_bytes().contains(&0x07), "raw control byte leaked: {message:?}");
         } else {
             panic!("expected Error::Config; got: {err:?}");
         }

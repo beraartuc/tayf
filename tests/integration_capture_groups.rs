@@ -243,9 +243,11 @@ styles = { "1" = { fg = "red" } }
 
 // ---------------------------------------------------------------------------
 // 6. User-config `styles."99"` on a rule whose regex has < 99 capture
-//    groups → tayf exits 64 with a `valid: 1..=` diagnostic. ipv4 has
-//    no capture groups (`captures_len = 1`), so the diagnostic prints
-//    `valid: 1..=0`.
+//    groups → tayf exits 64 with a `CaptureGroupIndexOutOfRange`
+//    diagnostic. ipv4 has no capture groups (`captures_len = 1`), so
+//    the diagnostic specializes to "rule's regex has no capture groups;
+//    styles cannot be set" (v0.3.7+: routed through the shared
+//    `ThemeRuleErrorKind::Display` impl).
 // ---------------------------------------------------------------------------
 #[test]
 fn out_of_range_styles_in_user_config_exits_64_with_diagnostic() {
@@ -279,8 +281,10 @@ styles = { "99" = { fg = "red" } }
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("valid: 1..="), "diagnostic must carry the valid range; got: {stderr}");
-    assert!(stderr.contains("ipv4"), "diagnostic must echo the offending rule name; got: {stderr}");
+    assert!(stderr.contains("rule 'ipv4'"), "diagnostic must name the rule; got: {stderr}");
+    assert!(stderr.contains("no capture groups"), "got: {stderr}");
+    assert!(stderr.contains("styles cannot be set"), "got: {stderr}");
+    assert!(!stderr.contains("valid: 1..=0"), "regression guard: {stderr}");
 }
 
 // ---------------------------------------------------------------------------
