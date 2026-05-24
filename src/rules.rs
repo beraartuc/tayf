@@ -22,6 +22,23 @@ pub(crate) struct BuiltinRule {
     pub(crate) name: String,
     pub(crate) pattern: String,
     pub(crate) style: Style,
+    /// Per-capture-group style overlay. `None` at index `i` (which corresponds
+    /// to capture group `i + 1` — group 0 is the entire match) means that
+    /// group inherits the rule's default `style`. `Some(s)` means: when the
+    /// group fires in a match, wrap its bytes with `s` instead of `style`.
+    ///
+    /// Vector length equals `regex.captures_len() - 1`. An empty vector means
+    /// no per-group styling — `apply_rules` uses the cheaper `find_iter` hot
+    /// path.
+    ///
+    /// **Alternation invariant:** if a regex alternation branch contributes
+    /// no capture groups (e.g., the syslog branch of the `timestamp`
+    /// pattern), all `caps.get(i)` for `i in 1..=N` return `None` when that
+    /// branch matches; the match collapses to a single default-style run.
+    #[allow(dead_code)]
+    // reason: v0.3.5 Phase 2 lands the field; Phase 3 (apply_rules selective
+    // dispatch) reads it; Phase 6 populates timestamp/url/permission.
+    pub(crate) group_styles: Vec<Option<Style>>,
     /// `true` if `pattern` came from a user TOML config (either an appended
     /// custom rule OR an override of a built-in's pattern). `false` for the
     /// canonical built-in patterns shipped by tayf. Drives error routing in
@@ -283,18 +300,21 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             name: "permission".into(),
             pattern: r"(?:^|\s)[dlcbps-][rwxsStT-]{9}\+?(?:\s|$)".into(),
             style: Style { fg: Some(Color::White), dim: true, ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "timestamp".into(),
             pattern: build_timestamp_pattern(),
             style: Style { fg: Some(Color::BrightBlack), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "uuid".into(),
             pattern: r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b".into(),
             style: Style { fg: Some(Color::BrightMagenta), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
@@ -311,54 +331,63 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
                 r#"\bgit@[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]:[^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?]"#,
             ).into(),
             style: Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "email".into(),
             pattern: r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b".into(),
             style: Style { fg: Some(Color::BrightGreen), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "ipv6".into(),
             pattern: r"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}|::[0-9A-Fa-f]{1,4}|::1".into(),
             style: Style { fg: Some(Color::BrightYellow), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "mac".into(),
             pattern: r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b".into(),
             style: Style { fg: Some(Color::Cyan), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "log_level".into(),
             pattern: r"\b(?:ERROR|FAIL|FATAL|CRITICAL|WARN|WARNING|INFO|DEBUG|TRACE)\b".into(),
             style: Style { fg: Some(Color::BrightRed), bold: true, ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "http_status".into(),
             pattern: r"(?:^|[\s/:])([1-5]\d{2})\b".into(),
             style: Style { fg: Some(Color::Magenta), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "filename".into(),
             pattern: build_filename_pattern(),
             style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         BuiltinRule {
             name: "fqdn".into(),
             pattern: r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.){1,}[A-Za-z]{2,24}\b".into(),
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
         // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
@@ -376,6 +405,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             name: "duration".into(),
             pattern: r"\b\d+(?:\.\d+)?(?:\s?(?:ns|us|μs|ms)|[smhd])(?:\d+(?:\.\d+)?(?:\s?(?:ns|us|μs|ms)|[smhd]))*\b".into(),
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
+            group_styles: Vec::new(),
             is_user_supplied: false,
         },
     ]
@@ -406,6 +436,21 @@ mod builtin_names_test {
         let rules = builtin_rules();
         let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, BUILTIN_NAMES);
+    }
+
+    #[test]
+    fn builtin_rules_have_empty_group_styles_by_default_in_phase2() {
+        // Phase 2: group_styles is added but every built-in starts empty.
+        // Phase 6 populates timestamp/url/permission. This test will be
+        // updated then.
+        let rules = builtin_rules();
+        for rule in &rules {
+            assert!(
+                rule.group_styles.is_empty(),
+                "rule '{}' has non-empty group_styles in Phase 2",
+                rule.name
+            );
+        }
     }
 }
 

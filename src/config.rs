@@ -474,6 +474,7 @@ pub(crate) fn apply_user_rules(
                 name: ur.name.clone(),
                 pattern,
                 style,
+                group_styles: Vec::new(),
                 is_user_supplied: true,
             });
         }
