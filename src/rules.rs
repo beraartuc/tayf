@@ -2758,4 +2758,281 @@ fg = "red"
             "styles.\"1\" and styles.scheme target the same capture group (index 1); set exactly one"
         );
     }
+
+    // v0.5.2 Phase 3 Task 9 dispatch tests — exercise the
+    // `RuleSource::EmbeddedProfile` arm of `resolve_group_styles_for_rule`
+    // through `compile_merged_rules` so the assertions target the
+    // production envelope `Error::ProfileValidation` (not the raw
+    // `profile_errors` vec). Spec §6.4 #7 + plan A.12.
+
+    /// Construct a single-rule `Vec<BuiltinRule>` with the supplied profile-
+    /// sourced overrides + run `compile_merged_rules` to surface the
+    /// `Error::ProfileValidation` envelope. Mirrors `dispatch_user_config_single_style`
+    /// but for the `EmbeddedProfile` path: every rule has
+    /// `source = RuleSource::EmbeddedProfile`, and the diagnostic profile
+    /// context (`profile_name`, `profile_path`) is threaded through the
+    /// signature added in Task 8.
+    fn dispatch_embedded_profile_single_style(
+        rule_name: &str,
+        pattern: &str,
+        key: &str,
+        user_style: crate::config::UserStyle,
+    ) -> std::result::Result<(), crate::error::Error> {
+        use std::collections::BTreeMap;
+        let mut overrides: BTreeMap<String, crate::config::UserStyle> = BTreeMap::new();
+        overrides.insert(key.to_owned(), user_style);
+        let rule = BuiltinRule {
+            name: rule_name.to_owned(),
+            pattern: pattern.to_owned(),
+            style: crate::style::Style::DEFAULT,
+            group_styles: Vec::new(),
+            styles_override: Some(overrides),
+            source: RuleSource::EmbeddedProfile,
+        };
+        compile_merged_rules(
+            &[rule],
+            None,
+            None,
+            None,
+            Some("test-profile"),
+            Some("<test-profile-path>"),
+        )
+        .map(|_| ())
+    }
+
+    #[test]
+    fn dispatch_embedded_profile_zero_forbidden_pushes_to_profile_errors() {
+        // Key "0" on a profile-sourced rule must surface as
+        // Error::ProfileValidation containing exactly one
+        // ProfileRuleError whose kind is
+        // StylesKey(CaptureGroupIndexZeroForbidden).
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_embedded_profile_single_style(
+            "myprofile_rule",
+            r"(?P<scheme>https?)://",
+            "0",
+            style,
+        )
+        .unwrap_err();
+        let crate::error::Error::ProfileValidation { profile, source_path, errors } = err else {
+            panic!("expected Error::ProfileValidation, got: {err:?}");
+        };
+        assert_eq!(profile, "test-profile");
+        assert_eq!(source_path, "<test-profile-path>");
+        assert_eq!(errors.len(), 1, "exactly one error expected, got: {errors:?}");
+        assert_eq!(errors[0].rule_name, "myprofile_rule");
+        let crate::error::ProfileRuleErrorKind::StylesKey(inner) = &errors[0].kind else {
+            panic!("expected StylesKey wrapper, got: {:?}", errors[0].kind);
+        };
+        assert!(
+            matches!(inner, crate::error::ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden),
+            "expected CaptureGroupIndexZeroForbidden, got: {inner:?}"
+        );
+        // Display delegation: outer kind byte-equals inner kind.
+        assert_eq!(errors[0].kind.to_string(), inner.to_string());
+        // Negative regression: top-level Display must NOT contain other-
+        // variant wording.
+        let top = errors[0].kind.to_string();
+        assert!(!top.contains("no capture group named"), "must not be NameUnknown: {top}");
+        assert!(
+            !top.contains("capture-group key must be a positive decimal"),
+            "must not be KeyMalformed: {top}"
+        );
+    }
+
+    #[test]
+    fn dispatch_embedded_profile_key_malformed_pushes_to_profile_errors() {
+        // Key "01" must hit the KeyMalformed grammar gate (NOT fall through
+        // to NameUnknown), then collect as a ProfileRuleError.
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_embedded_profile_single_style(
+            "myprofile_rule",
+            r"(?P<scheme>https?)://",
+            "01",
+            style,
+        )
+        .unwrap_err();
+        let crate::error::Error::ProfileValidation { errors, .. } = err else {
+            panic!("expected Error::ProfileValidation, got: {err:?}");
+        };
+        assert_eq!(errors.len(), 1);
+        let crate::error::ProfileRuleErrorKind::StylesKey(inner) = &errors[0].kind else {
+            panic!("expected StylesKey wrapper, got: {:?}", errors[0].kind);
+        };
+        match inner {
+            crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed { key } => {
+                assert_eq!(key, "01");
+            }
+            other => panic!("expected CaptureGroupKeyMalformed, got: {other:?}"),
+        }
+        assert_eq!(errors[0].kind.to_string(), inner.to_string());
+        // Negative regression: must not fall through to NameUnknown wording.
+        let top = errors[0].kind.to_string();
+        assert!(!top.contains("no capture group named"), "must not be NameUnknown: {top}");
+    }
+
+    #[test]
+    fn dispatch_embedded_profile_index_out_of_range_pushes_to_profile_errors() {
+        // Pattern has one capture group ("scheme"); key "5" is out of range
+        // (captures_len = 2, valid 1..=1).
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_embedded_profile_single_style(
+            "myprofile_rule",
+            r"(?P<scheme>https?)://",
+            "5",
+            style,
+        )
+        .unwrap_err();
+        let crate::error::Error::ProfileValidation { errors, .. } = err else {
+            panic!("expected Error::ProfileValidation, got: {err:?}");
+        };
+        assert_eq!(errors.len(), 1);
+        let crate::error::ProfileRuleErrorKind::StylesKey(inner) = &errors[0].kind else {
+            panic!("expected StylesKey wrapper, got: {:?}", errors[0].kind);
+        };
+        match inner {
+            crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
+                group,
+                captures_len,
+            } => {
+                assert_eq!(*group, 5);
+                assert_eq!(*captures_len, 2);
+            }
+            other => panic!("expected CaptureGroupIndexOutOfRange, got: {other:?}"),
+        }
+        assert_eq!(errors[0].kind.to_string(), inner.to_string());
+        // Negative regression: must not surface NameUnknown / KeyMalformed.
+        let top = errors[0].kind.to_string();
+        assert!(!top.contains("no capture group named"), "must not be NameUnknown: {top}");
+        assert!(
+            !top.contains("capture-group key must be a positive decimal"),
+            "must not be KeyMalformed: {top}"
+        );
+    }
+
+    #[test]
+    fn dispatch_embedded_profile_name_unknown_pushes_to_profile_errors() {
+        // Pattern has named groups "date" + "time"; key "bogus" references
+        // an unknown name.
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_embedded_profile_single_style(
+            "myprofile_rule",
+            r"(?P<date>\d{4}-\d{2}-\d{2})T(?P<time>\d{2}:\d{2}:\d{2})",
+            "bogus",
+            style,
+        )
+        .unwrap_err();
+        let crate::error::Error::ProfileValidation { errors, .. } = err else {
+            panic!("expected Error::ProfileValidation, got: {err:?}");
+        };
+        assert_eq!(errors.len(), 1);
+        let crate::error::ProfileRuleErrorKind::StylesKey(inner) = &errors[0].kind else {
+            panic!("expected StylesKey wrapper, got: {:?}", errors[0].kind);
+        };
+        match inner {
+            crate::error::ThemeRuleErrorKind::CaptureGroupNameUnknown { name, available } => {
+                assert_eq!(name, "bogus");
+                assert_eq!(available, &vec!["date".to_owned(), "time".to_owned()]);
+            }
+            other => panic!("expected CaptureGroupNameUnknown, got: {other:?}"),
+        }
+        assert_eq!(errors[0].kind.to_string(), inner.to_string());
+        // Byte-pin the message + negative regression on other-variant wording.
+        let top = errors[0].kind.to_string();
+        assert!(
+            top.contains("no capture group named 'bogus'"),
+            "expected NameUnknown wording, got: {top}"
+        );
+        assert!(
+            !top.contains("capture-group key must be a positive decimal"),
+            "must not be KeyMalformed: {top}"
+        );
+    }
+
+    #[test]
+    fn dispatch_embedded_profile_duplicate_target_pushes_to_profile_errors() {
+        // Pattern with named group "scheme" at position 1; both styles."1"
+        // and styles.scheme reference the same slot.
+        use std::collections::BTreeMap;
+        let style1 = crate::config::UserStyle { fg: Some("red".to_owned()), ..Default::default() };
+        let style2 = crate::config::UserStyle { fg: Some("cyan".to_owned()), ..Default::default() };
+        let mut overrides: BTreeMap<String, crate::config::UserStyle> = BTreeMap::new();
+        overrides.insert("1".to_owned(), style1);
+        overrides.insert("scheme".to_owned(), style2);
+        let rule = BuiltinRule {
+            name: "myprofile_rule".to_owned(),
+            pattern: r"(?P<scheme>https?)://".to_owned(),
+            style: crate::style::Style::DEFAULT,
+            group_styles: Vec::new(),
+            styles_override: Some(overrides),
+            source: RuleSource::EmbeddedProfile,
+        };
+        let err = compile_merged_rules(
+            &[rule],
+            None,
+            None,
+            None,
+            Some("test-profile"),
+            Some("<test-profile-path>"),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        let crate::error::Error::ProfileValidation { errors, .. } = err else {
+            panic!("expected Error::ProfileValidation, got: {err:?}");
+        };
+        assert_eq!(errors.len(), 1);
+        let crate::error::ProfileRuleErrorKind::StylesKey(inner) = &errors[0].kind else {
+            panic!("expected StylesKey wrapper, got: {:?}", errors[0].kind);
+        };
+        match inner {
+            crate::error::ThemeRuleErrorKind::CaptureGroupDuplicateTarget { positional, named } => {
+                assert_eq!(positional, "1");
+                assert_eq!(named, "scheme");
+            }
+            other => panic!("expected CaptureGroupDuplicateTarget, got: {other:?}"),
+        }
+        assert_eq!(errors[0].kind.to_string(), inner.to_string());
+        // Byte-pin against the spec §2.4 wording.
+        assert_eq!(
+            errors[0].kind.to_string(),
+            "styles.\"1\" and styles.scheme target the same capture group (index 1); set exactly one"
+        );
+        // Negative regression: must not surface other variants' wording.
+        let top = errors[0].kind.to_string();
+        assert!(!top.contains("no capture group named"), "must not be NameUnknown: {top}");
+        assert!(!top.contains("out of range"), "must not be IndexOutOfRange: {top}");
+    }
+
+    #[test]
+    fn dispatch_three_way_identity_theme_userconfig_embedded_profile_byte_equal() {
+        // For one representative variant (KeyMalformed), assert that the
+        // Display wording is byte-identical across all three RuleSource
+        // paths:
+        //   - RuleSource::Theme: ThemeRuleErrorKind.to_string()
+        //   - RuleSource::UserConfig: ThemeRuleErrorKind.to_string()
+        //   - RuleSource::EmbeddedProfile:
+        //     ProfileRuleErrorKind::StylesKey(inner).to_string()
+        // The third must equal the first two — the StylesKey wrapper
+        // delegates via `write!(f, "{inner}")`. Spec §6.3 cross-path
+        // identity contract; plan Appendix A.12 absorption.
+        let kind =
+            crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed { key: "01".to_owned() };
+        let theme_str = kind.to_string();
+        // Same kind reused through the user-config envelope wording at the
+        // dispatch site — the inner kind Display is shared.
+        let userconfig_str = kind.to_string();
+        let profile_kind = crate::error::ProfileRuleErrorKind::StylesKey(kind.clone());
+        let profile_str = profile_kind.to_string();
+        assert_eq!(theme_str, userconfig_str);
+        assert_eq!(
+            theme_str, profile_str,
+            "StylesKey wrapper must delegate byte-equal to inner ThemeRuleErrorKind"
+        );
+        // Bonus byte-pin: anchors the wording against regressions in either
+        // ThemeRuleErrorKind Display or the StylesKey delegation.
+        assert_eq!(
+            profile_str,
+            "styles.\"01\": capture-group key must be a positive decimal (1, 2, ..., N) with no leading zeros"
+        );
+    }
 }
