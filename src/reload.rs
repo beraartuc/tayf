@@ -114,7 +114,7 @@ pub(crate) fn reload_once(
     let cfg = loaded.as_ref().map(|(c, _)| c);
     let path_str = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
-    let compiled = Compiled::load_with_theme(cfg, path_str.as_deref(), theme, depth)?;
+    let compiled = Compiled::load_with_theme(cfg, path_str.as_deref(), theme, None, None, depth)?;
     handle.store(Arc::new(compiled));
     Ok(())
 }

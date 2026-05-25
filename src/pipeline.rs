@@ -1067,9 +1067,15 @@ mod pipeline_tests {
     fn alt_screen_entry_sequence_not_regexed() {
         // C1 regression guard from spec §5.1. \e[?1049h must reach stdout
         // byte-for-byte, NOT through apply_rules.
-        let compiled =
-            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
-                .unwrap();
+        let compiled = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap();
         let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
         let mut pipeline = Pipeline::new(handle);
         let mut out = Vec::new();
@@ -1084,9 +1090,15 @@ mod pipeline_tests {
 
     #[test]
     fn three_path_preserves_byte_ordering_with_osc() {
-        let compiled =
-            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
-                .unwrap();
+        let compiled = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap();
         let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
         let mut pipeline = Pipeline::new(handle);
         let mut out = Vec::new();
@@ -1105,9 +1117,15 @@ mod pipeline_tests {
         // alt-screen toggle completes in the same chunk, the partial line
         // must reach stdout BEFORE the toggle sequence.
         use crate::rules::Compiled;
-        let compiled =
-            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
-                .unwrap();
+        let compiled = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap();
         let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
         let mut pipeline = Pipeline::new(handle);
         let mut out = Vec::new();
@@ -1126,9 +1144,15 @@ mod pipeline_tests {
         // C1 regression: an SGR completion + trailing data + TUI toggle
         // in one chunk. SGR bytes + text must reach stdout before toggle.
         use crate::rules::Compiled;
-        let compiled =
-            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
-                .unwrap();
+        let compiled = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap();
         let handle = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
         let mut pipeline = Pipeline::new(handle);
         let mut out = Vec::new();
@@ -1152,6 +1176,8 @@ mod pipeline_tests {
         let compiled = Compiled::load_with_theme(
             Some(&cfg),
             Some("/x"),
+            None,
+            None,
             None,
             crate::terminfo::ColorDepth::Truecolor,
         )

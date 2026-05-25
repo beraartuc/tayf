@@ -640,6 +640,8 @@ impl Compiled {
         config: Option<&crate::config::Config>,
         config_path: Option<&str>,
         theme: Option<&str>,
+        profile: Option<&crate::profiles::Profile>,
+        profile_path: Option<&str>,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
         // Resolve theme name (if any) to a LoadedTheme before delegating to
@@ -652,7 +654,7 @@ impl Compiled {
             None => None,
         };
         let loaded_ref = loaded_theme.as_ref().map(|(n, l)| (n.as_str(), l));
-        Self::build_from_loaded(config, config_path, loaded_ref, depth)
+        Self::build_from_loaded(config, config_path, loaded_ref, profile, profile_path, depth)
     }
 
     /// Internal builder that takes a pre-resolved [`crate::themes::LoadedTheme`]
@@ -668,8 +670,17 @@ impl Compiled {
         config: Option<&crate::config::Config>,
         config_path: Option<&str>,
         loaded_theme: Option<(&str, &crate::themes::LoadedTheme)>,
+        profile: Option<&crate::profiles::Profile>,
+        profile_path: Option<&str>,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
+        // Task 10 (Phase 4): signature scaffold only. The `profile` +
+        // `profile_path` params are accepted but unused in the body; Task
+        // 11 wires them into rule merge order Steps 2 + 4. Until then,
+        // passing `Some(_)` is byte-equivalent to passing `None` (no-op
+        // in this commit's body).
+        let _ = profile;
+        let _ = profile_path;
         let mut rules = builtin_rules();
 
         // Layer 1: optional preset theme. Applied BEFORE the user config so
@@ -744,7 +755,7 @@ impl Compiled {
     /// # Errors
     /// As for [`Self::load_with_theme`].
     pub(crate) fn load_builtins() -> Result<Self> {
-        Self::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
+        Self::load_with_theme(None, None, None, None, None, crate::terminfo::ColorDepth::Truecolor)
     }
 
     /// Walk every style slot in the compiled rule set and reduce it to
@@ -1402,6 +1413,8 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
+            None,
+            None,
             ColorDepth::Truecolor,
         )
         .unwrap();
@@ -1504,7 +1517,8 @@ mod tests {
     fn load_with_no_config_matches_load_builtins() {
         use crate::terminfo::ColorDepth;
         let a = Compiled::load_builtins().unwrap();
-        let b = Compiled::load_with_theme(None, None, None, ColorDepth::Truecolor).unwrap();
+        let b =
+            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
         assert_eq!(a.individuals.len(), b.individuals.len());
         assert_eq!(a.styles, b.styles);
     }
@@ -1512,7 +1526,7 @@ mod tests {
     #[test]
     fn load_at_none_depth_strips_colors_but_keeps_attributes() {
         use crate::terminfo::ColorDepth;
-        let c = Compiled::load_with_theme(None, None, None, ColorDepth::None).unwrap();
+        let c = Compiled::load_with_theme(None, None, None, None, None, ColorDepth::None).unwrap();
         for s in &c.styles {
             assert_eq!(s.fg, None, "depth=None must strip all fg colors");
             assert_eq!(s.bg, None, "depth=None must strip all bg colors");
@@ -1525,7 +1539,8 @@ mod tests {
     #[test]
     fn load_at_basic16_keeps_ansi_unchanged() {
         use crate::terminfo::ColorDepth;
-        let c = Compiled::load_with_theme(None, None, None, ColorDepth::Basic16).unwrap();
+        let c =
+            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Basic16).unwrap();
         let log_idx = builtin_rules().iter().position(|r| r.name == "log_level").unwrap();
         // Built-in log_level fg is BrightRed (ANSI) — unchanged at Basic16.
         assert_eq!(c.styles[log_idx].fg, Some(crate::style::Color::BrightRed));
@@ -1574,6 +1589,8 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
+            None,
+            None,
             ColorDepth::Basic16,
         )
         .unwrap();
@@ -1603,9 +1620,15 @@ mod tests {
                 styles: None,
             }],
         };
-        let err =
-            Compiled::load_with_theme(Some(&cfg), Some("/x/cfg.toml"), None, ColorDepth::Truecolor)
-                .expect_err("invalid regex must fail to compile");
+        let err = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x/cfg.toml"),
+            None,
+            None,
+            None,
+            ColorDepth::Truecolor,
+        )
+        .expect_err("invalid regex must fail to compile");
         let msg = err.to_string();
         assert!(
             msg.starts_with("config error in /x/cfg.toml"),
@@ -1629,9 +1652,15 @@ mod tests {
                 styles: None,
             }],
         };
-        let err =
-            Compiled::load_with_theme(Some(&cfg), Some("/x/cfg.toml"), None, ColorDepth::Truecolor)
-                .expect_err("invalid regex must fail to compile");
+        let err = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x/cfg.toml"),
+            None,
+            None,
+            None,
+            ColorDepth::Truecolor,
+        )
+        .expect_err("invalid regex must fail to compile");
         let msg = err.to_string();
         assert!(msg.starts_with("config error in /x/cfg.toml"));
         assert!(msg.contains("my_rule"));
@@ -1657,8 +1686,15 @@ mod tests {
                 })
                 .collect(),
         };
-        let c =
-            Compiled::load_with_theme(Some(&cfg), Some("/x"), None, ColorDepth::Truecolor).unwrap();
+        let c = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x"),
+            None,
+            None,
+            None,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         assert_eq!(c.individuals.len(), 0);
         assert_eq!(c.styles.len(), 0);
         assert_eq!(c.set.len(), 0);
@@ -2000,6 +2036,8 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
+            None,
+            None,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();
@@ -2076,9 +2114,11 @@ mod tests {
         // Applying the 'dark' theme MUST produce styles identical to no theme.
         // This is the contract spelled out in spec §5.1.
         use crate::terminfo::ColorDepth;
-        let no_theme = Compiled::load_with_theme(None, None, None, ColorDepth::Truecolor).unwrap();
+        let no_theme =
+            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
         let dark =
-            Compiled::load_with_theme(None, None, Some("dark"), ColorDepth::Truecolor).unwrap();
+            Compiled::load_with_theme(None, None, Some("dark"), None, None, ColorDepth::Truecolor)
+                .unwrap();
         assert_eq!(no_theme.styles, dark.styles, "dark theme must equal no-theme defaults");
     }
 
@@ -2087,7 +2127,8 @@ mod tests {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
         let c =
-            Compiled::load_with_theme(None, None, Some("light"), ColorDepth::Truecolor).unwrap();
+            Compiled::load_with_theme(None, None, Some("light"), None, None, ColorDepth::Truecolor)
+                .unwrap();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "permission").unwrap();
         assert_eq!(c.styles[idx].fg, Some(Color::Black));
         assert!(c.styles[idx].dim, "permission must be dim in light theme");
@@ -2098,7 +2139,8 @@ mod tests {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
         let c =
-            Compiled::load_with_theme(None, None, Some("light"), ColorDepth::Truecolor).unwrap();
+            Compiled::load_with_theme(None, None, Some("light"), None, None, ColorDepth::Truecolor)
+                .unwrap();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "ipv4").unwrap();
         assert_eq!(c.styles[idx].fg, Some(Color::Red));
         assert!(c.styles[idx].bold, "ipv4 must be bold in light theme");
@@ -2127,6 +2169,8 @@ mod tests {
             Some(&cfg),
             Some("/x/cfg.toml"),
             Some("light"),
+            None,
+            None,
             ColorDepth::Truecolor,
         )
         .unwrap();
@@ -2140,8 +2184,9 @@ mod tests {
     #[test]
     fn unknown_theme_returns_error_theme() {
         use crate::terminfo::ColorDepth;
-        let err = Compiled::load_with_theme(None, None, Some("nope"), ColorDepth::Truecolor)
-            .expect_err("unknown theme must error");
+        let err =
+            Compiled::load_with_theme(None, None, Some("nope"), None, None, ColorDepth::Truecolor)
+                .expect_err("unknown theme must error");
         assert!(matches!(err, crate::Error::Theme { .. }), "got: {err:?}");
     }
 
@@ -2150,8 +2195,10 @@ mod tests {
         // Behavioral guarantee: existing `load(...)` continues to behave as if
         // no theme were provided. Regression guard for the proxy refactor.
         use crate::terminfo::ColorDepth;
-        let a = Compiled::load_with_theme(None, None, None, ColorDepth::Truecolor).unwrap();
-        let b = Compiled::load_with_theme(None, None, None, ColorDepth::Truecolor).unwrap();
+        let a =
+            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
+        let b =
+            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
         assert_eq!(a.styles, b.styles);
     }
 
@@ -2174,8 +2221,15 @@ mod tests {
                 styles: None,
             }],
         };
-        let err = Compiled::load_with_theme(Some(&cfg), Some("/x"), None, ColorDepth::Truecolor)
-            .expect_err("regex must exceed RegexBuilder::size_limit(1 MiB)");
+        let err = Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x"),
+            None,
+            None,
+            None,
+            ColorDepth::Truecolor,
+        )
+        .expect_err("regex must exceed RegexBuilder::size_limit(1 MiB)");
         let msg = err.to_string();
         assert!(msg.contains("huge"), "expected rule name in error: {err}");
         assert!(msg.contains("/x"), "expected config path in error: {err}");
@@ -2191,6 +2245,8 @@ mod tests {
         let compiled = Compiled::load_with_theme(
             Some(&cfg),
             Some("/test/cfg.toml"),
+            None,
+            None,
             None,
             crate::terminfo::ColorDepth::Truecolor,
         )
@@ -2209,6 +2265,8 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
+            None,
+            None,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("compile");
@@ -2219,9 +2277,15 @@ mod tests {
     fn compiled_respect_defaults_match_general_default_when_no_config() {
         // Without a config, Compiled uses GeneralSection::default()'s
         // respect_existing_colors value, NOT a hardcoded fallback.
-        let compiled =
-            Compiled::load_with_theme(None, None, None, crate::terminfo::ColorDepth::Truecolor)
-                .expect("compile");
+        let compiled = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile");
         let expected = crate::config::GeneralSection::default().respect_existing_colors;
         assert_eq!(compiled.respect_existing_colors, expected);
     }
@@ -2282,6 +2346,8 @@ fg = "red"
             None,
             None,
             Some(("synthetic", &loaded)),
+            None,
+            None,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with ThemeValidation");
@@ -2321,6 +2387,8 @@ fg = "red"
         let err = Compiled::load_with_theme(
             Some(&cfg),
             Some("/test/config.toml"),
+            None,
+            None,
             None,
             crate::terminfo::ColorDepth::Truecolor,
         )
@@ -2372,6 +2440,8 @@ fg = "red"
             Some(&cfg),
             Some("/test/config.toml"),
             None,
+            None,
+            None,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with Config");
@@ -2413,6 +2483,8 @@ fg = "red"
             Some(&cfg),
             Some("/test/config.toml"),
             None,
+            None,
+            None,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with Config");
@@ -2446,6 +2518,8 @@ fg = "red"
         let c = Compiled::load_with_theme(
             Some(&cfg),
             Some("/test/config.toml"),
+            None,
+            None,
             None,
             crate::terminfo::ColorDepth::Truecolor,
         )

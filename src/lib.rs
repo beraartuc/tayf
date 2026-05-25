@@ -202,6 +202,8 @@ impl Tayf {
             config_ref,
             config_path.as_deref(),
             effective_theme.as_deref(),
+            None,
+            None,
             effective_depth,
         )?;
         let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
