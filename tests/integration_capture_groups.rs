@@ -546,3 +546,129 @@ styles = { date = { fg = "yellow" } }
         || s.contains(";33;");
     assert!(has_yellow, "expected a yellow SGR (33) for the `date` group via theme TOML: {s:?}");
 }
+
+// ---------------------------------------------------------------------------
+// 14. v0.5.1 §I-2 — theme TOML unknown capture-group name. `styles.bogus`
+//     on the `timestamp` rule must surface as Error::ThemeValidation with
+//     a single CaptureGroupNameUnknown entry. Byte-pinned Display:
+//     `theme '<name>' (loaded from <path>) has 1 validation error:`
+//     followed by
+//     `  - rule 'timestamp': styles."bogus": rule's regex has no capture
+//      group named 'bogus' (available: date, sep, time, ms, tz)`.
+//     Exercises the previously dead dispatch arm at src/rules.rs:1067-1076.
+// ---------------------------------------------------------------------------
+#[test]
+fn theme_toml_unknown_capture_group_name_byte_pinned_diagnostic() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_disk_theme(
+        xdg.path(),
+        "bogus-name",
+        r#"
+[[rules]]
+name = "timestamp"
+styles = { bogus = { fg = "red" } }
+"#,
+    );
+    let out = Command::new(tayf_bin())
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("TAYF_DISABLE_BG_DETECT", "1")
+        .arg("--theme")
+        .arg("bogus-name")
+        .arg("--no-hot-reload")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn tayf");
+    assert_eq!(
+        out.status.code(),
+        Some(64),
+        "expected EX_USAGE; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("theme 'bogus-name'"), "must quote theme name; got: {stderr}");
+    assert!(stderr.contains("1 validation error:"), "must indicate single error; got: {stderr}");
+    assert!(
+        stderr.contains(
+            "  - rule 'timestamp': styles.\"bogus\": rule's regex has no capture \
+             group named 'bogus' (available: date, sep, time, ms, tz)"
+        ),
+        "expected byte-pinned NameUnknown line; got: {stderr}"
+    );
+    // Negative regression — must NOT surface as KeyMalformed or DuplicateTarget.
+    assert!(
+        !stderr.contains("capture-group key must be a positive decimal"),
+        "must not surface as KeyMalformed: {stderr}"
+    );
+    assert!(
+        !stderr.contains("target the same capture group"),
+        "must not surface as DuplicateTarget: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 15. v0.5.1 §I-2 — theme TOML duplicate-target diagnostic. `styles."1"`
+//     (positional) AND `styles.date` (named, ISO branch slot 1) both
+//     target the same capture group. Must surface as
+//     Error::ThemeValidation with a single CaptureGroupDuplicateTarget
+//     entry. Byte-pinned Display:
+//     `  - rule 'timestamp': styles."1" and styles.date target the same
+//      capture group (index 1); set exactly one`.
+//     BTreeMap iteration order is lexicographic; "1" precedes "date",
+//     so `positional="1"`, `named="date"` in the diagnostic.
+//     Exercises the previously dead dispatch arm at src/rules.rs:1116-1124.
+// ---------------------------------------------------------------------------
+#[test]
+fn theme_toml_duplicate_target_positional_and_named_byte_pinned_diagnostic() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_disk_theme(
+        xdg.path(),
+        "dup-target",
+        r#"
+[[rules]]
+name = "timestamp"
+styles = { "1" = { fg = "red" }, date = { fg = "blue" } }
+"#,
+    );
+    let out = Command::new(tayf_bin())
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("TAYF_DISABLE_BG_DETECT", "1")
+        .arg("--theme")
+        .arg("dup-target")
+        .arg("--no-hot-reload")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn tayf");
+    assert_eq!(
+        out.status.code(),
+        Some(64),
+        "expected EX_USAGE; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("theme 'dup-target'"), "must quote theme name; got: {stderr}");
+    assert!(stderr.contains("1 validation error:"), "must indicate single error; got: {stderr}");
+    assert!(
+        stderr.contains(
+            "  - rule 'timestamp': styles.\"1\" and styles.date target the same \
+             capture group (index 1); set exactly one"
+        ),
+        "expected byte-pinned DuplicateTarget line; got: {stderr}"
+    );
+    // Negative regression — must NOT surface as NameUnknown or KeyMalformed.
+    assert!(
+        !stderr.contains("no capture group named"),
+        "must not surface as NameUnknown: {stderr}"
+    );
+    assert!(
+        !stderr.contains("capture-group key must be a positive decimal"),
+        "must not surface as KeyMalformed: {stderr}"
+    );
+}
