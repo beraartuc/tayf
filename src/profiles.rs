@@ -343,5 +343,156 @@ pub(crate) fn validate_profile(name: &str, source_path: &str, profile: &Profile)
 
 #[cfg(test)]
 mod tests {
-    // Unit tests added in Task 6.
+    use super::*;
+
+    fn profile_with_rules(rules: Option<Vec<String>>) -> Profile {
+        Profile { rules, append_rules: Vec::new(), theme: None }
+    }
+
+    fn profile_with_append(append_rules: Vec<ProfileRule>) -> Profile {
+        Profile { rules: None, append_rules, theme: None }
+    }
+
+    fn make_rule(name: &str) -> ProfileRule {
+        ProfileRule {
+            name: name.to_owned(),
+            pattern: r"\b[a-z]+\b".to_owned(),
+            style: None,
+            styles: None,
+        }
+    }
+
+    // 1. validate_profile_phase1_accepts_minimal_shape
+    #[test]
+    fn validate_profile_phase1_accepts_minimal_shape() {
+        let p = Profile::default();
+        validate_profile("test", "<test>", &p).expect("default profile is valid");
+    }
+
+    // 2. validate_profile_phase1_rules_whitelist_unknown_built_in
+    #[test]
+    fn validate_profile_phase1_rules_whitelist_unknown_built_in() {
+        let p = profile_with_rules(Some(vec!["not_a_builtin".to_owned()]));
+        let err = validate_profile("test", "<test>", &p).expect_err("must reject unknown built-in");
+        match err {
+            Error::ProfileValidation { errors, .. } => {
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].rule_name, "<rules>");
+                match &errors[0].kind {
+                    ProfileRuleErrorKind::RuleUnknown { name, known } => {
+                        assert_eq!(name, "not_a_builtin");
+                        assert!(
+                            known.contains(&"ipv4".to_owned()),
+                            "known list should contain ipv4; got: {known:?}"
+                        );
+                        // Alphabetical order regression guard.
+                        let mut sorted = known.clone();
+                        sorted.sort_unstable();
+                        assert_eq!(known, &sorted, "known names must be alphabetically sorted");
+                    }
+                    other => panic!("expected RuleUnknown, got {other:?}"),
+                }
+            }
+            other => panic!("expected ProfileValidation, got {other:?}"),
+        }
+    }
+
+    // 3. validate_profile_phase1_append_rules_collides_with_builtin
+    #[test]
+    fn validate_profile_phase1_append_rules_collides_with_builtin() {
+        let p = profile_with_append(vec![make_rule("ipv4")]);
+        let err =
+            validate_profile("test", "<test>", &p).expect_err("must reject builtin collision");
+        let s = err.to_string();
+        assert!(
+            s.contains("append_rules entry \"ipv4\": collides with built-in rule"),
+            "byte-pinned collision wording; got: {s}"
+        );
+        // Negative regression guard: must not also surface as
+        // RuleNameInvalid (the name is valid; collision is the
+        // only problem).
+        assert!(
+            !s.contains("name must be ASCII alphanumeric"),
+            "valid-name path must not surface RuleNameInvalid; got: {s}"
+        );
+    }
+
+    // 4. validate_profile_phase1_append_rules_duplicate_name
+    #[test]
+    fn validate_profile_phase1_append_rules_duplicate_name() {
+        let p = profile_with_append(vec![make_rule("foo"), make_rule("foo")]);
+        let err = validate_profile("test", "<test>", &p).expect_err("must reject duplicates");
+        let s = err.to_string();
+        assert!(
+            s.contains("append_rules: duplicate entry \"foo\""),
+            "byte-pinned duplicate wording; got: {s}"
+        );
+    }
+
+    // 5. validate_profile_phase1_append_rules_invalid_name
+    #[test]
+    fn validate_profile_phase1_append_rules_invalid_name() {
+        let p = profile_with_append(vec![make_rule("bad name")]);
+        let err = validate_profile("test", "<test>", &p).expect_err("must reject invalid name");
+        let s = err.to_string();
+        assert!(
+            s.contains(
+                "append_rules entry \"bad name\": name must be ASCII alphanumeric with '-' or '_'"
+            ),
+            "byte-pinned invalid-name wording; got: {s}"
+        );
+        // Negative regression: invalid name short-circuits — must
+        // NOT also surface as collision.
+        assert!(!s.contains("collides with built-in"), "must short-circuit; got: {s}");
+    }
+
+    // 6. validate_profile_phase1_theme_name_invalid
+    #[test]
+    fn validate_profile_phase1_theme_name_invalid() {
+        let p =
+            Profile { rules: None, append_rules: Vec::new(), theme: Some("bad name".to_owned()) };
+        let err =
+            validate_profile("test", "<test>", &p).expect_err("must reject invalid theme name");
+        let s = err.to_string();
+        assert!(
+            s.contains("theme \"bad name\": name must be ASCII alphanumeric with '-' or '_'"),
+            "byte-pinned theme-name wording; got: {s}"
+        );
+    }
+
+    // 7. validate_profile_phase1_collects_multiple_errors_in_one_pass
+    #[test]
+    fn validate_profile_phase1_collects_multiple_errors_in_one_pass() {
+        let p = Profile {
+            rules: Some(vec!["not_a_builtin".to_owned()]),
+            append_rules: vec![make_rule("ipv4"), make_rule("foo"), make_rule("foo")],
+            theme: Some("bad name".to_owned()),
+        };
+        let err = validate_profile("test", "<test>", &p).expect_err("must collect multiple errors");
+        match err {
+            Error::ProfileValidation { errors, .. } => {
+                // 4 errors expected:
+                //   RuleUnknown(not_a_builtin),
+                //   AppendRuleConflictsWithBuiltin(ipv4),
+                //   AppendRuleConflictsWithOther(foo),
+                //   ThemeNameInvalid(bad name).
+                assert_eq!(errors.len(), 4, "must collect all 4; got: {errors:?}");
+                let kinds: Vec<_> =
+                    errors.iter().map(|e| std::mem::discriminant(&e.kind)).collect();
+                assert!(kinds.contains(&std::mem::discriminant(
+                    &ProfileRuleErrorKind::RuleUnknown { name: String::new(), known: Vec::new() }
+                )));
+                assert!(kinds.contains(&std::mem::discriminant(
+                    &ProfileRuleErrorKind::AppendRuleConflictsWithBuiltin { name: String::new() }
+                )));
+                assert!(kinds.contains(&std::mem::discriminant(
+                    &ProfileRuleErrorKind::AppendRuleConflictsWithOther { name: String::new() }
+                )));
+                assert!(kinds.contains(&std::mem::discriminant(
+                    &ProfileRuleErrorKind::ThemeNameInvalid { name: String::new() }
+                )));
+            }
+            other => panic!("expected ProfileValidation, got {other:?}"),
+        }
+    }
 }
