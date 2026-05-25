@@ -390,15 +390,9 @@ rules = ["timestamp"]
 // ---------------------------------------------------------------------------
 // 11. v0.5.2 §8.2 — `--profile bogus` for a non-existent profile.
 //     Expected: Error::Profile { kind: NotFound } surfaces with the
-//     byte-pinned wording from format_profile_load.
+//     byte-pinned wording from format_profile_load, mapped to EX_USAGE
+//     (64) via `map_error_to_exit_code` parallel to Error::Theme.
 //     Shape: subprocess-based — validation error surfaces before PTY.
-//
-//     Exit-code note: `map_error_to_exit_code` currently lacks explicit
-//     arms for Error::Profile / Error::ProfileValidation, so the binary
-//     surfaces these as EX_SOFTWARE (70) via the catch-all. The wording
-//     contract (byte-pinned via spec §6.3) is the load-bearing assertion
-//     here; the exit code is pinned to the observed value to keep this
-//     test from drifting silently if the mapping is corrected later.
 // ---------------------------------------------------------------------------
 #[test]
 fn profile_not_found_byte_pinned_diagnostic() {
@@ -423,10 +417,7 @@ fn profile_not_found_byte_pinned_diagnostic() {
         .expect("spawn tayf");
     let code = out.status.code();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        code == Some(64) || code == Some(70),
-        "expected EX_USAGE (64) or EX_SOFTWARE (70); got {code:?}; stderr: {stderr}"
-    );
+    assert_eq!(code, Some(64), "expected EX_USAGE (64); got {code:?}; stderr: {stderr}");
     assert!(
         stderr.contains("profile 'bogus' not found"),
         "byte-pinned NotFound wording; got: {stderr}"
@@ -444,10 +435,8 @@ fn profile_not_found_byte_pinned_diagnostic() {
 //     Error::ProfileValidation with one ProfileRuleError whose kind
 //     is StylesKey(CaptureGroupNameUnknown { name: "bogus", available }).
 //     Byte-pinned via format_profile_validation + delegated
-//     ThemeRuleErrorKind Display.
-//
-//     Exit-code note: see Test 11 — Error::ProfileValidation also falls
-//     through to EX_SOFTWARE (70). Wording assertion is the contract.
+//     ThemeRuleErrorKind Display. Mapped to EX_USAGE (64) via
+//     `map_error_to_exit_code` parallel to Error::ThemeValidation.
 // ---------------------------------------------------------------------------
 #[test]
 fn profile_append_rules_styles_capture_group_key_unknown_byte_pinned_diagnostic() {
@@ -479,10 +468,7 @@ styles = { bogus = { fg = "red" } }
         .expect("spawn tayf");
     let code = out.status.code();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        code == Some(64) || code == Some(70),
-        "expected EX_USAGE (64) or EX_SOFTWARE (70); got {code:?}; stderr: {stderr}"
-    );
+    assert_eq!(code, Some(64), "expected EX_USAGE (64); got {code:?}; stderr: {stderr}");
     assert!(stderr.contains("profile 'named-key-bogus'"), "must quote profile name; got: {stderr}");
     assert!(stderr.contains("1 validation error:"), "singular form; got: {stderr}");
     assert!(

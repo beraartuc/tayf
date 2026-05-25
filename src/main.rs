@@ -45,9 +45,11 @@ fn map_error_to_exit_code(err: &Error) -> u8 {
         Error::Signal(_) => 71,
         Error::RegexCompile(_) => 70, // EX_SOFTWARE
         Error::BufferOverflow { .. } => 70,
-        Error::Config { .. } => 64,          // EX_USAGE
-        Error::Theme { .. } => 64,           // EX_USAGE — unknown --theme value
-        Error::ThemeValidation { .. } => 64, // EX_USAGE — disk/preset theme validation
+        Error::Config { .. } => 64,            // EX_USAGE
+        Error::Theme { .. } => 64,             // EX_USAGE — unknown --theme value
+        Error::ThemeValidation { .. } => 64,   // EX_USAGE — disk/preset theme validation
+        Error::Profile { .. } => 64,           // EX_USAGE — bad --profile value / disk load
+        Error::ProfileValidation { .. } => 64, // EX_USAGE — profile body validation
         // reason: `Error` is `#[non_exhaustive]` for forward compat; future
         // variants default to EX_SOFTWARE until explicitly mapped. New
         // variants SHOULD be added above this arm with the appropriate code.
@@ -73,6 +75,37 @@ mod tests {
             map_error_to_exit_code(&err),
             64,
             "ThemeValidation is a user-input error; must map to EX_USAGE",
+        );
+    }
+
+    #[test]
+    fn profile_maps_to_ex_usage() {
+        let err = Error::Profile {
+            name: "test".into(),
+            source_path: "<test>".into(),
+            kind: tayf::ProfileErrorKind::NotFound { searched: Vec::new() },
+        };
+        assert_eq!(
+            map_error_to_exit_code(&err),
+            64,
+            "Profile is a user-input error; must map to EX_USAGE",
+        );
+    }
+
+    #[test]
+    fn profile_validation_maps_to_ex_usage() {
+        let err = Error::ProfileValidation {
+            profile: "test".into(),
+            source_path: "<test>".into(),
+            errors: vec![tayf::ProfileRuleError {
+                rule_name: "foo".into(),
+                kind: tayf::ProfileRuleErrorKind::RuleNameInvalid { name: "foo bar".into() },
+            }],
+        };
+        assert_eq!(
+            map_error_to_exit_code(&err),
+            64,
+            "ProfileValidation is a user-input error; must map to EX_USAGE",
         );
     }
 }
