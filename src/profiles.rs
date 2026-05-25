@@ -32,7 +32,7 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-use crate::error::{Error, ProfileErrorKind, Result};
+use crate::error::{Error, ProfileErrorKind, ProfileRuleError, ProfileRuleErrorKind, Result};
 
 /// Parsed profile TOML body.
 ///
@@ -262,14 +262,83 @@ pub(crate) fn load_with(
 /// Returns [`Error::ProfileValidation`] with at least one
 /// [`ProfileRuleError`] when any Phase 1 violation is found. Returns
 /// `Ok(())` when the parsed profile passes Phase 1.
-#[allow(clippy::unnecessary_wraps)]
-// reason: stub body for Task 2 scaffold — Task 4 fills in the
-// fail-collected validation pass, which returns Err on any violation.
 pub(crate) fn validate_profile(name: &str, source_path: &str, profile: &Profile) -> Result<()> {
-    // Stub body — full Phase 1 fail-collected validation lands in
-    // Task 4.
-    let _ = (name, source_path, profile);
-    Ok(())
+    use std::collections::HashSet;
+
+    let builtin_names: HashSet<&str> = crate::rules::BUILTIN_NAMES.iter().copied().collect();
+    let mut errors: Vec<ProfileRuleError> = Vec::new();
+
+    // 1. profile.rules whitelist — each entry must name a built-in.
+    if let Some(ref rules) = profile.rules {
+        for entry in rules {
+            if !builtin_names.contains(entry.as_str()) {
+                let mut known: Vec<String> =
+                    builtin_names.iter().map(|s| (*s).to_owned()).collect();
+                known.sort_unstable();
+                errors.push(ProfileRuleError {
+                    rule_name: "<rules>".to_owned(),
+                    kind: ProfileRuleErrorKind::RuleUnknown { name: entry.clone(), known },
+                });
+            }
+        }
+    }
+
+    // 2-4. profile.append_rules — name predicate, no built-in
+    //      collision, no duplicate within the array. Per-entry
+    //      short-circuit semantics: an invalid name skips the
+    //      collision + duplicate checks for that entry (a
+    //      malformed name cannot meaningfully collide).
+    let mut seen_append: HashSet<&str> = HashSet::new();
+    for ar in &profile.append_rules {
+        // 2. Name predicate.
+        if !name_is_valid(&ar.name) {
+            errors.push(ProfileRuleError {
+                rule_name: ar.name.clone(),
+                kind: ProfileRuleErrorKind::RuleNameInvalid { name: ar.name.clone() },
+            });
+            continue;
+        }
+
+        // 3. Built-in collision.
+        if builtin_names.contains(ar.name.as_str()) {
+            errors.push(ProfileRuleError {
+                rule_name: ar.name.clone(),
+                kind: ProfileRuleErrorKind::AppendRuleConflictsWithBuiltin {
+                    name: ar.name.clone(),
+                },
+            });
+            continue;
+        }
+
+        // 4. Duplicate within append_rules.
+        if !seen_append.insert(ar.name.as_str()) {
+            errors.push(ProfileRuleError {
+                rule_name: ar.name.clone(),
+                kind: ProfileRuleErrorKind::AppendRuleConflictsWithOther { name: ar.name.clone() },
+            });
+        }
+    }
+
+    // 5. profile.theme — predicate only. Existence check deferred
+    //    to theme-load (surfaces as Error::Theme { NotFound }).
+    if let Some(ref theme) = profile.theme {
+        if !name_is_valid(theme) {
+            errors.push(ProfileRuleError {
+                rule_name: "<theme>".to_owned(),
+                kind: ProfileRuleErrorKind::ThemeNameInvalid { name: theme.clone() },
+            });
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::ProfileValidation {
+            profile: name.to_owned(),
+            source_path: source_path.to_owned(),
+            errors,
+        })
+    }
 }
 
 #[cfg(test)]
