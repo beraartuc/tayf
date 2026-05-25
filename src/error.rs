@@ -1084,4 +1084,190 @@ mod tests {
             "styles.\"1\" and styles.date target the same capture group (index 1); set exactly one"
         );
     }
+
+    // ---- v0.5.2 profile error Display byte-pin tests ----
+
+    #[test]
+    fn display_profile_rule_unknown_byte_exact() {
+        let kind = ProfileRuleErrorKind::RuleUnknown {
+            name: "ipv5".to_owned(),
+            known: vec!["ipv4".to_owned(), "ipv6".to_owned(), "url".to_owned()],
+        };
+        assert_eq!(
+            kind.to_string(),
+            "rules entry \"ipv5\": not a built-in name (known: ipv4, ipv6, url)"
+        );
+    }
+
+    #[test]
+    fn display_profile_rule_name_invalid_byte_exact() {
+        let kind = ProfileRuleErrorKind::RuleNameInvalid { name: "bad name".to_owned() };
+        assert_eq!(
+            kind.to_string(),
+            "append_rules entry \"bad name\": name must be ASCII alphanumeric with '-' or '_'"
+        );
+    }
+
+    #[test]
+    fn display_profile_append_rule_conflicts_with_builtin_byte_exact() {
+        let kind = ProfileRuleErrorKind::AppendRuleConflictsWithBuiltin { name: "ipv4".to_owned() };
+        assert_eq!(
+            kind.to_string(),
+            "append_rules entry \"ipv4\": collides with built-in rule; use [[rules]] at the user-config level to override built-ins"
+        );
+    }
+
+    #[test]
+    fn display_profile_append_rule_conflicts_with_other_byte_exact() {
+        let kind = ProfileRuleErrorKind::AppendRuleConflictsWithOther { name: "foo".to_owned() };
+        assert_eq!(kind.to_string(), "append_rules: duplicate entry \"foo\"");
+    }
+
+    #[test]
+    fn display_profile_theme_name_invalid_byte_exact() {
+        let kind = ProfileRuleErrorKind::ThemeNameInvalid { name: "bad name".to_owned() };
+        assert_eq!(
+            kind.to_string(),
+            "theme \"bad name\": name must be ASCII alphanumeric with '-' or '_'"
+        );
+    }
+
+    #[test]
+    fn display_profile_styles_key_delegates_to_theme_rule_error_kind() {
+        let inner = ThemeRuleErrorKind::CaptureGroupKeyMalformed { key: "01".to_owned() };
+        let outer = ProfileRuleErrorKind::StylesKey(inner.clone());
+        // Wrapper Display must be byte-equal to the inner Display
+        // (no prefix, no suffix — pure delegation per spec §6.3).
+        assert_eq!(outer.to_string(), inner.to_string());
+    }
+
+    #[test]
+    fn format_profile_validation_byte_exact_singular_and_plural() {
+        let one = Error::ProfileValidation {
+            profile: "myaws".into(),
+            source_path: "/home/u/.config/tayf/profiles/myaws.toml".into(),
+            errors: vec![ProfileRuleError {
+                rule_name: "<rules>".into(),
+                kind: ProfileRuleErrorKind::RuleUnknown {
+                    name: "ipv5".into(),
+                    known: vec!["ipv4".into()],
+                },
+            }],
+        };
+        let s = one.to_string();
+        assert!(s.contains("profile 'myaws'"), "must quote profile name; got: {s}");
+        assert!(
+            s.contains("(loaded from /home/u/.config/tayf/profiles/myaws.toml)"),
+            "must include canonical path; got: {s}"
+        );
+        assert!(s.contains("1 validation error:"), "singular form; got: {s}");
+        assert!(!s.contains("1 validation errors:"), "must not pluralize 1; got: {s}");
+        assert!(
+            s.contains(
+                "  - rule '<rules>': rules entry \"ipv5\": not a built-in name (known: ipv4)"
+            ),
+            "byte-pinned per-rule line; got: {s}"
+        );
+
+        let many = Error::ProfileValidation {
+            profile: "myaws".into(),
+            source_path: "<p>".into(),
+            errors: vec![
+                ProfileRuleError {
+                    rule_name: "foo".into(),
+                    kind: ProfileRuleErrorKind::RuleNameInvalid { name: "foo".into() },
+                },
+                ProfileRuleError {
+                    rule_name: "<theme>".into(),
+                    kind: ProfileRuleErrorKind::ThemeNameInvalid { name: "bad".into() },
+                },
+            ],
+        };
+        let s = many.to_string();
+        assert!(s.contains("2 validation errors:"), "plural form; got: {s}");
+    }
+
+    #[test]
+    fn format_profile_load_not_found_byte_exact() {
+        let e = Error::Profile {
+            name: "bogus".into(),
+            source_path: "<embedded:profile/bogus>".into(),
+            kind: ProfileErrorKind::NotFound {
+                searched: vec![std::path::PathBuf::from("/a/b/profiles/bogus.toml")],
+            },
+        };
+        let s = e.to_string();
+        assert_eq!(
+            s, "profile 'bogus' not found (searched: /a/b/profiles/bogus.toml)",
+            "byte-pinned NotFound; got: {s}"
+        );
+    }
+
+    #[test]
+    fn format_profile_load_parse_error_byte_exact() {
+        // Appendix A.3: ParseError carries an owned String (no
+        // toml::de::Error coupling on the public surface).
+        let e = Error::Profile {
+            name: "myaws".into(),
+            source_path: "/home/u/.config/tayf/profiles/myaws.toml".into(),
+            kind: ProfileErrorKind::ParseError {
+                message: "expected `=`, found newline at line 3 column 4".into(),
+            },
+        };
+        assert_eq!(
+            e.to_string(),
+            "profile 'myaws' at /home/u/.config/tayf/profiles/myaws.toml: \
+             expected `=`, found newline at line 3 column 4"
+        );
+    }
+
+    #[test]
+    fn format_profile_load_path_canonicalization_byte_exact() {
+        let e = Error::Profile {
+            name: "myaws".into(),
+            source_path: "/path/before/canonicalisation".into(),
+            kind: ProfileErrorKind::PathCanonicalization {
+                path: std::path::PathBuf::from("/home/u/.config/tayf/profiles/myaws.toml"),
+                message: "No such file or directory (os error 2)".into(),
+            },
+        };
+        assert_eq!(
+            e.to_string(),
+            "profile 'myaws' path '/home/u/.config/tayf/profiles/myaws.toml': \
+             No such file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn format_profile_load_regex_compile_byte_exact() {
+        let e = Error::Profile {
+            name: "myaws".into(),
+            source_path: "/home/u/.config/tayf/profiles/myaws.toml".into(),
+            kind: ProfileErrorKind::RegexCompile {
+                rule_name: "instance_id".into(),
+                pattern: "i-[0-9a-f".into(),
+                message: "regex parse error: unclosed character class".into(),
+            },
+        };
+        assert_eq!(
+            e.to_string(),
+            "profile 'myaws': failed to compile rule 'instance_id' pattern 'i-[0-9a-f': \
+             regex parse error: unclosed character class"
+        );
+    }
+
+    #[test]
+    fn format_profile_load_sanitizes_control_bytes() {
+        // Defense-in-depth: a hostile profile name / message must
+        // not let an ESC sequence reach the terminal via the error
+        // path. Mirror of the gate other Display impls apply.
+        let e = Error::Profile {
+            name: "evil\x1b[2J".into(),
+            source_path: "/path".into(),
+            kind: ProfileErrorKind::ParseError { message: "boom\x1b[2J".into() },
+        };
+        let s = e.to_string();
+        assert!(!s.contains('\x1b'), "raw ESC must not survive Display: {s:?}");
+        assert!(s.contains("\\x1b"), "ESC must be escaped as \\x1b: {s:?}");
+    }
 }
