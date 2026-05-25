@@ -86,6 +86,19 @@ Node 24 automatically. **Catching this now spares a stale-CI surprise
 later** — exactly the cross-cutting concern a per-task review would
 miss.
 
+---
+
+> **Correction (added 2026-05-25 during v0.5.0 spec phase):** The bump
+> target prescribed above (`@v5`) is **incorrect**. Verified release
+> history of `actions/upload-artifact`: v4 → v5 → v6 → v7.0.1
+> (current, 2026-04-10). `@v5` is still Node 20 territory and does
+> not clear the deprecation warning. `@v6` is the Node 24 transition
+> (`runs.using: node24`). The correct bump target is `@v7` (major-
+> track) or `@v7.0.1` (exact pin). v0.5.0's actual commit
+> (`chore(ci): bump actions/upload-artifact v4 → v7`, SHA `61fa8b3`)
+> targets `@v7`. This review's frozen `@v5` recommendation stands as
+> a historical artifact; the active recommendation is `@v7`.
+
 **N-2. `STRICT_MODE` on push-event workflows resolves to the literal
 string `"false"`, and the bash test handles it correctly.** Worth
 documenting explicitly because the cross-context semantics are subtle.
