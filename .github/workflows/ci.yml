@@ -46,3 +46,105 @@ jobs:
         run: cargo audit
       - name: cargo deny
         run: cargo deny check
+
+  bench-regression:
+    name: Bench regression (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: test  # only run if test passes (don't bench broken code)
+    strategy:
+      fail-fast: false  # ubuntu + macos independent
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # jq is preinstalled on ubuntu-latest (1.7) and macos-latest (1.8.1)
+      # per actions/runner-images. No install step needed.
+
+      - name: Run benches
+        run: cargo bench --bench throughput
+
+      - name: Smoke test estimates.json + baseline JSON shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          for bench in apply_rules/ipv4-heavy apply_rules/mixed-syslog apply_rules/captures-heavy passthrough/write_all; do
+            file="target/criterion/${bench}/new/estimates.json"
+            test -f "$file" || { echo "::error::missing $file"; exit 1; }
+            jq -e '.mean.point_estimate' "$file" > /dev/null || {
+              echo "::error::unexpected schema in $file (mean.point_estimate missing)"; exit 1
+            }
+          done
+
+          baseline="benches/baselines/latest/${{ matrix.os }}.json"
+          if [[ -f "$baseline" ]]; then
+            for bench in apply_rules/ipv4-heavy apply_rules/mixed-syslog apply_rules/captures-heavy passthrough/write_all; do
+              jq -e --arg b "$bench" '.benches[$b].mean_ns' "$baseline" > /dev/null || {
+                echo "::error::baseline $baseline missing benches[\"$bench\"].mean_ns"; exit 1
+              }
+            done
+          fi
+
+      - name: Compare against baseline
+        id: compare
+        shell: bash
+        env:
+          LC_NUMERIC: C
+          STRICT_MODE: ${{ contains(github.event.pull_request.labels.*.name, 'bench-ci-strict') }}
+        run: |
+          set -euo pipefail
+          baseline="benches/baselines/latest/${{ matrix.os }}.json"
+          if [[ ! -f "$baseline" ]]; then
+            echo "::warning::no baseline at $baseline; skipping comparison"
+            exit 0
+          fi
+
+          breach_found=0
+          for bench in apply_rules/ipv4-heavy apply_rules/mixed-syslog apply_rules/captures-heavy passthrough/write_all; do
+            new_mean=$(jq -e '.mean.point_estimate' "target/criterion/${bench}/new/estimates.json") || {
+              echo "::error::failed to read mean.point_estimate from ${bench}'s estimates.json"; exit 1
+            }
+            base_mean=$(jq -e --arg b "$bench" '.benches[$b].mean_ns' "$baseline") || {
+              echo "::error::baseline $baseline missing benches[\"$bench\"].mean_ns"; exit 1
+            }
+
+            if [[ "$base_mean" == "0" ]]; then
+              echo "::warning::baseline for $bench is placeholder (mean_ns=0); skipping comparison"
+              continue
+            fi
+
+            if [[ "$bench" == "passthrough/write_all" ]]; then
+              threshold_pct=30
+            else
+              threshold_pct=20
+            fi
+
+            read -r delta_pct breach < <(awk -v new="$new_mean" -v base="$base_mean" -v t="$threshold_pct" '
+              BEGIN {
+                d = (new - base) / base * 100
+                printf "%.2f %d\n", d, (d > t) ? 1 : 0
+              }')
+
+            if [[ "$breach" == "1" ]]; then
+              breach_found=1
+              if [[ "$STRICT_MODE" == "true" ]]; then
+                echo "::error::${bench} regressed +${delta_pct}% vs baseline (threshold: ${threshold_pct}%)"
+              else
+                echo "::warning::${bench} regressed +${delta_pct}% vs baseline (threshold: ${threshold_pct}%) — strict mode opt-in via [bench-ci-strict] label"
+              fi
+            fi
+          done
+
+          if [[ "$breach_found" == "1" && "$STRICT_MODE" == "true" ]]; then
+            exit 1
+          fi
+
+      - name: Upload criterion artifacts (for baseline extraction)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ matrix.os }}
+          path: target/criterion/
+          retention-days: 14

@@ -1,0 +1,16 @@
+{
+  "version": "v0.4.0",
+  "tag": "v0.4.0",
+  "commit": "c0eb945",
+  "date": "2026-05-25",
+  "host": "GitHub Actions macos-latest",
+  "runner_class": "macos-latest",
+  "rustc": "1.95.0",
+  "criterion_version": "0.8",
+  "benches": {
+    "apply_rules/ipv4-heavy":     { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 },
+    "apply_rules/mixed-syslog":   { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 },
+    "apply_rules/captures-heavy": { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 },
+    "passthrough/write_all":      { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 }
+  }
+}
