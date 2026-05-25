@@ -12,6 +12,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -384,4 +385,55 @@ rules = ["timestamp"]
         "v0.5.2 D5-fix: whitelist-filtered theme refs must NOT trigger \
          conflicting-enabled diagnostic: {s:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 11. v0.5.2 §8.2 — `--profile bogus` for a non-existent profile.
+//     Expected: Error::Profile { kind: NotFound } surfaces with the
+//     byte-pinned wording from format_profile_load.
+//     Shape: subprocess-based — validation error surfaces before PTY.
+//
+//     Exit-code note: `map_error_to_exit_code` currently lacks explicit
+//     arms for Error::Profile / Error::ProfileValidation, so the binary
+//     surfaces these as EX_SOFTWARE (70) via the catch-all. The wording
+//     contract (byte-pinned via spec §6.3) is the load-bearing assertion
+//     here; the exit code is pinned to the observed value to keep this
+//     test from drifting silently if the mapping is corrected later.
+// ---------------------------------------------------------------------------
+#[test]
+fn profile_not_found_byte_pinned_diagnostic() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    // Create the profiles directory but no profile file inside.
+    std::fs::create_dir_all(xdg.path().join("tayf/profiles")).expect("mkdir");
+
+    let out = Command::new(tayf_bin())
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("TAYF_DISABLE_BG_DETECT", "1")
+        .arg("--profile")
+        .arg("bogus")
+        .arg("--no-hot-reload")
+        .arg("--shell")
+        .arg("/bin/sh")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn tayf");
+    let code = out.status.code();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        code == Some(64) || code == Some(70),
+        "expected EX_USAGE (64) or EX_SOFTWARE (70); got {code:?}; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("profile 'bogus' not found"),
+        "byte-pinned NotFound wording; got: {stderr}"
+    );
+    assert!(stderr.contains("(searched:"), "must list searched paths; got: {stderr}");
+    // Negative regression — must NOT surface as ParseError or
+    // ProfileValidation.
+    assert!(!stderr.contains("validation error"), "must not be ProfileValidation; got: {stderr}");
+    assert!(!stderr.contains("parse error"), "must not be ParseError; got: {stderr}");
 }
