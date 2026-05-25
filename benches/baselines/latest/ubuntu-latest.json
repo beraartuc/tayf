@@ -8,9 +8,25 @@
   "rustc": "1.95.0",
   "criterion_version": "0.8",
   "benches": {
-    "apply_rules/ipv4-heavy":     { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 },
-    "apply_rules/mixed-syslog":   { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 },
-    "apply_rules/captures-heavy": { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 },
-    "passthrough/write_all":      { "mean_ns": 0, "std_dev_ns": 0, "sample_count": 0 }
+    "apply_rules/ipv4-heavy": {
+      "mean_ns": 2442548.223809524,
+      "std_dev_ns": 210045.1356804257,
+      "sample_count": 100
+    },
+    "apply_rules/mixed-syslog": {
+      "mean_ns": 2354963.157142858,
+      "std_dev_ns": 75511.94042896375,
+      "sample_count": 100
+    },
+    "apply_rules/captures-heavy": {
+      "mean_ns": 5717260.56111111,
+      "std_dev_ns": 48341.82317704206,
+      "sample_count": 100
+    },
+    "passthrough/write_all": {
+      "mean_ns": 1576.259455191859,
+      "std_dev_ns": 30.572182091701478,
+      "sample_count": 100
+    }
   }
 }
