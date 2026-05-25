@@ -419,3 +419,100 @@ styles = { "01" = { fg = "red" } }
     );
     assert!(stderr.contains("\"01\""), "diagnostic must echo the offending key; got: {stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// 10. Named-key user-config: `styles = { scheme = { fg = "cyan" } }` on the
+//     `url` rule resolves via regex.capture_names() to group 1 (first branch
+//     of `(?P<scheme>https?|ssh|ftp)(?P<sep>://)(?P<body>...)`). Output
+//     should carry a cyan SGR (36 or 96, depending on the codebase's Cyan
+//     vs BrightCyan resolution).
+// ---------------------------------------------------------------------------
+#[test]
+fn theme_styles_named_scheme_renders_url_with_cyan_scheme() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    let cfg = write_user_config(
+        xdg.path(),
+        r#"
+[[rules]]
+name = "url"
+styles = { scheme = { fg = "cyan" } }
+"#,
+    );
+
+    let bytes = run_in_pty(
+        xdg.path(),
+        "'Visit https://example.com today'",
+        &["--config", cfg.to_str().expect("utf-8 path")],
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("https"), "scheme bytes must survive: {s:?}");
+    let has_cyan = s.contains("\u{1b}[36m")
+        || s.contains("\u{1b}[36;")
+        || s.contains(";36m")
+        || s.contains(";36;");
+    assert!(has_cyan, "expected a cyan SGR (36) for the `scheme` group in: {s:?}");
+}
+
+// ---------------------------------------------------------------------------
+// 11. Named-key user-config: `styles = { perm_owner = { fg = "red" } }` on
+//     the `permission` rule resolves via regex.capture_names() to group 2
+//     (`(?P<perm_type>...)(?P<perm_owner>[rwxsStT-]{3})...`). The user-rwx
+//     triplet should carry a red SGR (31 or 91).
+// ---------------------------------------------------------------------------
+#[test]
+fn theme_styles_named_perm_owner_renders_permission_with_red_owner() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    let cfg = write_user_config(
+        xdg.path(),
+        r#"
+[[rules]]
+name = "permission"
+styles = { perm_owner = { fg = "red" } }
+"#,
+    );
+
+    let bytes = run_in_pty(
+        xdg.path(),
+        "'drwxr-xr-x file.txt'",
+        &["--config", cfg.to_str().expect("utf-8 path")],
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("rwx"), "owner-rwx triplet must survive: {s:?}");
+    let has_red = s.contains("\u{1b}[31m")
+        || s.contains("\u{1b}[31;")
+        || s.contains(";31m")
+        || s.contains(";31;");
+    assert!(has_red, "expected a red SGR (31) for the `perm_owner` group in: {s:?}");
+}
+
+// ---------------------------------------------------------------------------
+// 12. Named-key user-config: `styles = { date = { fg = "yellow" } }` on the
+//     `timestamp` rule resolves via regex.capture_names() to group 1 of the
+//     ISO branch (`(?P<date>\d{4}-\d{2}-\d{2})...`). The YYYY-MM-DD prefix
+//     should carry a yellow SGR (33 or 93).
+// ---------------------------------------------------------------------------
+#[test]
+fn theme_styles_named_date_renders_timestamp_with_yellow_date() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    let cfg = write_user_config(
+        xdg.path(),
+        r#"
+[[rules]]
+name = "timestamp"
+styles = { date = { fg = "yellow" } }
+"#,
+    );
+
+    let bytes = run_in_pty(
+        xdg.path(),
+        "2026-05-25T12:30:45.123Z",
+        &["--config", cfg.to_str().expect("utf-8 path")],
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("2026-05-25"), "date prefix must survive: {s:?}");
+    let has_yellow = s.contains("\u{1b}[33m")
+        || s.contains("\u{1b}[33;")
+        || s.contains(";33m")
+        || s.contains(";33;");
+    assert!(has_yellow, "expected a yellow SGR (33) for the `date` group in: {s:?}");
+}

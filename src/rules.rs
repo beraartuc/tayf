@@ -2596,4 +2596,73 @@ fg = "red"
             "rule 'ipv4': styles.\"foo\": rule's regex has no named capture groups"
         );
     }
+
+    #[test]
+    fn duplicate_formatter_theme_and_user_paths_byte_identical_diagnostic() {
+        // Regression guard per memory feedback_duplicate_formatter_audit: the
+        // UserConfig path's format!("rule '{}': {kind}", ...) and the Theme path's
+        // theme_errors.push(...).kind.to_string() MUST produce byte-identical
+        // diagnostic strings (modulo the Error envelope).
+        use std::collections::BTreeMap;
+        let style1 = crate::config::UserStyle { fg: Some("red".to_owned()), ..Default::default() };
+        let style2 = crate::config::UserStyle { fg: Some("cyan".to_owned()), ..Default::default() };
+        let mut overrides: BTreeMap<String, crate::config::UserStyle> = BTreeMap::new();
+        overrides.insert("1".to_owned(), style1);
+        overrides.insert("scheme".to_owned(), style2);
+        let regex = compile_test_regex("url");
+        let captures_len = regex.captures_len();
+        let rule = crate::rules::BuiltinRule {
+            name: "url".to_owned(),
+            pattern: find_rule("url"),
+            style: crate::style::Style::DEFAULT,
+            group_styles: vec![None; captures_len.saturating_sub(1)],
+            is_user_supplied: false,
+            styles_override: Some(overrides.clone()),
+            styles_override_from_theme: false,
+        };
+
+        // Theme path: collect into theme_errors vector.
+        let mut theme_errors_t: Vec<crate::error::ThemeRuleError> = Vec::new();
+        let _ = resolve_group_styles_for_rule(
+            &rule,
+            crate::rules::RuleSource::Theme,
+            captures_len,
+            None,
+            &mut theme_errors_t,
+        );
+        assert_eq!(theme_errors_t.len(), 1, "theme path should collect exactly one error");
+        let theme_kind_display = theme_errors_t[0].kind.to_string();
+
+        // UserConfig path: returns Err with format!("rule '{}': {kind}", ...).
+        let mut theme_errors_u: Vec<crate::error::ThemeRuleError> = Vec::new();
+        let err = resolve_group_styles_for_rule(
+            &rule,
+            crate::rules::RuleSource::UserConfig,
+            captures_len,
+            Some("<test-config>"),
+            &mut theme_errors_u,
+        )
+        .unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config, got {err:?}");
+        };
+        // Strip the "rule 'url': " envelope to extract the kind portion.
+        let envelope_prefix = "rule 'url': ";
+        let user_kind_display = message
+            .strip_prefix(envelope_prefix)
+            .unwrap_or_else(|| panic!("UserConfig message missing envelope: {message}"));
+
+        assert_eq!(
+            theme_kind_display, user_kind_display,
+            "Theme and UserConfig paths produced divergent diagnostic strings — \
+             duplicate-formatter discipline broken. \
+             Theme: {theme_kind_display:?} ≠ User: {user_kind_display:?}"
+        );
+
+        // Bonus: byte-pin against the spec §2.4 string.
+        assert_eq!(
+            user_kind_display,
+            "styles.\"1\" and styles.scheme target the same capture group (index 1); set exactly one"
+        );
+    }
 }
