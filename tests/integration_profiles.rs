@@ -96,6 +96,35 @@ fn run_in_pty(xdg: &Path, token: &str, extra_args: &[&str]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
+// Theme-precedence probes — shared helpers (Task 17 / A.10).
+//
+// The 8-cell theme precedence matrix below uses the built-in `ipv4`
+// rule as a probe. `assets/themes/dark.toml` styles ipv4 as
+// `yellow + bold` (SGR 33); `assets/themes/light.toml` styles ipv4 as
+// `red + bold` (SGR 31). The token `192.168.1.1` triggers the rule;
+// the rendered SGR signature distinguishes which theme was active.
+// ---------------------------------------------------------------------------
+
+fn probe_ipv4_sgr(xdg: &Path, args: &[&str]) -> String {
+    let bytes = run_in_pty(xdg, "192.168.1.1", args);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn assert_light_active(s: &str) {
+    let has_red = s.contains("\u{1b}[31") || s.contains(";31;") || s.contains("31m");
+    let has_yellow = s.contains("\u{1b}[33") || s.contains(";33;") || s.contains("33m");
+    assert!(has_red, "expected light theme red SGR on ipv4: {s:?}");
+    assert!(!has_yellow, "must not see dark theme yellow SGR: {s:?}");
+}
+
+fn assert_dark_active(s: &str) {
+    let has_yellow = s.contains("\u{1b}[33") || s.contains(";33;") || s.contains("33m");
+    let has_red = s.contains("\u{1b}[31") || s.contains(";31;") || s.contains("31m");
+    assert!(has_yellow, "expected dark theme yellow SGR on ipv4: {s:?}");
+    assert!(!has_red, "must not see light theme red SGR: {s:?}");
+}
+
+// ---------------------------------------------------------------------------
 // 10. v0.5.2 §8.2 — disk profile load happy path. Profile defines an
 //     `append_rules` entry (new `instance_id` rule with cyan style).
 //     Verify the appended rule is active by checking that its pattern
@@ -142,4 +171,184 @@ style = { fg = "cyan" }
         has_cyan,
         "expected a cyan SGR (36) for the profile-appended `instance_id` rule: {s:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 14. v0.5.2 §8.2 (C-3) — 8-combination theme precedence matrix.
+//     `--theme` (CLI) × `[general] theme` (config) × `theme` (profile)
+//     yields 8 cells. The implementer specification mandates each cell
+//     as a distinct `#[test]` function with a byte-pinned SGR
+//     assertion. See plan Appendix A.10.
+// ---------------------------------------------------------------------------
+
+// Cell 1 of 8: CLI=light, config=dark, profile.theme=dark → light wins.
+#[test]
+fn theme_precedence_cli_wins_over_config_and_profile() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", r#"theme = "dark""#);
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+theme = "dark"
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &["--theme", "light"]);
+    assert_light_active(&s);
+}
+
+// Cell 2 of 8: CLI=light, config=dark, profile.theme=none → light wins.
+#[test]
+fn theme_precedence_cli_wins_over_config_no_profile_theme() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", ""); // empty profile, no theme
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+theme = "dark"
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &["--theme", "light"]);
+    assert_light_active(&s);
+}
+
+// Cell 3 of 8: CLI=light, config=none, profile.theme=dark → light wins.
+#[test]
+fn theme_precedence_cli_wins_over_profile_no_config_theme() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", r#"theme = "dark""#);
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &["--theme", "light"]);
+    assert_light_active(&s);
+}
+
+// Cell 4 of 8: CLI=light, config=none, profile.theme=none → light wins.
+#[test]
+fn theme_precedence_cli_only_no_config_no_profile_theme() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", "");
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &["--theme", "light"]);
+    assert_light_active(&s);
+}
+
+// Cell 5 of 8: CLI=none, config=light, profile.theme=dark → light wins.
+#[test]
+fn theme_precedence_config_wins_over_profile() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", r#"theme = "dark""#);
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+theme = "light"
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &[]);
+    assert_light_active(&s);
+}
+
+// Cell 6 of 8: CLI=none, config=light, profile.theme=none → light wins.
+#[test]
+fn theme_precedence_config_wins_no_profile_theme() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", "");
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+theme = "light"
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &[]);
+    assert_light_active(&s);
+}
+
+// Cell 7 of 8: CLI=none, config=none, profile.theme=light → light wins.
+#[test]
+fn theme_precedence_profile_theme_wins_when_others_unset() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", r#"theme = "light""#);
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &[]);
+    assert_light_active(&s);
+}
+
+// Cell 8 of 8: CLI=none, config=none, profile.theme=none → bg-detect
+// default = dark (with TAYF_DISABLE_BG_DETECT=1 per the run_in_pty
+// helper convention; bg-detect resolves deterministically to Dark).
+#[test]
+fn theme_precedence_bg_detect_default_when_all_unset() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(xdg.path(), "myprofile", "");
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+profile = "myprofile"
+"#,
+    );
+    let s = probe_ipv4_sgr(xdg.path(), &[]);
+    assert_dark_active(&s); // bg-detect fallback resolves to dark per convention
+}
+
+// ---------------------------------------------------------------------------
+// 16. v0.5.2 §8.2 — CLI --profile overrides config [general] profile.
+//     Two disk profiles 'aws' and 'k8s'. CLI passes 'aws'; config sets
+//     'k8s'. Verify the active rule set reflects aws (and NOT k8s).
+// ---------------------------------------------------------------------------
+#[test]
+fn cli_profile_overrides_config_general_profile() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(
+        xdg.path(),
+        "aws",
+        r#"
+[[append_rules]]
+name = "instance_id"
+pattern = '\bi-[a-f0-9]{17}\b'
+style = { fg = "cyan" }
+"#,
+    );
+    write_profile(
+        xdg.path(),
+        "k8s",
+        r#"
+[[append_rules]]
+name = "pod_marker"
+pattern = '\bPOD-[A-Z]{4}\b'
+style = { fg = "magenta" }
+"#,
+    );
+    write_user_config(
+        xdg.path(),
+        r#"[general]
+profile = "k8s"
+"#,
+    );
+
+    // Input contains both the aws-instance_id token AND the k8s-pod_marker
+    // token. CLI --profile aws → aws active → instance_id styled cyan;
+    // k8s's pod_marker MUST NOT be styled (rule was never compiled).
+    let bytes = run_in_pty(xdg.path(), "'i-0123456789abcdef0 POD-ABCD'", &["--profile", "aws"]);
+    let s = String::from_utf8_lossy(&bytes);
+    let has_cyan = s.contains("\u{1b}[36m") || s.contains(";36m") || s.contains(";36;");
+    let has_magenta = s.contains("\u{1b}[35m") || s.contains(";35m") || s.contains(";35;");
+    assert!(has_cyan, "aws profile active → instance_id should be cyan: {s:?}");
+    assert!(!has_magenta, "aws profile active → pod_marker (k8s) should NOT be magenta: {s:?}");
 }
