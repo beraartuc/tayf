@@ -109,7 +109,7 @@ pub(crate) fn synthetic_path(name: &str) -> String {
 
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
 /// the environment for disk discovery; embedded profiles are not
-/// shipped in v0.5.2.
+/// shipped in v0.5.2 (library lands in v0.5.3).
 ///
 /// On success returns [`LoadedProfile`]. On failure returns
 /// [`Error::Profile`] (single-error: `NotFound`, `ParseError`,
@@ -117,7 +117,8 @@ pub(crate) fn synthetic_path(name: &str) -> String {
 /// (fail-collected Phase 1 violations).
 ///
 /// # Errors
-/// See variants of [`ProfileErrorKind`] + [`ProfileRuleErrorKind`].
+/// See variants of [`ProfileErrorKind`] +
+/// [`crate::error::ProfileRuleErrorKind`].
 pub(crate) fn load(name: &str) -> Result<LoadedProfile> {
     load_with(
         name,
@@ -129,24 +130,123 @@ pub(crate) fn load(name: &str) -> Result<LoadedProfile> {
 /// Testable variant of [`load`]; accepts env-var closures so unit
 /// tests can scope `$XDG_CONFIG_HOME` and `$HOME` to a `tempdir`
 /// without mutating the process environment.
-#[cfg_attr(not(test), allow(dead_code))]
-// reason: production callers go through `load`; the env-closure
-// variant exists for unit tests that need to scope discovery to a
-// tempdir without mutating the process environment.
+///
+/// Mirrors `themes::load_with`. Discovery order:
+/// 1. Disk: `<config_base>/profiles/<name>.toml`.
+/// 2. Embedded: none shipped in v0.5.2 (reserved for v0.5.3).
+///
+/// # Errors
+/// See [`load`].
 pub(crate) fn load_with(
     name: &str,
     xdg: impl FnOnce() -> Option<std::path::PathBuf>,
     home: impl FnOnce() -> Option<std::path::PathBuf>,
 ) -> Result<LoadedProfile> {
-    // Stub body — full discovery + canonicalisation + parse +
-    // validate flow lands in Task 3. The skeleton returns
-    // ProfileErrorKind::NotFound unconditionally so lib.rs wiring +
-    // type-checks succeed before Task 3 fills in the body.
-    let _ = (xdg, home);
+    // 1. Name predicate — fail fast on path separators / traversal /
+    //    empty. Defense-in-depth: name reaches us from CLI args or
+    //    config TOML (both adversarial channels). Surface as
+    //    NotFound with empty searched list — the predicate failure
+    //    is the diagnostic.
+    if !name_is_valid(name) {
+        return Err(Error::Profile {
+            name: name.to_owned(),
+            source_path: synthetic_path(name),
+            kind: ProfileErrorKind::NotFound { searched: Vec::new() },
+        });
+    }
+
+    // 2. Resolve `<config_base>` once via the shared helper so
+    //    XDG_CONFIG_HOME / HOME handling stays in lockstep with the
+    //    rest of the crate (config.rs, themes.rs).
+    let base = crate::config::config_base(xdg, home);
+    let mut searched: Vec<std::path::PathBuf> = Vec::new();
+
+    // 3. Disk path candidate. None when neither XDG nor HOME is set.
+    if let Some(base) = base.as_deref() {
+        let profiles_dir = base.join("profiles");
+        let candidate = profiles_dir.join(format!("{name}.toml"));
+        searched.push(candidate.clone());
+
+        if candidate.exists() {
+            // 3a. Canonicalize the candidate + the profiles dir,
+            //     reject anything that resolves outside the dir
+            //     (mirror of themes resolve_disk_path_in_base
+            //     symlink-out gate, CLAUDE.md §3).
+            let canonical_file = std::fs::canonicalize(&candidate).map_err(|e| Error::Profile {
+                name: name.to_owned(),
+                source_path: candidate.display().to_string(),
+                kind: ProfileErrorKind::PathCanonicalization {
+                    path: candidate.clone(),
+                    message: e.to_string(),
+                },
+            })?;
+            let canonical_base =
+                std::fs::canonicalize(&profiles_dir).map_err(|e| Error::Profile {
+                    name: name.to_owned(),
+                    source_path: profiles_dir.display().to_string(),
+                    kind: ProfileErrorKind::PathCanonicalization {
+                        path: profiles_dir.clone(),
+                        message: e.to_string(),
+                    },
+                })?;
+            if !canonical_file.starts_with(&canonical_base) {
+                return Err(Error::Profile {
+                    name: name.to_owned(),
+                    source_path: candidate.display().to_string(),
+                    kind: ProfileErrorKind::PathCanonicalization {
+                        path: canonical_file.clone(),
+                        message: format!(
+                            "profile file must live under {base}; symlinks pointing outside are rejected",
+                            base = canonical_base.display(),
+                        ),
+                    },
+                });
+            }
+
+            // 3b. Regular-file check.
+            let meta = std::fs::metadata(&canonical_file).map_err(|e| Error::Profile {
+                name: name.to_owned(),
+                source_path: candidate.display().to_string(),
+                kind: ProfileErrorKind::PathCanonicalization {
+                    path: canonical_file.clone(),
+                    message: e.to_string(),
+                },
+            })?;
+            if !meta.is_file() {
+                return Err(Error::Profile {
+                    name: name.to_owned(),
+                    source_path: candidate.display().to_string(),
+                    kind: ProfileErrorKind::PathCanonicalization {
+                        path: canonical_file.clone(),
+                        message: "profile path is not a regular file".to_owned(),
+                    },
+                });
+            }
+
+            // 3c. Read + parse.
+            let source = crate::config::read_capped(&candidate)?;
+            let path_label = canonical_file.display().to_string();
+            let profile: Profile = toml::from_str(&source).map_err(|e| Error::Profile {
+                name: name.to_owned(),
+                source_path: path_label.clone(),
+                kind: ProfileErrorKind::ParseError { message: e.to_string() },
+            })?;
+
+            // 3d. Phase 1 fail-collected validation.
+            validate_profile(name, &path_label, &profile)?;
+
+            return Ok(LoadedProfile { profile, path_label });
+        }
+    }
+
+    // 4. Embedded discovery — v0.5.2 ships ZERO profiles. Append the
+    //    synthetic path to `searched` so the NotFound diagnostic
+    //    surfaces both the disk attempt and the embedded namespace.
+    searched.push(std::path::PathBuf::from(synthetic_path(name)));
     Err(Error::Profile {
         name: name.to_owned(),
         source_path: synthetic_path(name),
-        kind: ProfileErrorKind::NotFound { searched: Vec::new() },
+        kind: ProfileErrorKind::NotFound { searched },
     })
 }
 
