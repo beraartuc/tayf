@@ -416,22 +416,27 @@ pub(crate) fn apply_user_rules(
     builtins: &mut Vec<crate::rules::BuiltinRule>,
     user: &[UserRule],
 ) -> Result<()> {
-    apply_user_rules_with_source(path, builtins, user, false)
+    apply_user_rules_with_source(path, builtins, user, crate::rules::RuleSource::UserConfig)
 }
 
 /// Variant of [`apply_user_rules`] that tags any `styles` map writes with
-/// the supplied `from_theme` flag, so `Compiled::load_with_theme` can route
-/// later range/key errors to either [`Error::ThemeValidation`] (theme) or
-/// [`Error::Config`] (user config). The base [`apply_user_rules`] calls
-/// through with `from_theme = false`; the theme layer in
-/// `Compiled::load_with_theme` calls through with `from_theme = true`.
+/// the supplied [`crate::rules::RuleSource`] provenance, so
+/// `Compiled::load_with_theme` can route later range/key errors to the
+/// correct fail-collected envelope ([`Error::ThemeValidation`] for theme,
+/// [`Error::ProfileValidation`] for embedded profile, or fail-fast
+/// [`Error::Config`] for user config). The base [`apply_user_rules`] calls
+/// through with [`crate::rules::RuleSource::UserConfig`]; the theme layer
+/// in `Compiled::load_with_theme` calls through with
+/// [`crate::rules::RuleSource::Theme`]; profile `[[append_rules]]` (Phase 4
+/// Task 11) will call through with
+/// [`crate::rules::RuleSource::EmbeddedProfile`].
 ///
-/// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing).
+/// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), v0.5.2 §4.45.
 pub(crate) fn apply_user_rules_with_source(
     path: &str,
     builtins: &mut Vec<crate::rules::BuiltinRule>,
     user: &[UserRule],
-    from_theme: bool,
+    source: crate::rules::RuleSource,
 ) -> Result<()> {
     let known: std::collections::HashSet<&str> =
         crate::rules::BUILTIN_NAMES.iter().copied().collect();
@@ -496,7 +501,11 @@ pub(crate) fn apply_user_rules_with_source(
             };
             if let Some(p) = &ur.pattern {
                 existing.pattern.clone_from(p);
-                existing.is_user_supplied = true;
+                // Pattern override flips provenance to the caller's source.
+                // A theme overriding a built-in pattern is currently
+                // unreachable (themes can only override the styles map),
+                // but the assignment is symmetric for forward-compat.
+                existing.source = source;
             }
             if let Some(s) = &ur.style {
                 existing.style = s.to_style(path, &ur.name)?;
@@ -510,7 +519,7 @@ pub(crate) fn apply_user_rules_with_source(
             // `rules::resolve_group_styles_for_rule`.
             if ur.styles.is_some() {
                 existing.styles_override.clone_from(&ur.styles);
-                existing.styles_override_from_theme = from_theme;
+                existing.source = source;
             }
         } else {
             // New custom rule — both pattern and style required.
@@ -540,13 +549,12 @@ pub(crate) fn apply_user_rules_with_source(
                 pattern,
                 style,
                 group_styles: Vec::new(),
-                is_user_supplied: true,
                 styles_override: ur.styles.clone(),
                 // New custom rule from theme TOML is currently unreachable —
                 // `themes::validate_theme_rules` rejects names not in
                 // `BUILTIN_NAMES` before this point. We still propagate
-                // `from_theme` for forward-compat (defensive).
-                styles_override_from_theme: from_theme,
+                // `source` for forward-compat (defensive).
+                source,
             });
         }
     }
