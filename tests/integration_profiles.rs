@@ -500,3 +500,41 @@ styles = { bogus = { fg = "red" } }
     );
     assert!(!stderr.contains("theme '"), "must not be ThemeValidation; got: {stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// 13. v0.5.2 §8.2 — user-config [[rules]] takes precedence over
+//     profile.append_rules. Profile defines a rule 'pod_marker';
+//     user-config [[rules]] sets `name = "pod_marker", enabled = false`.
+//     Verify pod_marker is NOT active (no SGR for the matching token).
+// ---------------------------------------------------------------------------
+#[test]
+fn profile_user_config_takes_precedence_over_profile_append_rules() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(
+        xdg.path(),
+        "k8s",
+        r#"
+[[append_rules]]
+name = "pod_marker"
+pattern = '\bPOD-[A-Z]{4}\b'
+style = { fg = "magenta" }
+"#,
+    );
+    write_user_config(
+        xdg.path(),
+        r#"
+[[rules]]
+name = "pod_marker"
+enabled = false
+"#,
+    );
+
+    let bytes = run_in_pty(xdg.path(), "POD-ABCD", &["--profile", "k8s"]);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("POD-ABCD"), "POD token must survive: {s:?}");
+    let has_magenta = s.contains("\u{1b}[35m") || s.contains(";35m") || s.contains(";35;");
+    assert!(
+        !has_magenta,
+        "user-config disable must override profile append_rules: pod_marker should NOT be magenta: {s:?}"
+    );
+}
