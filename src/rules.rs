@@ -896,7 +896,14 @@ fn compile_merged_rules(
 /// `captures_len == 1` and any non-empty `styles_override` map is
 /// out-of-range by definition.
 ///
-/// Spec ref: §3.6, §1.3.5, Rev2 I-1, Rev2 Karar 27.
+/// Spec ref: §3.6, §1.3.5, Rev2 I-1, Rev2 Karar 27, v0.5.0 §2.3.
+// reason: explicit three-step dispatch (zero / all-digit / named) × three
+// provenance arms (Theme / UserConfig / Builtin) × four error paths
+// (zero, malformed, out-of-range, name-unknown, duplicate-target) cannot
+// collapse without sacrificing readability or duplicating logic across
+// helpers. The unreachable!() arms carry CLAUDE.md §2-mandated reason
+// strings and are part of the invariant documentation.
+#[allow(clippy::too_many_lines)]
 fn resolve_group_styles_for_rule(
     rule: &BuiltinRule,
     source: RuleSource,
@@ -916,9 +923,45 @@ fn resolve_group_styles_for_rule(
 
     let user_cfg_path_or_sentinel = user_cfg_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
 
+    // Compile the rule's regex once so we can read `capture_names()` for the
+    // named-resolution path (v0.5.0 spec §2.3). The rule's pattern is grammar-
+    // validated at builtin construction time; if compilation fails here for a
+    // Builtin, that's a constructor bug — surface via `unreachable!`.
+    //
+    // Note: this regex compile happens at config-resolve time (config-parse /
+    // theme-load), NOT on the hot path. Caching is not required (Rust senior
+    // reviewer N-3 disposition); the hot path remains `apply_rules`' index-
+    // based dispatch via `Compiled.individuals`.
+    let Ok(regex) = regex::bytes::Regex::new(&rule.pattern) else {
+        match source {
+            RuleSource::UserConfig | RuleSource::Theme => {
+                // Pattern compilation failures are surfaced earlier in the
+                // load pipeline; reaching here means an upstream pre-flight
+                // missed. Return an empty overlay defensively rather than
+                // double-erroring on the same root cause.
+                return Ok(vec![None; captures_len.saturating_sub(1)]);
+            }
+            RuleSource::Builtin => unreachable!(
+                "Builtin rules ship with grammar-valid regex patterns; \
+                 compile failure here would be a constructor bug."
+            ),
+        }
+    };
+
+    // Pre-compute the available named-group list (positional order, `None`
+    // filtered out). Used by both `CaptureGroupNameUnknown` diagnostic
+    // construction AND named-resolution lookup.
+    let available_names: Vec<String> =
+        regex.capture_names().filter_map(|opt| opt.map(String::from)).collect();
+
+    // Per-slot tracker for duplicate-target detection. Indexed by slot
+    // (= group_index - 1). Records the raw key that filled the slot.
+    let mut assigned_by: Vec<Option<String>> = vec![None; captures_len.saturating_sub(1)];
+
     for (key, user_style) in map {
-        // Special-case "0" BEFORE grammar validation: group 0 has a dedicated
-        // diagnostic that points at the `style` field.
+        // -----------------------------------------------------------------
+        // Step 1: literal "0" — group-zero forbidden (existing behavior).
+        // -----------------------------------------------------------------
         if key == "0" {
             match source {
                 RuleSource::Theme => {
@@ -942,50 +985,148 @@ fn resolve_group_styles_for_rule(
             }
         }
 
-        // Grammar check (positive decimal, no leading zeros, `^[1-9][0-9]*$`).
-        let Some(parsed) = crate::config::validate_styles_map_key(key) else {
-            match source {
-                RuleSource::Theme => {
-                    // Already collected by `themes::validate_theme_rules`
-                    // (Phase 1) with the original key bytes. Skip silently.
-                    continue;
+        // -----------------------------------------------------------------
+        // Step 2: all-digit key → positional path (existing grammar gate).
+        // CRITICAL: the `None` branch MUST NOT fall through to Step 3. The
+        // regression-guard test
+        // `dispatch_malformed_digit_key_emits_key_malformed_not_name_unknown`
+        // pins "01" → KeyMalformed (Rust senior reviewer I-1 absorb).
+        // -----------------------------------------------------------------
+        let resolved_idx: usize = if key.bytes().all(|b| b.is_ascii_digit()) {
+            let Some(parsed) = crate::config::validate_styles_map_key(key) else {
+                match source {
+                    RuleSource::Theme => {
+                        // Already collected by `themes::validate_theme_rules`
+                        // (Phase 1) with the original key bytes. Skip silently.
+                        continue;
+                    }
+                    RuleSource::UserConfig => {
+                        let kind = crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed {
+                            key: key.to_owned(),
+                        };
+                        return Err(Error::Config {
+                            path: user_cfg_path_or_sentinel.to_owned(),
+                            line: 0,
+                            message: format!("rule '{}': {kind}", rule.name),
+                        });
+                    }
+                    RuleSource::Builtin => unreachable!(
+                        "Builtin rules ship with grammar-valid styles keys (validated at \
+                         constructor time via builtin_rules()); this arm is reachable only \
+                         through UserConfig/Theme paths handled above."
+                    ),
                 }
-                RuleSource::UserConfig => {
-                    let kind = crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed {
-                        key: key.to_owned(),
-                    };
-                    return Err(Error::Config {
-                        path: user_cfg_path_or_sentinel.to_owned(),
-                        line: 0,
-                        message: format!("rule '{}': {kind}", rule.name),
-                    });
+            };
+
+            // Range check: key must be < captures_len. `captures_len` is
+            // 1 + group_count, so valid integer keys are 1..=captures_len-1.
+            if parsed >= captures_len {
+                match source {
+                    RuleSource::Theme => {
+                        theme_errors.push(crate::error::ThemeRuleError {
+                            rule_name: rule.name.clone(),
+                            kind: crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
+                                group: parsed,
+                                captures_len,
+                            },
+                        });
+                        continue;
+                    }
+                    RuleSource::UserConfig => {
+                        let kind = crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
+                            group: parsed,
+                            captures_len,
+                        };
+                        return Err(Error::Config {
+                            path: user_cfg_path_or_sentinel.to_owned(),
+                            line: 0,
+                            message: format!("rule '{}': {kind}", rule.name),
+                        });
+                    }
+                    RuleSource::Builtin => unreachable!(
+                        "Builtin rules ship with capture-group indices < captures_len \
+                         (validated at constructor time via builtin_rules()); this arm is \
+                         reachable only through UserConfig/Theme paths handled above."
+                    ),
                 }
-                RuleSource::Builtin => unreachable!(
-                    "Builtin rules ship with grammar-valid styles keys (validated at \
-                     constructor time via builtin_rules()); this arm is reachable only \
-                     through UserConfig/Theme paths handled above."
-                ),
             }
+            parsed
+        } else {
+            // -------------------------------------------------------------
+            // Step 3: non-digit key → named resolution via `capture_names()`.
+            // -------------------------------------------------------------
+            // Find the 1-based group index whose `capture_names()` entry
+            // matches `key`. Group 0 (the whole match) has `None` name, so
+            // iter index == group index.
+            let lookup = regex
+                .capture_names()
+                .enumerate()
+                .find_map(|(i, opt)| opt.filter(|n| *n == key.as_str()).map(|_| i));
+            let Some(idx) = lookup else {
+                match source {
+                    RuleSource::Theme => {
+                        theme_errors.push(crate::error::ThemeRuleError {
+                            rule_name: rule.name.clone(),
+                            kind: crate::error::ThemeRuleErrorKind::CaptureGroupNameUnknown {
+                                name: key.to_owned(),
+                                available: available_names.clone(),
+                            },
+                        });
+                        continue;
+                    }
+                    RuleSource::UserConfig => {
+                        let kind = crate::error::ThemeRuleErrorKind::CaptureGroupNameUnknown {
+                            name: key.to_owned(),
+                            available: available_names.clone(),
+                        };
+                        return Err(Error::Config {
+                            path: user_cfg_path_or_sentinel.to_owned(),
+                            line: 0,
+                            message: format!("rule '{}': {kind}", rule.name),
+                        });
+                    }
+                    RuleSource::Builtin => unreachable!(
+                        "Builtin rules ship with styles_override == None; named-key \
+                         resolution unreachable for Builtin source."
+                    ),
+                }
+            };
+            idx
         };
 
-        // Range check: key must be < captures_len. `captures_len` is
-        // 1 + group_count, so valid integer keys are 1..=captures_len-1.
-        if parsed >= captures_len {
+        // -----------------------------------------------------------------
+        // Duplicate-target check. Both positional and named keys can reach
+        // this point; a clash arises when one of each resolves to the same
+        // slot (Rust senior reviewer I-3 absorb).
+        // -----------------------------------------------------------------
+        let slot_idx = resolved_idx - 1;
+        if let Some(prior_key) = &assigned_by[slot_idx] {
+            let prior_is_positional = prior_key.bytes().all(|b| b.is_ascii_digit());
+            let current_is_positional = key.bytes().all(|b| b.is_ascii_digit());
+            let (positional, named) = match (prior_is_positional, current_is_positional) {
+                (true, false) => (prior_key.clone(), key.to_owned()),
+                (false, true) => (key.to_owned(), prior_key.clone()),
+                _ => unreachable!(
+                    "two positional keys cannot collide (TOML rejects duplicate keys at \
+                     parse time); two named keys cannot resolve to the same index (the \
+                     `regex` crate forbids duplicate group names within a single Regex)."
+                ),
+            };
             match source {
                 RuleSource::Theme => {
                     theme_errors.push(crate::error::ThemeRuleError {
                         rule_name: rule.name.clone(),
-                        kind: crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
-                            group: parsed,
-                            captures_len,
+                        kind: crate::error::ThemeRuleErrorKind::CaptureGroupDuplicateTarget {
+                            positional,
+                            named,
                         },
                     });
                     continue;
                 }
                 RuleSource::UserConfig => {
-                    let kind = crate::error::ThemeRuleErrorKind::CaptureGroupIndexOutOfRange {
-                        group: parsed,
-                        captures_len,
+                    let kind = crate::error::ThemeRuleErrorKind::CaptureGroupDuplicateTarget {
+                        positional,
+                        named,
                     };
                     return Err(Error::Config {
                         path: user_cfg_path_or_sentinel.to_owned(),
@@ -994,17 +1135,19 @@ fn resolve_group_styles_for_rule(
                     });
                 }
                 RuleSource::Builtin => unreachable!(
-                    "Builtin rules ship with capture-group indices < captures_len \
-                     (validated at constructor time via builtin_rules()); this arm is \
-                     reachable only through UserConfig/Theme paths handled above."
+                    "Builtin rules ship with styles_override == None; duplicate-target \
+                     unreachable for Builtin source."
                 ),
             }
         }
 
         let style = user_style.to_style(user_cfg_path_or_sentinel, &rule.name)?;
-        // parsed >= 1 (grammar excludes "0" and leading zeros), so the
-        // subtraction is safe; index is < captures_len - 1 == vec.len().
-        vec[parsed - 1] = Some(style);
+        // `resolved_idx >= 1` (grammar excludes "0" and leading zeros; named
+        // resolution returns the iter-position which is >= 1 for any non-
+        // group-0 name), so the subtraction is safe; index is
+        // < captures_len - 1 == vec.len().
+        vec[slot_idx] = Some(style);
+        assigned_by[slot_idx] = Some(key.to_owned());
     }
     Ok(vec)
 }
@@ -2109,10 +2252,19 @@ fg = "red"
     fn compiled_load_with_theme_sanitizes_malformed_styles_key_in_user_config() {
         use crate::config::{Config, GeneralSection, UserRule, UserStyle};
         use std::collections::BTreeMap;
-        // Adversarial key: leading zero (grammar fail) + BEL control byte.
+        // Adversarial key: leading zero + BEL control byte + non-digit suffix.
         // Before Fix A2: raw key leaks BEL into Error::Config.message.
         // After Fix A2: routed through sanitize_for_display, BEL becomes
         // literal "\x07" text (4 ASCII chars), no raw 0x07 byte in message.
+        //
+        // v0.5.0 dispatch change: a key with non-digit bytes is routed
+        // through the named-resolution path (Step 3) per spec §2.3 — the
+        // diagnostic surfaces as CaptureGroupNameUnknown (not
+        // CaptureGroupKeyMalformed which is reserved for all-digit grammar
+        // failures like "01" or "00"). The sanitization invariant is the
+        // core contract this test defends and it holds across both paths:
+        // sanitize_for_display is applied to user-supplied bytes in every
+        // ThemeRuleErrorKind Display arm that echoes a key/name.
         let mut user_styles: BTreeMap<String, UserStyle> = BTreeMap::new();
         user_styles.insert(
             "0\x07evil".to_owned(),
@@ -2137,10 +2289,10 @@ fg = "red"
         .expect_err("should fail with Config");
         if let crate::error::Error::Config { message, .. } = &err {
             assert!(message.contains("rule 'ipv4'"), "got: {message}");
-            assert!(
-                message.contains("capture-group key must be a positive decimal"),
-                "got: {message}"
-            );
+            // v0.5.0 dispatch: non-digit key → named-resolution miss
+            // diagnostic; ipv4 has no named groups so the empty-available
+            // specialization fires (spec §2.4).
+            assert!(message.contains("rule's regex has no named capture groups"), "got: {message}");
             // Regression guard: raw BEL byte (0x07) must not appear; the
             // Display impl routes the key through sanitize_for_display.
             assert!(!message.as_bytes().contains(&0x07), "raw control byte leaked: {message:?}");
@@ -2218,5 +2370,230 @@ fg = "red"
         assert!(g[2].is_none(), "group 3 inherits rule default");
         assert!(g[3].is_none(), "group 4 inherits rule default");
         assert!(c.uses_capture_styling[idx], "any-Some scan must flip the cache");
+    }
+
+    // -------------------------------------------------------------------
+    // v0.5.0 dispatch tests — exercise resolve_group_styles_for_rule's
+    // three-step dispatch (zero → all-digit positional → named) with NO
+    // fall-through, plus duplicate-target detection. See spec §2.3, §5.2.
+    // -------------------------------------------------------------------
+
+    fn compile_test_regex(name: &str) -> regex::bytes::Regex {
+        let pattern = find_rule(name);
+        regex::bytes::Regex::new(&pattern).expect("built-in pattern compiles")
+    }
+
+    fn dispatch_user_config_single_style(
+        rule_name: &str,
+        key: &str,
+        user_style: crate::config::UserStyle,
+    ) -> std::result::Result<Vec<Option<crate::style::Style>>, crate::error::Error> {
+        use std::collections::BTreeMap;
+        let mut overrides: BTreeMap<String, crate::config::UserStyle> = BTreeMap::new();
+        overrides.insert(key.to_owned(), user_style);
+        let regex = compile_test_regex(rule_name);
+        let captures_len = regex.captures_len();
+        let rule = BuiltinRule {
+            name: rule_name.to_owned(),
+            pattern: find_rule(rule_name),
+            style: crate::style::Style::DEFAULT,
+            group_styles: vec![None; captures_len.saturating_sub(1)],
+            is_user_supplied: false,
+            styles_override: Some(overrides),
+            styles_override_from_theme: false,
+        };
+        let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
+        resolve_group_styles_for_rule(
+            &rule,
+            RuleSource::UserConfig,
+            captures_len,
+            Some("<test-config>"),
+            &mut theme_errors,
+        )
+    }
+
+    #[test]
+    fn dispatch_zero_key_emits_zero_forbidden() {
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("url", "0", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert!(message.contains("group 0 is the entire match"), "got: {message}");
+    }
+
+    #[test]
+    fn dispatch_all_digit_key_resolves_positional() {
+        let style = crate::config::UserStyle { fg: Some("red".to_owned()), ..Default::default() };
+        let result =
+            dispatch_user_config_single_style("url", "1", style).expect("positional resolve");
+        assert!(result[0].is_some(), "group 1 slot must be filled");
+        assert!(result[1].is_none(), "group 2 slot must remain default");
+    }
+
+    #[test]
+    fn dispatch_malformed_digit_key_emits_key_malformed_not_name_unknown() {
+        // Critical regression guard for Rust senior I-1 absorb.
+        // "01" must hit the KeyMalformed grammar gate, NOT fall through to
+        // named resolution.
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("url", "01", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert!(
+            message.contains("capture-group key must be a positive decimal"),
+            "expected KeyMalformed diagnostic, got: {message}"
+        );
+        assert!(
+            !message.contains("no capture group named"),
+            "MUST NOT fall through to CaptureGroupNameUnknown: {message}"
+        );
+    }
+
+    #[test]
+    fn dispatch_named_key_resolves_via_capture_names() {
+        let style = crate::config::UserStyle { fg: Some("cyan".to_owned()), ..Default::default() };
+        let result =
+            dispatch_user_config_single_style("url", "scheme", style).expect("named resolve");
+        // url's group 1 is `scheme` per Task 3 retrofit; slot 0 (1-based
+        // group 1) filled.
+        assert!(result[0].is_some(), "group 'scheme' (index 1) slot must be filled");
+    }
+
+    #[test]
+    fn dispatch_unknown_name_emits_name_unknown_with_available_byte_exact() {
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("url", "foo", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        // Error::Config { message } stores ONLY the inner
+        // format!("rule '{}': {kind}", ...) string — the "config error in
+        // <path>: " envelope is added by thiserror's Display impl on
+        // Error::Config and is NOT part of the `message` field.
+        assert_eq!(
+            message,
+            "rule 'url': styles.\"foo\": rule's regex has no capture group named 'foo' (available: scheme, sep, body)"
+        );
+    }
+
+    #[test]
+    fn dispatch_duplicate_positional_named_emits_duplicate_target() {
+        use std::collections::BTreeMap;
+        let style1 = crate::config::UserStyle { fg: Some("red".to_owned()), ..Default::default() };
+        let style2 = crate::config::UserStyle { fg: Some("cyan".to_owned()), ..Default::default() };
+        let mut overrides: BTreeMap<String, crate::config::UserStyle> = BTreeMap::new();
+        overrides.insert("1".to_owned(), style1);
+        overrides.insert("scheme".to_owned(), style2);
+        let regex = compile_test_regex("url");
+        let captures_len = regex.captures_len();
+        let rule = BuiltinRule {
+            name: "url".to_owned(),
+            pattern: find_rule("url"),
+            style: crate::style::Style::DEFAULT,
+            group_styles: vec![None; captures_len.saturating_sub(1)],
+            is_user_supplied: false,
+            styles_override: Some(overrides),
+            styles_override_from_theme: false,
+        };
+        let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
+        let err = resolve_group_styles_for_rule(
+            &rule,
+            RuleSource::UserConfig,
+            captures_len,
+            Some("<test-config>"),
+            &mut theme_errors,
+        )
+        .unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert_eq!(
+            message,
+            "rule 'url': styles.\"1\" and styles.scheme target the same capture group (index 1); set exactly one"
+        );
+    }
+
+    #[test]
+    fn available_order_is_positional_left_to_right_for_url() {
+        // Construct an unknown-name error against the url rule and inspect
+        // the available list ordering — must be ["scheme", "sep", "body"],
+        // NOT alphabetical (which would be ["body", "scheme", "sep"]).
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("url", "foo", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        let alpha_substr = "(available: body, scheme, sep)";
+        let positional_substr = "(available: scheme, sep, body)";
+        assert!(
+            message.contains(positional_substr),
+            "expected positional ordering, got: {message}"
+        );
+        assert!(!message.contains(alpha_substr), "MUST NOT be alphabetical ordering");
+    }
+
+    #[test]
+    fn available_order_for_timestamp_skips_capture_free_branches() {
+        // timestamp has 4 alternation branches; only ISO has named groups.
+        // available must list ["date", "sep", "time", "ms", "tz"] (positional
+        // order of the ISO branch); the other 3 branches contribute no names
+        // by construction.
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("timestamp", "foo", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert!(
+            message.contains("(available: date, sep, time, ms, tz)"),
+            "expected ISO-branch positional ordering, got: {message}"
+        );
+    }
+
+    #[test]
+    fn available_order_for_permission_uses_perm_prefix_names() {
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("permission", "foo", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert!(
+            message.contains("(available: perm_type, perm_owner, perm_group, perm_other)"),
+            "expected perm_ prefixed names in positional order, got: {message}"
+        );
+    }
+
+    #[test]
+    fn dispatch_user_style_to_style_fails_on_invalid_color_after_name_resolved() {
+        // Sanity: a valid name + invalid color must still surface as a
+        // color-parse error, not get masked by name-resolution success.
+        // Confirms the dispatch order doesn't swallow downstream errors.
+        let style =
+            crate::config::UserStyle { fg: Some("not-a-color".to_owned()), ..Default::default() };
+        let err = dispatch_user_config_single_style("url", "scheme", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert!(
+            message.contains("not-a-color") || message.contains("color"),
+            "expected color-parse error, got: {message}"
+        );
+    }
+
+    #[test]
+    fn dispatch_named_key_on_pattern_with_no_named_groups_emits_empty_available() {
+        // Use a built-in with NO named capture groups (ipv4 — has no capture
+        // groups at all) to exercise the empty-available specialization
+        // (spec §2.4 Display arm).
+        let style = crate::config::UserStyle::default();
+        let err = dispatch_user_config_single_style("ipv4", "foo", style).unwrap_err();
+        let crate::error::Error::Config { message, .. } = err else {
+            panic!("expected Error::Config");
+        };
+        assert_eq!(
+            message,
+            "rule 'ipv4': styles.\"foo\": rule's regex has no named capture groups"
+        );
     }
 }
