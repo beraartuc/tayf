@@ -67,6 +67,33 @@ pub enum ThemeRuleErrorKind {
         /// The rule's regex `captures_len()` (group count + 1).
         captures_len: usize,
     },
+    /// A `styles` map key references a regex group name that is not present
+    /// in the rule's compiled regex. `name` is the user-supplied key
+    /// (sanitized by the `Display` impl). `available` lists the regex's
+    /// actual named groups in `capture_names()` positional order
+    /// (left-to-right, `None` filtered out). An empty `available` means
+    /// the regex has no named groups at all (the regex's capture groups
+    /// are all positional, e.g., a user rule that uses `(...)` without
+    /// `(?P<name>...)`). See spec §2.4 + reviewer I-2/I-4.
+    CaptureGroupNameUnknown {
+        /// The raw `styles` map key as written in the user's TOML
+        /// (sanitized in the `Display` impl).
+        name: String,
+        /// Named groups in the regex, in `capture_names()` positional
+        /// order (left-to-right). Empty when the regex has no named groups.
+        available: Vec<String>,
+    },
+    /// A `styles` map defines two keys that resolve to the same capture-
+    /// group index: one numeric (positional, e.g., `"1"`) and one named
+    /// (e.g., `"scheme"`). Set exactly one. Within a single regex the
+    /// `regex` crate forbids duplicate named groups, so this variant only
+    /// arises from a positional/named clash. See spec §2.4 + reviewer I-3.
+    CaptureGroupDuplicateTarget {
+        /// The numeric (positional) form of the key (e.g., `"1"`).
+        positional: String,
+        /// The named form of the key (e.g., `"scheme"`).
+        named: String,
+    },
 }
 
 impl std::fmt::Display for ThemeRuleErrorKind {
@@ -111,6 +138,44 @@ impl std::fmt::Display for ThemeRuleErrorKind {
                         n
                     )
                 }
+            }
+            Self::CaptureGroupNameUnknown { name, available } => {
+                if available.is_empty() {
+                    write!(
+                        f,
+                        "styles.\"{}\": rule's regex has no named capture groups",
+                        sanitize_for_display(name)
+                    )
+                } else {
+                    write!(
+                        f,
+                        "styles.\"{}\": rule's regex has no capture group named '{}' (available: {})",
+                        sanitize_for_display(name),
+                        sanitize_for_display(name),
+                        available
+                            .iter()
+                            .map(|s| sanitize_for_display(s))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
+            Self::CaptureGroupDuplicateTarget { positional, named } => {
+                // `positional` is grammar-validated numeric (1..N) — parsing
+                // here is safe; emit as integer so the diagnostic reads
+                // "index N" without extra quoting. If parsing somehow fails
+                // (shouldn't, given grammar gate upstream), fall back to the
+                // sanitized raw string.
+                let idx_display: String = positional
+                    .parse::<usize>()
+                    .map_or_else(|_| sanitize_for_display(positional), |n| n.to_string());
+                write!(
+                    f,
+                    "styles.\"{}\" and styles.{} target the same capture group (index {}); set exactly one",
+                    sanitize_for_display(positional),
+                    sanitize_for_display(named),
+                    idx_display
+                )
             }
         }
     }
@@ -721,5 +786,38 @@ mod tests {
         let s = e.to_string();
         assert!(!s.contains('\x1b'), "raw ESC must not survive: {s:?}");
         assert!(s.contains("\\x1b"), "ESC must be escaped: {s:?}");
+    }
+
+    #[test]
+    fn display_capture_group_name_unknown_with_available_byte_exact() {
+        let kind = ThemeRuleErrorKind::CaptureGroupNameUnknown {
+            name: "foo".to_owned(),
+            available: vec!["scheme".to_owned(), "sep".to_owned(), "body".to_owned()],
+        };
+        assert_eq!(
+            kind.to_string(),
+            "styles.\"foo\": rule's regex has no capture group named 'foo' (available: scheme, sep, body)"
+        );
+    }
+
+    #[test]
+    fn display_capture_group_name_unknown_empty_available_byte_exact() {
+        let kind = ThemeRuleErrorKind::CaptureGroupNameUnknown {
+            name: "foo".to_owned(),
+            available: vec![],
+        };
+        assert_eq!(kind.to_string(), "styles.\"foo\": rule's regex has no named capture groups");
+    }
+
+    #[test]
+    fn display_capture_group_duplicate_target_byte_exact() {
+        let kind = ThemeRuleErrorKind::CaptureGroupDuplicateTarget {
+            positional: "1".to_owned(),
+            named: "date".to_owned(),
+        };
+        assert_eq!(
+            kind.to_string(),
+            "styles.\"1\" and styles.date target the same capture group (index 1); set exactly one"
+        );
     }
 }
