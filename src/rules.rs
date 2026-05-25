@@ -102,14 +102,6 @@ pub(crate) enum RuleSource {
     /// it is not the original built-in. Range/key errors collect into a
     /// `Vec<ProfileRuleError>` for a single fail-collected
     /// [`Error::ProfileValidation`] at loop end. v0.5.2.
-    #[allow(dead_code)]
-    // reason: the variant is consumed only at sites that v0.5.2 lights up
-    // incrementally. Phase 3 Task 8 adds the variant + dispatch arms;
-    // Phase 3 Task 9 adds the byte-pin dispatch tests that construct it
-    // directly; Phase 4 Task 11 wires the profile-load path that produces
-    // it in production. The `dead_code` lint fires until Task 11 lands
-    // because Task 8 only paths are exhaustive matching (the variant is
-    // matched but never constructed in non-test code yet).
     EmbeddedProfile,
 }
 
@@ -674,19 +666,26 @@ impl Compiled {
         profile_path: Option<&str>,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
-        // Task 10 (Phase 4): signature scaffold only. The `profile` +
-        // `profile_path` params are accepted but unused in the body; Task
-        // 11 wires them into rule merge order Steps 2 + 4. Until then,
-        // passing `Some(_)` is byte-equivalent to passing `None` (no-op
-        // in this commit's body).
-        let _ = profile;
-        let _ = profile_path;
         let mut rules = builtin_rules();
 
-        // Layer 1: optional preset theme. Applied BEFORE the user config so
-        // user rules win on conflict (spec §2 decision 5). Validation runs
-        // BEFORE the merge so semantic errors surface against the synthetic
-        // theme path rather than mutating the rule set first.
+        // Step 2 (v0.5.2 §5.4) — profile.rules whitelist filter. Applied
+        // AFTER built-ins and BEFORE the theme layer so theme overrides
+        // only target the surviving rule set. `None` keeps all built-ins
+        // (v0.5.1 default). Unknown names in the whitelist were caught at
+        // `profiles::validate_profile` (Phase 1), so any name here that
+        // does not match a built-in is by definition unreachable; the
+        // `retain` simply drops non-listed built-ins.
+        if let Some(profile_def) = profile {
+            if let Some(whitelist) = profile_def.rules.as_ref() {
+                rules.retain(|r| whitelist.iter().any(|w| w == &r.name));
+            }
+        }
+
+        // Layer 3 (Step 3 in spec §5.4): optional preset theme. Applied
+        // BEFORE the user config so user rules win on conflict (spec §2
+        // decision 5). Validation runs BEFORE the merge so semantic
+        // errors surface against the synthetic theme path rather than
+        // mutating the rule set first.
         if let Some((name, loaded)) = loaded_theme {
             let theme_cfg = crate::config::parse(&loaded.path_label, &loaded.source)?;
             crate::themes::validate_theme_rules(name, &loaded.path_label, &theme_cfg)?;
@@ -700,11 +699,43 @@ impl Compiled {
             )?;
         }
 
-        // Layer 2: user config. `RuleSource::UserConfig` — user-config writes
-        // overwrite any prior theme-tagged `styles_override` (REPLACE
-        // semantics, Rev2 Karar 27), and any subsequent range/key errors
-        // surface as `Error::Config` so the user sees them on their own
-        // config path.
+        // Step 4 (v0.5.2 §5.4) — profile.append_rules. Each entry is a NEW
+        // rule with `RuleSource::EmbeddedProfile` so range/key validation
+        // routes into the fail-collected `Vec<ProfileRuleError>` ->
+        // `Error::ProfileValidation` envelope. Name-collision checks
+        // (with built-ins and within `append_rules`) were performed in
+        // Phase 1 `profiles::validate_profile`; pattern compile +
+        // styles-key dispatch happen in Step 6 (`compile_merged_rules`).
+        //
+        // Note ordering: append_rules land AFTER the theme layer but
+        // BEFORE user-config, so user-config still has last-writer-wins
+        // semantics over profile-appended rules (a user override of an
+        // appended rule name behaves identically to overriding a
+        // built-in — `apply_user_rules_with_source` finds it and
+        // mutates in place).
+        if let Some(profile_def) = profile {
+            let path_for_diag = profile_path.filter(|p| !p.is_empty()).unwrap_or("<profile>");
+            for ar in &profile_def.append_rules {
+                let style = match &ar.style {
+                    Some(us) => us.to_style(path_for_diag, &ar.name)?,
+                    None => crate::style::Style::default(),
+                };
+                rules.push(BuiltinRule {
+                    name: ar.name.clone(),
+                    pattern: ar.pattern.clone(),
+                    style,
+                    group_styles: Vec::new(),
+                    styles_override: ar.styles.clone(),
+                    source: RuleSource::EmbeddedProfile,
+                });
+            }
+        }
+
+        // Step 5 (v0.5.2 §5.4) — user config. `RuleSource::UserConfig`:
+        // user-config writes overwrite any prior theme- or profile-tagged
+        // `styles_override` (REPLACE semantics, Rev2 Karar 27), and any
+        // subsequent range/key errors surface as `Error::Config` so the
+        // user sees them on their own config path.
         if let Some(c) = config {
             // `config_path` flows into Error::Config messages produced inside
             // apply_user_rules (and any nested UserStyle::to_style call) so
@@ -721,12 +752,21 @@ impl Compiled {
 
         let theme_name = loaded_theme.map(|(n, _)| n);
         let theme_path = loaded_theme.map(|(_, l)| l.path_label.as_str());
-        // Phase 3: no caller threads a profile into `build_from_loaded`
-        // yet — every rule has `source != EmbeddedProfile`, so the
-        // profile-error sink stays empty. Phase 4 Task 11 wires the
-        // profile context through `Compiled::load_with_theme`.
-        let compiled_rules =
-            compile_merged_rules(&rules, config_path, theme_name, theme_path, None, None)?;
+        // Profile diagnostic context: surface a user-facing name derived
+        // from the path label (file stem for disk paths, the
+        // <embedded:profile/{name}> suffix for embedded). The path label
+        // itself is the canonical source location surfaced in
+        // `Error::ProfileValidation::source_path`.
+        let profile_name_owned = profile_path.map(profile_name_from_path_label);
+        let profile_name = profile_name_owned.as_deref();
+        let compiled_rules = compile_merged_rules(
+            &rules,
+            config_path,
+            theme_name,
+            theme_path,
+            profile_name,
+            profile_path,
+        )?;
 
         // Karar 11: snapshot config value into Compiled so reads happen at
         // line boundary via ArcSwap<Compiled>, no separate atomic needed.
@@ -780,6 +820,32 @@ impl Compiled {
             }
         }
     }
+}
+
+/// Derive a user-facing profile name from a profile source-path label.
+///
+/// `<embedded:profile/{name}>` → `{name}`. A disk path ending in
+/// `<...>/{name}.toml` → `{name}`. Anything else falls back to the
+/// label itself (defensive — non-canonical labels reach this helper
+/// only via internal mis-wiring).
+///
+/// The profile name surfaces in [`Error::ProfileValidation::profile`]
+/// and [`Error::Profile::name`]; `source_path` carries the full label
+/// separately so downstream diagnostics can show both
+/// "`profile 'myaws' validation failed (loaded from /path/...)`".
+fn profile_name_from_path_label(label: &str) -> String {
+    // Synthetic embedded label: <embedded:profile/{name}>
+    if let Some(rest) = label.strip_prefix("<embedded:profile/") {
+        if let Some(name) = rest.strip_suffix('>') {
+            return name.to_owned();
+        }
+    }
+    // Disk path: take the file stem (basename minus `.toml`).
+    let basename = label.rsplit(std::path::MAIN_SEPARATOR).next().unwrap_or(label);
+    if let Some(stem) = basename.strip_suffix(".toml") {
+        return stem.to_owned();
+    }
+    label.to_owned()
 }
 
 /// Map a regex-compile error to a user-facing [`Error`] variant keyed by the
