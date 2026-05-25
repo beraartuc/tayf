@@ -208,13 +208,16 @@ impl Tayf {
             .or_else(|| config_ref.and_then(|c| c.general.theme.clone()))
             .or_else(|| loaded_profile.as_ref().and_then(|lp| lp.profile.theme.clone()));
 
-        let effective_theme: Option<String> = explicit_theme.or_else(|| {
-            if apply_colors {
-                Some(bg_detect::resolve().as_theme_name().to_owned())
-            } else {
-                None
-            }
-        });
+        // bg-detect is resolved ONCE at startup (querying the terminal via
+        // OSC 11 is latency-sensitive). The result is the last-resort
+        // theme fallback for both the startup compile AND every
+        // subsequent hot reload — see `reload::reload_once` `bg_default`
+        // argument. We retain the bg-detect result as a snapshot so the
+        // reload thread can re-resolve the chain without re-querying.
+        let bg_default: Option<String> =
+            if apply_colors { Some(bg_detect::resolve().as_theme_name().to_owned()) } else { None };
+
+        let effective_theme: Option<String> = explicit_theme.or_else(|| bg_default.clone());
 
         let compiled = rules::Compiled::load_with_theme(
             config_ref,
@@ -271,7 +274,15 @@ impl Tayf {
             Some(reload::ReloadOrchestrator::spawn(
                 Arc::clone(&rules),
                 loaded.as_ref().map(|(_, p)| p.clone()),
-                effective_theme.clone(),
+                // v0.5.2: snapshot CLI --theme + --profile at startup;
+                // every reload re-evaluates the full precedence chain
+                // (CLI snapshot > config > profile.theme > bg_default).
+                // bg_default is the bg-detect result resolved once at
+                // startup — used as the last-resort fallback so reloads
+                // don't re-query the terminal (OSC 11 latency).
+                args.theme.clone(),
+                args.profile.clone(),
+                bg_default.clone(),
                 effective_depth,
                 reload_rx,
                 // F3: inject banner sink; production = DevTtySink when

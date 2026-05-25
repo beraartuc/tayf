@@ -91,30 +91,77 @@ use crate::rules::Compiled;
 use crate::terminfo::ColorDepth;
 
 /// Re-load the config from `path` (or rebuild built-ins when `None`),
-/// re-compile the rule set at `depth`, and atomically store the new
+/// re-resolve the FULL precedence chain (profile + theme), re-compile
+/// the rule set at `depth`, and atomically store the new
 /// `Arc<Compiled>` into `handle`.
 ///
-/// On failure (parse error, regex compile error, etc.) the previous
-/// `Arc<Compiled>` remains in `handle` untouched and the error is
-/// returned to the caller.
+/// `theme` and `profile` are CLI snapshots taken at startup
+/// (`--theme` and `--profile`). `bg_default` is the bg-detect result
+/// resolved once at startup (or `None` when colors are disabled);
+/// re-using the startup snapshot avoids querying the terminal on
+/// every reload (OSC 11 latency / flicker) while keeping bg-detect's
+/// fallback role intact. On every reload the precedence chain is
+/// re-resolved:
+///
+/// 1. Re-read user-config (via [`crate::config::load`]).
+/// 2. Effective profile = CLI snapshot OR `config.general.profile`.
+/// 3. Load profile (if any) via [`crate::profiles::load`].
+/// 4. Effective theme = CLI snapshot OR `config.general.theme` OR
+///    `profile.theme` OR `bg_default`.
+/// 5. Compile + atomic swap.
+///
+/// On failure (parse error, regex compile error, profile load
+/// failure, etc.) the previous `Arc<Compiled>` remains in `handle`
+/// untouched and the error is returned to the caller. The reload
+/// thread's loop handles surfacing the error via `warn_msg!` and
+/// suppressing the banner.
 ///
 /// # Errors
-/// Returns any error surfaced by [`crate::config::load`] (with the
-/// caller's explicit `path`) or [`crate::rules::Compiled::load_with_theme`].
+/// Returns any error surfaced by [`crate::config::load`],
+/// [`crate::profiles::load`], or
+/// [`crate::rules::Compiled::load_with_theme`].
 pub(crate) fn reload_once(
     handle: &ArcSwap<Compiled>,
     path: Option<&Path>,
     theme: Option<&str>,
+    profile: Option<&str>,
+    bg_default: Option<&str>,
     depth: ColorDepth,
 ) -> Result<()> {
-    // Load using the same resolver the initial run used. `config::load`
-    // returns `Some((config, path_loaded_from))` when a file was read,
-    // or `None` when nothing applies.
+    // 1. Re-read user-config using the same resolver the initial run
+    //    used. `config::load` returns `Some((config, path_loaded_from))`
+    //    when a file was read, or `None` when nothing applies.
     let loaded = crate::config::load(path)?;
     let cfg = loaded.as_ref().map(|(c, _)| c);
     let path_str = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
-    let compiled = Compiled::load_with_theme(cfg, path_str.as_deref(), theme, None, None, depth)?;
+    // 2. Effective profile name: CLI snapshot > config.
+    let effective_profile_name: Option<&str> =
+        profile.or_else(|| cfg.and_then(|c| c.general.profile.as_deref()));
+
+    // 3. Load profile (if any). Failure propagates → reload thread
+    //    warns + retains prior valid Compiled.
+    let loaded_profile = match effective_profile_name {
+        Some(name) => Some(crate::profiles::load(name)?),
+        None => None,
+    };
+
+    // 4. Effective theme: CLI snapshot > config > profile.theme >
+    //    bg-detect default (startup snapshot — see fn-level docs).
+    let effective_theme: Option<&str> = theme
+        .or_else(|| cfg.and_then(|c| c.general.theme.as_deref()))
+        .or_else(|| loaded_profile.as_ref().and_then(|lp| lp.profile.theme.as_deref()))
+        .or(bg_default);
+
+    // 5. Compile + atomic swap.
+    let compiled = Compiled::load_with_theme(
+        cfg,
+        path_str.as_deref(),
+        effective_theme,
+        loaded_profile.as_ref().map(|lp| &lp.profile),
+        loaded_profile.as_ref().map(|lp| lp.path_label.as_str()),
+        depth,
+    )?;
     handle.store(Arc::new(compiled));
     Ok(())
 }
@@ -137,13 +184,30 @@ impl ReloadOrchestrator {
     /// `config_path` is the path resolved at startup; it is re-used on
     /// every reload (we do NOT re-walk XDG fallbacks at runtime —
     /// avoids env-race surprises mid-session).
-    /// `theme` is the effective theme resolved at startup (CLI `--theme`
-    /// or `[general] theme`); it is re-applied on every reload so a
-    /// config edit cannot silently drop the active preset.
+    /// `theme` is the CLI `--theme` snapshot taken at startup. It is
+    /// re-applied on every reload so a config edit cannot silently
+    /// drop the active CLI override.
+    /// `profile` is the CLI `--profile` snapshot taken at startup
+    /// (v0.5.2). Like `theme` it is a one-shot startup override that
+    /// every reload re-evaluates against the current config.
+    /// `bg_default` is the bg-detect result snapshotted at startup —
+    /// used as the last-resort theme fallback in [`reload_once`] when
+    /// every higher-precedence source resolves to `None`. We do not
+    /// re-query the terminal on hot reload; the startup result is
+    /// authoritative for the session.
+    // reason: the parameter set mirrors the precedence chain
+    // (`config_path`, `theme`, `profile`, `bg_default`) plus
+    // structural plumbing (`rules_handle`, `depth`, `rx`,
+    // `banner_sink`). Each is a load-bearing dimension of the reload
+    // contract; collapsing into a struct would obscure the call-site
+    // alignment with the spec's precedence rules.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn(
         rules_handle: Arc<ArcSwap<Compiled>>,
         config_path: Option<PathBuf>,
         theme: Option<String>,
+        profile: Option<String>,
+        bg_default: Option<String>,
         depth: ColorDepth,
         rx: Receiver<ReloadRequest>,
         // F3 (v0.3.3): None = banner disabled; Some(sink) = enabled.
@@ -164,6 +228,8 @@ impl ReloadOrchestrator {
                         &rules_handle,
                         config_path.as_deref(),
                         theme.as_deref(),
+                        profile.as_deref(),
+                        bg_default.as_deref(),
                         depth,
                     ) {
                         Ok(()) => {
@@ -243,7 +309,7 @@ style = { fg = "yellow", bold = true }
 "#,
         );
 
-        super::reload_once(&handle, Some(&path), None, ColorDepth::Truecolor).unwrap();
+        super::reload_once(&handle, Some(&path), None, None, None, ColorDepth::Truecolor).unwrap();
 
         let after = handle.load_full();
         assert!(!Arc::ptr_eq(&before, &after), "reload_once must replace the Arc on success");
@@ -257,7 +323,7 @@ style = { fg = "yellow", bold = true }
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "this is = not valid = toml\n");
 
-        let err = super::reload_once(&handle, Some(&path), None, ColorDepth::Truecolor)
+        let err = super::reload_once(&handle, Some(&path), None, None, None, ColorDepth::Truecolor)
             .expect_err("invalid toml must fail reload");
         assert!(matches!(err, crate::error::Error::Config { .. }));
 
@@ -276,7 +342,7 @@ style = { fg = "yellow", bold = true }
 
         let handle =
             Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().expect("builtins compile")));
-        super::reload_once(&handle, None, Some("light"), ColorDepth::Truecolor)
+        super::reload_once(&handle, None, Some("light"), None, None, ColorDepth::Truecolor)
             .expect("reload with theme must succeed");
 
         let compiled = handle.load();
@@ -313,6 +379,8 @@ style = { fg = "yellow" }
             Arc::clone(&handle),
             Some(path.clone()),
             None,
+            None,
+            None,
             ColorDepth::Truecolor,
             rx,
             None, // banner_sink: disabled (v0.3.2 default behavior)
@@ -341,6 +409,8 @@ style = { fg = "yellow" }
         let _orchestrator = super::ReloadOrchestrator::spawn(
             Arc::clone(&handle),
             Some(path),
+            None,
+            None,
             None,
             ColorDepth::Truecolor,
             rx,
@@ -381,6 +451,8 @@ style = { fg = "yellow" }
         let _orchestrator = super::ReloadOrchestrator::spawn(
             Arc::clone(&handle),
             Some(path),
+            None,
+            None,
             None,
             ColorDepth::Truecolor,
             rx,
@@ -423,6 +495,8 @@ style = { fg = "yellow" }
             Arc::clone(&handle),
             Some(path),
             None,
+            None,
+            None,
             ColorDepth::Truecolor,
             rx,
             None,
@@ -452,6 +526,8 @@ style = { fg = "yellow" }
         let _orchestrator = super::ReloadOrchestrator::spawn(
             Arc::clone(&handle),
             Some(path),
+            None,
+            None,
             None,
             ColorDepth::Truecolor,
             rx,
