@@ -516,3 +516,33 @@ styles = { date = { fg = "yellow" } }
         || s.contains(";33;");
     assert!(has_yellow, "expected a yellow SGR (33) for the `date` group in: {s:?}");
 }
+
+// ---------------------------------------------------------------------------
+// 13. v0.5.1 §I-1 — theme TOML named-key happy path. `styles = { date = ... }`
+//     on the `timestamp` rule, routed through a disk theme + `--theme` CLI
+//     flag, must resolve via `regex.capture_names()` (ISO branch slot 1) and
+//     style the YYYY-MM-DD prefix. Mirrors the user-config test 12 (line
+//     494) but exercises the previously dead RuleSource::Theme dispatch arm.
+// ---------------------------------------------------------------------------
+#[test]
+fn theme_toml_named_capture_group_renders_timestamp_with_yellow_date() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_disk_theme(
+        xdg.path(),
+        "named-key-smoke",
+        r#"
+[[rules]]
+name = "timestamp"
+styles = { date = { fg = "yellow" } }
+"#,
+    );
+
+    let bytes = run_in_pty(xdg.path(), "2026-05-25T12:30:45.123Z", &["--theme", "named-key-smoke"]);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("2026-05-25"), "date prefix must survive: {s:?}");
+    let has_yellow = s.contains("\u{1b}[33m")
+        || s.contains("\u{1b}[33;")
+        || s.contains(";33m")
+        || s.contains(";33;");
+    assert!(has_yellow, "expected a yellow SGR (33) for the `date` group via theme TOML: {s:?}");
+}
