@@ -181,6 +181,167 @@ impl std::fmt::Display for ThemeRuleErrorKind {
     }
 }
 
+/// Per-profile load/parse/compile failure classification.
+///
+/// Wrapped by [`Error::Profile`]; for collected per-rule validation
+/// failures see [`Error::ProfileValidation`] + [`ProfileRuleError`].
+///
+/// `#[non_exhaustive]` so future profile load failure modes can be added
+/// without a major version bump. No `Clone` derive — the variants carry
+/// owned `String` messages captured at construction time (matching the
+/// `Error` enum, which also does not derive `Clone`).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProfileErrorKind {
+    /// Neither disk nor embedded source resolved the profile name.
+    /// `searched` lists the absolute paths that were attempted, in
+    /// order, for the diagnostic.
+    NotFound {
+        /// Candidate paths that were tried, in discovery order.
+        searched: Vec<std::path::PathBuf>,
+    },
+    /// TOML deserialization failure on the profile source. `message` is
+    /// captured at construction via `e.to_string()` so the variant does
+    /// not couple the public API to `toml::de::Error`.
+    ParseError {
+        /// `toml::de::Error::to_string()` snapshot.
+        message: String,
+    },
+    /// `std::fs::canonicalize` or downstream path-safety checks failed.
+    /// `message` is captured at construction via `e.to_string()`.
+    PathCanonicalization {
+        /// The non-canonical path the check was attempted against.
+        path: std::path::PathBuf,
+        /// `std::io::Error::to_string()` snapshot.
+        message: String,
+    },
+    /// `regex::Regex::new` rejected an `append_rules` entry's pattern.
+    /// Profile authors fix one pattern at a time; fail-fast (not
+    /// collected). Pattern bytes go through [`sanitize_for_display`] in
+    /// the wrapper to honour CLAUDE.md §3 BEL-leak invariant.
+    RegexCompile {
+        /// The offending profile rule's `name` field.
+        rule_name: String,
+        /// The raw pattern (sanitized by the Display wrapper).
+        pattern: String,
+        /// `regex::Error::to_string()` snapshot.
+        message: String,
+    },
+}
+
+/// A single per-rule validation failure inside a profile. Bundled into
+/// [`Error::ProfileValidation::errors`] when one or more issues are found.
+///
+/// Surfaced from [`crate::profiles::validate_profile`] (Phase 1) and the
+/// capture-group key dispatch path in `Compiled::load_with_theme` (Phase 2,
+/// landing in v0.5.2 Phase 3 work).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRuleError {
+    /// The offending rule's `name` field, copied verbatim from the TOML.
+    /// Sentinels: `"<rules>"` for [`ProfileRuleErrorKind::RuleUnknown`]
+    /// (where the offending entry is a whitelist name, not an
+    /// `append_rules` entry); `"<theme>"` for
+    /// [`ProfileRuleErrorKind::ThemeNameInvalid`].
+    pub rule_name: String,
+    /// What's wrong.
+    pub kind: ProfileRuleErrorKind,
+}
+
+/// Classification of a [`ProfileRuleError`].
+///
+/// Phase 1 ([`crate::profiles::validate_profile`]) collects the first
+/// five variants. Phase 2 (capture-group key dispatch in
+/// `Compiled::load_with_theme`) collects [`Self::StylesKey`] via the
+/// existing capture-group key validation path, reusing
+/// [`ThemeRuleErrorKind`] for byte-equal Display semantics across all
+/// rule sources.
+///
+/// `#[non_exhaustive]` so future profile validation rules can be added
+/// without a major version bump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProfileRuleErrorKind {
+    /// A `rules` whitelist entry names something that is not a built-in
+    /// rule. `name` is the offending entry; `known` is the list of
+    /// built-in names in alphabetical order, surfaced in the Display
+    /// for a pedagogical diagnostic.
+    RuleUnknown {
+        /// The unknown name the user wrote in `rules = [...]`.
+        name: String,
+        /// Built-in names in alphabetical order.
+        known: Vec<String>,
+    },
+    /// An `append_rules` entry's `name` field fails the same predicate
+    /// as theme names ([`crate::themes::name_is_valid`] — ASCII
+    /// alphanumeric with `-` or `_`).
+    RuleNameInvalid {
+        /// The offending name as written.
+        name: String,
+    },
+    /// An `append_rules` entry's `name` matches a built-in rule name.
+    /// Profile concerns and user-override concerns are separated; the
+    /// user-override path is `[[rules]]` at the user-config level.
+    AppendRuleConflictsWithBuiltin {
+        /// The built-in name the entry tried to redefine.
+        name: String,
+    },
+    /// Two `append_rules` entries within the same profile share a name.
+    AppendRuleConflictsWithOther {
+        /// The duplicated name.
+        name: String,
+    },
+    /// `profile.theme` fails [`crate::themes::name_is_valid`]. Existence
+    /// of the referenced theme is checked at theme-load time, not here.
+    ThemeNameInvalid {
+        /// The invalid theme name.
+        name: String,
+    },
+    /// Capture-group key validation in an `append_rules.styles` map
+    /// failed. Reuses [`ThemeRuleErrorKind`] (`KeyMalformed`,
+    /// `IndexZeroForbidden`, `IndexOutOfRange`, `NameUnknown`,
+    /// `DuplicateTarget`) for byte-equal `Display` semantics across all
+    /// rule sources.
+    StylesKey(ThemeRuleErrorKind),
+}
+
+impl std::fmt::Display for ProfileRuleErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RuleUnknown { name, known } => write!(
+                f,
+                "rules entry \"{}\": not a built-in name (known: {})",
+                sanitize_for_display(name),
+                known
+                    .iter()
+                    .map(|s| sanitize_for_display(s))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            Self::RuleNameInvalid { name } => write!(
+                f,
+                "append_rules entry \"{}\": name must be ASCII alphanumeric with '-' or '_'",
+                sanitize_for_display(name),
+            ),
+            Self::AppendRuleConflictsWithBuiltin { name } => write!(
+                f,
+                "append_rules entry \"{}\": collides with built-in rule; use [[rules]] at the user-config level to override built-ins",
+                sanitize_for_display(name),
+            ),
+            Self::AppendRuleConflictsWithOther { name } => write!(
+                f,
+                "append_rules: duplicate entry \"{}\"",
+                sanitize_for_display(name),
+            ),
+            Self::ThemeNameInvalid { name } => write!(
+                f,
+                "theme \"{}\": name must be ASCII alphanumeric with '-' or '_'",
+                sanitize_for_display(name),
+            ),
+            Self::StylesKey(inner) => write!(f, "{inner}"),
+        }
+    }
+}
+
 /// All recoverable errors produced by tayf.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -274,6 +435,49 @@ pub enum Error {
         errors: Vec<ThemeRuleError>,
     },
 
+    /// A profile failed to load — file not found, parse error, path
+    /// canonicalisation, or pattern compile. Single-error (not
+    /// collected). See [`ProfileErrorKind`].
+    ///
+    /// **Display contract:** `name`, `source_path`, and the inner
+    /// `kind`'s string-typed fields all pass through
+    /// [`sanitize_for_display`] in the `Display` impl so any
+    /// user-supplied control byte (a hostile profile name or
+    /// `XDG_CONFIG_HOME` path) cannot smuggle a terminal control
+    /// sequence onto the user's terminal — CLAUDE.md §3 invariant.
+    #[error("{}", format_profile_load(name, source_path, kind))]
+    Profile {
+        /// The profile name as the user wrote it (CLI arg or
+        /// `[general] profile` value).
+        name: String,
+        /// `<embedded:profile/{name}>` for shipped profiles (none in
+        /// v0.5.2); canonical disk path for disk-loaded profiles.
+        source_path: String,
+        /// Classification + payload for the underlying failure.
+        kind: ProfileErrorKind,
+    },
+
+    /// A profile's parsed body failed [`crate::profiles::validate_profile`]
+    /// (Phase 1) or `Compiled::load_with_theme` capture-group key
+    /// dispatch (Phase 2, landing with v0.5.2 rules-side work).
+    /// Fail-collected — every violation gathered into a single error.
+    ///
+    /// **Display contract:** `profile`, `source_path`, and each rule's
+    /// `rule_name` pass through [`sanitize_for_display`] in the
+    /// `Display` impl per the same CLAUDE.md §3 invariant as the other
+    /// validation-error variants.
+    #[error("{}", format_profile_validation(profile, source_path, errors))]
+    ProfileValidation {
+        /// The user-facing profile name (CLI `--profile` or
+        /// `[general] profile`).
+        profile: String,
+        /// `<embedded:profile/{name}>` for shipped profiles (none in
+        /// v0.5.2); canonical disk path for disk-loaded profiles.
+        source_path: String,
+        /// At least one entry; an empty Vec would be a constructor bug.
+        errors: Vec<ProfileRuleError>,
+    },
+
     /// A line exceeded the buffer cap; flushed as-is without rule application.
     ///
     /// **Non-fatal — INVARIANT:** This variant must only be constructed for
@@ -319,6 +523,66 @@ fn sanitize_for_display(message: &str) -> String {
         } else {
             out.push(ch);
         }
+    }
+    out
+}
+
+fn format_profile_load(name: &str, source_path: &str, kind: &ProfileErrorKind) -> String {
+    match kind {
+        ProfileErrorKind::NotFound { searched } => {
+            let paths = searched
+                .iter()
+                .map(|p| sanitize_for_display(&p.display().to_string()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "profile '{name}' not found (searched: {paths})",
+                name = sanitize_for_display(name)
+            )
+        }
+        ProfileErrorKind::ParseError { message } => format!(
+            "profile '{name}' at {path}: {message}",
+            name = sanitize_for_display(name),
+            path = sanitize_for_display(source_path),
+            message = sanitize_for_display(message),
+        ),
+        ProfileErrorKind::PathCanonicalization { path, message } => format!(
+            "profile '{name}' path '{path}': {message}",
+            name = sanitize_for_display(name),
+            path = sanitize_for_display(&path.display().to_string()),
+            message = sanitize_for_display(message),
+        ),
+        ProfileErrorKind::RegexCompile { rule_name, pattern, message } => format!(
+            "profile '{name}': failed to compile rule '{rule_name}' pattern '{pattern}': {message}",
+            name = sanitize_for_display(name),
+            rule_name = sanitize_for_display(rule_name),
+            pattern = sanitize_for_display(pattern),
+            message = sanitize_for_display(message),
+        ),
+    }
+}
+
+fn format_profile_validation(
+    profile: &str,
+    source_path: &str,
+    errors: &[ProfileRuleError],
+) -> String {
+    let n = errors.len();
+    let plural = if n == 1 { "error" } else { "errors" };
+    let mut out = format!(
+        "profile '{profile}' (loaded from {path}) has {n} validation {plural}:",
+        profile = sanitize_for_display(profile),
+        path = sanitize_for_display(source_path),
+    );
+    for e in errors {
+        // Literal single quotes around rule_name match Error::Theme's
+        // Display contract for visual consistency with ThemeValidation.
+        let _ = write!(
+            out,
+            "\n  - rule '{name}': {msg}",
+            name = sanitize_for_display(&e.rule_name),
+            msg = e.kind,
+        );
     }
     out
 }
