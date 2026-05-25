@@ -4,6 +4,37 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — TBD
+
+### Added
+- Built-in patterns `permission`, `timestamp` (ISO 8601 branch), and `url`
+  (`https?|ssh|ftp` branch) now use named capture groups (`(?P<name>...)`).
+  Theme TOML and user-config `[[rules]] styles = {...}` maps may
+  reference these by name (`styles.scheme = { fg = "cyan" }`) in addition
+  to the existing positional form (`styles."1" = { fg = "cyan" }`). Both
+  forms resolve to the same capture-group index; setting both forms
+  targeting the same group is an error (`CaptureGroupDuplicateTarget`).
+  Group names per rule: `permission` → `perm_type`, `perm_owner`,
+  `perm_group`, `perm_other`; `timestamp` ISO branch → `date`, `sep`,
+  `time`, `ms`, `tz`; `url` first branch → `scheme`, `sep`, `body`.
+  Forward-pulled from the v0.5 roadmap.
+- Two new `ThemeRuleErrorKind` variants (additive on the
+  `#[non_exhaustive]` enum). `CaptureGroupNameUnknown { name, available }`
+  — TOML key references a regex group name not present in the rule's
+  regex; `available` lists the regex's actual named groups in positional
+  order for a pedagogical diagnostic. `CaptureGroupDuplicateTarget {
+  positional, named }` — both a numeric and a named key resolve to the
+  same capture-group index.
+
+### Changed
+- CI workflow `.github/workflows/ci.yml`: bumped
+  `actions/upload-artifact@v4` → `@v7` (Node.js 20 deprecation,
+  2026-06-02 cutoff). Drop-in input schema; criterion artifact upload
+  (`path: target/criterion/`, `retention-days: 14`) behavior preserved.
+  The v0.4.1 final review §N-1 forward-pointer prescribed `@v5`; spec
+  phase verified v5 is still Node 20 (`@v6` is the Node 24 transition,
+  `@v7.0.1` current 2026-04-10), hence `@v7` is the correct target.
+
 ## [0.4.1] — 2026-05-25
 
 ### Added
