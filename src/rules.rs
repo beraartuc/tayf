@@ -961,7 +961,11 @@ fn resolve_group_styles_for_rule(
                         message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
-                RuleSource::Builtin => unreachable!(),
+                RuleSource::Builtin => unreachable!(
+                    "Builtin rules ship with grammar-valid styles keys (validated at \
+                     constructor time via builtin_rules()); this arm is reachable only \
+                     through UserConfig/Theme paths handled above."
+                ),
             }
         };
 
@@ -990,7 +994,11 @@ fn resolve_group_styles_for_rule(
                         message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
-                RuleSource::Builtin => unreachable!(),
+                RuleSource::Builtin => unreachable!(
+                    "Builtin rules ship with capture-group indices < captures_len \
+                     (validated at constructor time via builtin_rules()); this arm is \
+                     reachable only through UserConfig/Theme paths handled above."
+                ),
             }
         }
 
