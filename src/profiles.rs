@@ -21,13 +21,10 @@
 //! - [`synthetic_path`] — `<embedded:profile/{name}>` label.
 
 // v0.5.2 Phase 2 lands the foundation: types + load + validate_profile.
-// The orchestration call sites (`lib.rs`, `reload.rs`) + the
-// `RuleSource::EmbeddedProfile` dispatch wiring land in subsequent
-// Phase 3+ tasks. Until those callers exist, the module-level
-// `allow(dead_code)` suppresses dead-code warnings on intentionally
-// public-to-the-crate symbols. The attribute is REMOVED in Phase 3
-// once the dispatch + orchestration call sites land.
-#![allow(dead_code)]
+// Phase 5 (lib.rs orchestration + reload.rs hot-reload) lights up
+// `profiles::load`; Phase 3 (`RuleSource::EmbeddedProfile` dispatch)
+// lights up `validate_profile` via the call from `load`. The
+// module-level dead_code allow is no longer required.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;

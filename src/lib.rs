@@ -187,8 +187,26 @@ impl Tayf {
         let config_ref = loaded.as_ref().map(|(c, _)| c);
         let config_path: Option<String> = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
-        let explicit_theme: Option<String> =
-            args.theme.clone().or_else(|| config_ref.and_then(|c| c.general.theme.clone()));
+        // v0.5.2 — effective profile name: CLI > config.
+        let effective_profile_name: Option<String> =
+            args.profile.clone().or_else(|| config_ref.and_then(|c| c.general.profile.clone()));
+
+        // Load the profile (if any). Failures propagate as Error::Profile /
+        // Error::ProfileValidation through the standard Tayf::run error
+        // path. v0.5.2 ships no embedded profiles, so a None
+        // loaded_profile just means "no profile active".
+        let loaded_profile: Option<profiles::LoadedProfile> = match effective_profile_name {
+            Some(ref name) => Some(profiles::load(name)?),
+            None => None,
+        };
+
+        // v0.5.2 — 4-tier theme precedence:
+        // CLI > config > profile.theme > bg-detect.
+        let explicit_theme: Option<String> = args
+            .theme
+            .clone()
+            .or_else(|| config_ref.and_then(|c| c.general.theme.clone()))
+            .or_else(|| loaded_profile.as_ref().and_then(|lp| lp.profile.theme.clone()));
 
         let effective_theme: Option<String> = explicit_theme.or_else(|| {
             if apply_colors {
@@ -202,8 +220,8 @@ impl Tayf {
             config_ref,
             config_path.as_deref(),
             effective_theme.as_deref(),
-            None,
-            None,
+            loaded_profile.as_ref().map(|lp| &lp.profile),
+            loaded_profile.as_ref().map(|lp| lp.path_label.as_str()),
             effective_depth,
         )?;
         let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
