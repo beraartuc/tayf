@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — TBD
+
+### Added
+- CI now runs `cargo bench --bench throughput` on every PR (ubuntu-
+  latest + macos-latest matrix), compares results against canonical
+  baseline JSON at `benches/baselines/latest/<os>.json`, and emits a
+  workflow annotation when any of the four hot-path benches regresses
+  past its threshold (`apply_rules/*` > +20%; `passthrough/write_all`
+  > +30%, accounting for sub-µs jitter). Opt in by labeling the PR
+  with `bench-ci-strict` to upgrade annotations to errors that fail
+  the workflow. Baseline JSON is committed to the repo per release
+  as part of the standard ceremony.
+
+### Changed
+- The two bare `unreachable!()` arms in
+  `rules.rs::resolve_group_styles_for_rule` (the `RuleSource::Builtin`
+  branches of the KeyMalformed and OutOfRange checks) now carry
+  explanatory reason strings, per CLAUDE.md §2's "unreachable!()
+  reason explanation" mandate. Behavior unchanged — these arms are
+  constructor-guaranteed unreachable; the strings only surface if a
+  future refactor breaks the invariant.
+
 ## [0.4.0] — 2026-05-25
 
 ### Changed
