@@ -1119,6 +1119,29 @@ styles = { "1" = { fg = "red" }, "10" = { fg = "blue" } }
     }
 
     #[test]
+    fn validate_theme_rules_phase1_accepts_non_digit_styles_keys() {
+        // v0.5.1 §I-1: Phase-1 must accept non-digit styles-map keys
+        // (e.g. `"date"`) and defer name resolution to
+        // `Compiled::load_with_theme`. Pre-v0.5.1 these keys were
+        // rejected as CaptureGroupKeyMalformed before reaching dispatch.
+        use std::collections::BTreeMap;
+        let mut styles = BTreeMap::new();
+        styles.insert("date".to_owned(), UserStyle::default());
+        let cfg = crate::config::Config {
+            general: crate::config::GeneralSection::default(),
+            rules: vec![UserRule {
+                name: "timestamp".into(),
+                pattern: None,
+                style: None,
+                enabled: true,
+                styles: Some(styles),
+            }],
+        };
+        validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)
+            .expect("non-digit keys must pass Phase-1 (defer to dispatch)");
+    }
+
+    #[test]
     fn load_disk_theme_too_large_rejected() {
         let dir = tmp();
         let xdg_tayf = dir.path().join("tayf");
