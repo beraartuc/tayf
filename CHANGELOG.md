@@ -4,6 +4,90 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - TBD
+
+### Added
+- **Profile system mechanism.** New `--profile NAME` CLI flag +
+  `[general] profile = "NAME"` user-config field. Profiles loaded from
+  `~/.config/tayf/profiles/<name>.toml` (disk) or embedded sources
+  (none shipped in this release — curated library lands in v0.5.3).
+  Each profile may define:
+  - `rules`: whitelist of built-in rule names. Omit to keep all
+    built-ins; empty array filters them all out.
+  - `append_rules`: array of new rules (`name`, `pattern`, optional
+    `style` / `styles`). Mandatory pattern. Names cannot collide with
+    built-ins — use `[[rules]]` at user-config level to override
+    built-ins.
+  - `theme`: optional theme override. Slot 3 in the 4-tier precedence
+    chain: CLI `--theme` > config `[general] theme` > `profile.theme`
+    > bg-detect default.
+- New `Error::Profile` + `Error::ProfileValidation` variants on the
+  `#[non_exhaustive]` `Error` enum. Backed by `ProfileErrorKind`
+  (NotFound, ParseError, PathCanonicalization, RegexCompile — all
+  String-message-carriers, no `toml`/`io`/`regex` crate types leaked
+  into public API) + `ProfileRuleError { rule_name, kind }` with
+  `ProfileRuleErrorKind` Phase 1 shape variants (RuleUnknown,
+  RuleNameInvalid, AppendRuleConflictsWithBuiltin,
+  AppendRuleConflictsWithOther, ThemeNameInvalid) + a
+  `StylesKey(ThemeRuleErrorKind)` wrapper that delegates capture-group
+  key diagnostics to existing Display impls (no duplicate-formatter
+  regression).
+- Hot-reload picks up `[general] profile` changes per the v0.5.1
+  spec §11.1 C-4 mandate: `reload_once` re-resolves the full
+  precedence chain on every reload. CLI `--profile` is snapshotted
+  at startup and never mutates during the session. bg-detect result
+  also snapshotted to avoid OSC 11 re-query on every reload.
+
+### Fixed
+- `apply_user_rules_with_source` silently skips theme/profile rule
+  references when the target built-in was filtered out by Step 2
+  `profile.rules` whitelist. Pre-fix: a misleading "rule '<name>':
+  appears twice with conflicting `enabled` values" diagnostic fired
+  when a profile combined `rules = [...]` whitelist with a theme that
+  referenced filtered-out built-ins. Per spec §5.4 — whitelist is an
+  exclusion mechanism, not a validation contract.
+- `Error::Profile` + `Error::ProfileValidation` now map to exit code
+  64 (EX_USAGE), parallel to `Error::Config` / `Error::Theme` /
+  `Error::ThemeValidation`. Pre-fix: these user-input errors fell
+  through to the default arm and exited 70 (EX_SOFTWARE).
+
+### Internal
+- New `src/profiles.rs` module mirrors `src/themes.rs` shape.
+- `themes::name_is_valid` visibility bumped from module-private to
+  `pub(crate)` for re-export from `profiles`.
+- `RuleSource::EmbeddedProfile` variant added to the module-private
+  enum; every match site enumerated (67 sites) + updated with full
+  4-arm exhaustive coverage.
+- `BuiltinRule` schema: two booleans (`is_user_supplied` +
+  `styles_override_from_theme`) replaced with a single `source:
+  RuleSource` field. `rule_source_of` helper deleted; call sites
+  read `rule.source` directly. `apply_user_rules_with_source`
+  signature: `from_theme: bool` → `source: RuleSource`.
+- `Compiled::load_with_theme` signature gains `profile:
+  Option<&Profile>` + `profile_path: Option<&str>` (six total params).
+- `ReloadOrchestrator::spawn` + `reload_once` gain `profile`
+  parameters; `spawn` also gains a `bg_default: Option<String>`
+  snapshot to preserve bg-detect result across reloads.
+- Hot path byte-equal to v0.5.1 when profile is inactive (I-6
+  regression test pins 13 built-ins).
+- No public API breakage. No new Cargo deps. No MSRV change.
+
+### Tests
+- 14 new lib tests: 7 `profiles::tests` (Phase 1 validation) + 1
+  `rules::tests` hot-path-unchanged + 1 `cli::tests` clap shape + 5
+  `rules::tests` byte-pinned `EmbeddedProfile` dispatch + 1
+  `rules::tests` three-way Theme/UserConfig/EmbeddedProfile identity
+  + 12 `error::tests` byte-pin Display + 2 `main::tests` exit-code
+  mapping (total +14 lib including `cargo test --bin tayf` unit
+  suite for main.rs tests).
+- 15 new integration tests in `tests/integration_profiles.rs` (new
+  file): disk happy path, NotFound diagnostic, StylesKey(NameUnknown)
+  diagnostic, user-config>profile precedence, 8-cell theme
+  precedence matrix (CLI × config × profile.theme), CLI>config
+  profile precedence, profile-active hot-reload C-4 (with
+  MARK_PRE/MARK_POST sync markers + 1500ms post-edit sleep),
+  whitelist+theme combination regression.
+
 ## [0.5.1] — 2026-05-25
 
 ### Fixed
