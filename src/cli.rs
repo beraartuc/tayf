@@ -69,6 +69,15 @@ pub struct Args {
     #[arg(long, value_name = "NAME")]
     pub theme: Option<String>,
 
+    /// Apply a named profile. Loaded from
+    /// `~/.config/tayf/profiles/<NAME>.toml` (disk) or from embedded
+    /// sources (none shipped in v0.5.2; library lands in v0.5.3).
+    /// Overrides any `[general] profile` value in the user config.
+    /// Single profile only — composition deferred to a future release
+    /// via a separate flag.
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
+
     /// Disable all of tayf's colorization, pattern matching, and background
     /// detection — passthrough the shell's output byte-for-byte while still
     /// wrapping the PTY and forwarding signals. Equivalent to `TAYF_DISABLE=1`
@@ -188,5 +197,30 @@ mod tests {
         let args = Args::try_parse_from(["tayf", "--bypass", "--no-hot-reload"]).unwrap();
         assert!(args.bypass);
         assert!(args.no_hot_reload);
+    }
+
+    #[test]
+    fn cli_profile_arg_parses_as_option_string() {
+        use clap::Parser;
+
+        // Sub-assertion 1: --profile foo → Some("foo")
+        let a = Args::parse_from(["tayf", "--profile", "foo"]);
+        assert_eq!(a.profile.as_deref(), Some("foo"));
+
+        // Sub-assertion 2: omit --profile → None
+        let a = Args::parse_from(["tayf"]);
+        assert_eq!(a.profile, None);
+
+        // Sub-assertion 3: duplicate --profile → clap error with byte-pinned
+        // wording (clap's standard duplicate-flag message). Because the
+        // arg carries `value_name = "NAME"`, clap interpolates the value
+        // placeholder into the diagnostic: `'--profile <NAME>'`.
+        let res = Args::try_parse_from(["tayf", "--profile", "foo", "--profile", "bar"]);
+        let err = res.expect_err("duplicate --profile must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("the argument '--profile <NAME>' cannot be used multiple times"),
+            "expected clap's duplicate-flag wording; got: {msg}"
+        );
     }
 }

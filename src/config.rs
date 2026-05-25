@@ -50,6 +50,14 @@ pub(crate) struct GeneralSection {
     #[serde(default)]
     pub(crate) theme: Option<String>,
 
+    /// User-config profile selection. Overridden by CLI `--profile`.
+    /// `None` = no profile (current default; all built-ins active).
+    /// Loaded via [`crate::profiles::load`]; validation failures
+    /// surface as [`crate::Error::Profile`] or
+    /// [`crate::Error::ProfileValidation`].
+    #[serde(default)]
+    pub(crate) profile: Option<String>,
+
     /// v0.3.3: when `true`, the reload orchestrator writes a one-line dim
     /// banner (`tayf: config reloaded`) to `/dev/tty` after each
     /// successful hot reload (file change or `SIGHUP`). Default `false`
@@ -64,7 +72,12 @@ pub(crate) struct GeneralSection {
 
 impl Default for GeneralSection {
     fn default() -> Self {
-        Self { respect_existing_colors: true, theme: None, show_reload_banner: false }
+        Self {
+            respect_existing_colors: true,
+            theme: None,
+            profile: None,
+            show_reload_banner: false,
+        }
     }
 }
 
