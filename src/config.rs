@@ -499,18 +499,28 @@ pub(crate) fn apply_user_rules_with_source(
         if is_builtin {
             // Override in place.
             let Some(existing) = builtins.iter_mut().find(|b| b.name == ur.name) else {
-                // `enabled = true` re-introduction of a previously disabled
-                // built-in within the same TOML — not a documented case in
-                // v0.2.0; treat as a friendly error rather than silently
-                // ignoring it.
-                return Err(Error::Config {
-                    path: path.into(),
-                    line: 0,
-                    message: format!(
-                        "rule '{name}': appears twice with conflicting `enabled` values",
-                        name = ur.name
-                    ),
-                });
+                // Two legitimate paths can reach here with a builtin-named
+                // rule that's missing from the working set:
+                //
+                // 1. v0.5.2 §5.4 Step 2 `profile.rules` whitelist filtered
+                //    the built-in out before this layer ran. Theme/profile
+                //    references to whitelist-filtered built-ins are no-ops
+                //    by spec — themes don't know about the user's runtime
+                //    whitelist, so their overrides of excluded rules must
+                //    silently skip rather than error.
+                //
+                // 2. (Future) `enabled = true` re-introduction of a
+                //    previously disabled built-in within the same TOML.
+                //    Not a documented v0.2.0 case; the v0.5.1 error path
+                //    was meant to catch this. Under the current merge
+                //    order this can't happen — `enabled = false` paths
+                //    `retain`-drop the rule, and a same-source duplicate
+                //    `name` is rejected upstream by the `seen` guard. So
+                //    the silent skip is safe here too.
+                //
+                // Spec ref: v0.5.2 §5.4 — whitelist is exclusion, not a
+                // validation contract.
+                continue;
             };
             if let Some(p) = &ur.pattern {
                 existing.pattern.clone_from(p);

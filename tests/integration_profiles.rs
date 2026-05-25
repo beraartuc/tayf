@@ -125,26 +125,21 @@ fn assert_dark_active(s: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. v0.5.2 §8.2 — disk profile load happy path. Profile defines an
-//     `append_rules` entry (new `instance_id` rule with cyan style).
-//     Verify the appended rule is active by checking that its pattern
-//     match in the input gets the expected cyan SGR sequence.
+// 10. v0.5.2 §8.2 — disk profile load happy path. Profile defines a
+//     `rules = ["timestamp", "ipv4"]` whitelist plus an `append_rules`
+//     entry (new `instance_id` rule with cyan style). Verify the
+//     appended rule is active by checking that its pattern match in
+//     the input gets the expected cyan SGR sequence.
 //
-//     The plan body's draft fixture also included `rules = ["timestamp",
-//     "ipv4"]` whitelist — but in combination with a `theme` layer that
-//     touches built-ins filtered out by the whitelist, the current
-//     Phase-4 merge order surfaces a misleading
-//     "appears twice with conflicting `enabled` values" diagnostic
-//     (Phase 4 `apply_user_rules_with_source` assumes every theme-rule
-//     target survives in the merged set, which doesn't hold under a
-//     profile.rules whitelist). v0.5.2 ships with no theme by default
-//     in this test (TAYF_DISABLE_BG_DETECT=1 makes bg-detect → dark,
-//     and dark.toml DOES touch `permission` and others), so the
-//     whitelist would trip the bug here even without `--theme`.
-//
-//     Carrying the whitelist out of Test 10's scope keeps Phase 5
-//     focused on CLI + orchestration; the whitelist+theme interaction
-//     is a v0.5.3 carryover (see Concerns in the D5 report).
+//     The whitelist+theme interaction (D5 concern #1) was fixed in
+//     v0.5.2 by silently skipping `apply_user_rules_with_source`
+//     overrides whose target built-in was filtered out at Step 2 —
+//     themes don't know about the user's runtime whitelist, so their
+//     overrides of whitelist-filtered built-ins are no-ops by spec
+//     (§5.4). With that fix, the whitelist + bg-detect-derived dark
+//     theme combination loads cleanly here; `instance_id` from
+//     `append_rules` is unaffected (it's a new rule, not a built-in
+//     subject to the whitelist).
 // ---------------------------------------------------------------------------
 #[test]
 fn profile_disk_load_happy_path() {
@@ -153,6 +148,8 @@ fn profile_disk_load_happy_path() {
         xdg.path(),
         "myprofile",
         r#"
+rules = ["timestamp", "ipv4"]
+
 [[append_rules]]
 name = "instance_id"
 pattern = '\bi-[a-f0-9]{17}\b'
@@ -351,4 +348,40 @@ profile = "k8s"
     let has_magenta = s.contains("\u{1b}[35m") || s.contains(";35m") || s.contains(";35;");
     assert!(has_cyan, "aws profile active → instance_id should be cyan: {s:?}");
     assert!(!has_magenta, "aws profile active → pod_marker (k8s) should NOT be magenta: {s:?}");
+}
+
+// ---------------------------------------------------------------------------
+// 17. v0.5.2 D5-fix — `profile.rules` whitelist + theme referencing a
+//     whitelist-filtered built-in must load cleanly (no spurious
+//     "appears twice with conflicting `enabled`" diagnostic).
+//
+//     Setup: `profile.rules = ["timestamp"]` (filters every built-in
+//     except `timestamp`); active theme = bg-detect-derived `dark`
+//     (which references `permission`, `uuid`, `ipv4`, `log_level`,
+//     etc. — all dropped by the whitelist). Theme references to
+//     whitelist-filtered built-ins are silently skipped per spec §5.4.
+// ---------------------------------------------------------------------------
+#[test]
+fn profile_whitelist_plus_theme_referencing_filtered_builtin_loads_cleanly() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(
+        xdg.path(),
+        "myprofile",
+        r#"
+rules = ["timestamp"]
+"#,
+    );
+
+    let bytes = run_in_pty(xdg.path(), "2026-05-25T12:30:45.123Z", &["--profile", "myprofile"]);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("2026-05-25"),
+        "timestamp token must survive whitelist+theme combination: {s:?}"
+    );
+    // Negative regression — must NOT see the false-positive diagnostic.
+    assert!(
+        !s.contains("appears twice with conflicting"),
+        "v0.5.2 D5-fix: whitelist-filtered theme refs must NOT trigger \
+         conflicting-enabled diagnostic: {s:?}"
+    );
 }
