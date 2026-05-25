@@ -437,3 +437,66 @@ fn profile_not_found_byte_pinned_diagnostic() {
     assert!(!stderr.contains("validation error"), "must not be ProfileValidation; got: {stderr}");
     assert!(!stderr.contains("parse error"), "must not be ParseError; got: {stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// 12. v0.5.2 §8.2 — profile append_rules with named capture-group
+//     pattern; styles.bogus references an unknown name. Expected:
+//     Error::ProfileValidation with one ProfileRuleError whose kind
+//     is StylesKey(CaptureGroupNameUnknown { name: "bogus", available }).
+//     Byte-pinned via format_profile_validation + delegated
+//     ThemeRuleErrorKind Display.
+//
+//     Exit-code note: see Test 11 — Error::ProfileValidation also falls
+//     through to EX_SOFTWARE (70). Wording assertion is the contract.
+// ---------------------------------------------------------------------------
+#[test]
+fn profile_append_rules_styles_capture_group_key_unknown_byte_pinned_diagnostic() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(
+        xdg.path(),
+        "named-key-bogus",
+        r#"
+[[append_rules]]
+name = "ts_iso"
+pattern = '(?P<date>\d{4}-\d{2}-\d{2})T(?P<time>\d{2}:\d{2}:\d{2})'
+styles = { bogus = { fg = "red" } }
+"#,
+    );
+    let out = Command::new(tayf_bin())
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("TAYF_DISABLE_BG_DETECT", "1")
+        .arg("--profile")
+        .arg("named-key-bogus")
+        .arg("--no-hot-reload")
+        .arg("--shell")
+        .arg("/bin/sh")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn tayf");
+    let code = out.status.code();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        code == Some(64) || code == Some(70),
+        "expected EX_USAGE (64) or EX_SOFTWARE (70); got {code:?}; stderr: {stderr}"
+    );
+    assert!(stderr.contains("profile 'named-key-bogus'"), "must quote profile name; got: {stderr}");
+    assert!(stderr.contains("1 validation error:"), "singular form; got: {stderr}");
+    assert!(
+        stderr.contains(
+            "  - rule 'ts_iso': styles.\"bogus\": rule's regex has no capture group named 'bogus' (available: date, time)"
+        ),
+        "byte-pinned StylesKey(NameUnknown) line; got: {stderr}"
+    );
+    // Negative regression — must not surface as profile-shape error
+    // or as plain ThemeValidation.
+    assert!(!stderr.contains("not a built-in name"), "must not be RuleUnknown; got: {stderr}");
+    assert!(
+        !stderr.contains("collides with built-in"),
+        "must not be AppendRuleConflictsWithBuiltin; got: {stderr}"
+    );
+    assert!(!stderr.contains("theme '"), "must not be ThemeValidation; got: {stderr}");
+}
