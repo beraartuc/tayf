@@ -538,3 +538,154 @@ enabled = false
         "user-config disable must override profile append_rules: pod_marker should NOT be magenta: {s:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 15. v0.5.2 §8.2 (C-4) — profile active + hot-reload picks up user-config
+//     edits. Start tayf with --profile myaws (adds an instance_id rule);
+//     edit ~/.config/tayf/config.toml mid-session to disable the timestamp
+//     built-in; verify on the next reload that both:
+//       - instance_id (from profile) is still active.
+//       - timestamp is disabled (user-config edit took effect).
+//     This pins the precedence chain re-resolution on every reload.
+//
+//     A.11 synchronization: MARK_PRE and MARK_POST are literal byte
+//     sequences in the shell echoes that partition the rendered output
+//     across the reload boundary. Pre-region assertions verify the
+//     baseline (both rules styled); post-region asserts profile rule
+//     survives + user-config edit took effect. 1500ms post-edit sleep
+//     absorbs macOS notify-backend latency (memory
+//     feedback_flaky_watch_test).
+// ---------------------------------------------------------------------------
+#[test]
+fn profile_active_then_user_config_edit_triggers_correct_recompile() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    write_profile(
+        xdg.path(),
+        "myaws",
+        r#"
+[[append_rules]]
+name = "instance_id"
+pattern = '\bi-[a-f0-9]{17}\b'
+style = { fg = "cyan" }
+"#,
+    );
+    let cfg_path = write_user_config(
+        xdg.path(),
+        r#"
+# Initial: no rule disables.
+[general]
+"#,
+    );
+
+    // Spawn tayf with hot-reload enabled (NOT --no-hot-reload).
+    let pty_system = portable_pty::native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+        .expect("openpty");
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_tayf"));
+    cmd.env_remove("HOME");
+    cmd.env_remove("XDG_CONFIG_HOME");
+    cmd.env("XDG_CONFIG_HOME", xdg.path());
+    cmd.env("TAYF_DISABLE_BG_DETECT", "1");
+    // Force truecolor signal so dim/cyan SGR survive the test PTY.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.arg("--shell");
+    cmd.arg("/bin/sh");
+    cmd.arg("--profile");
+    cmd.arg("myaws");
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn tayf");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("clone reader");
+    let mut writer = pair.master.take_writer().expect("take writer");
+
+    // Wait for shell prompt — generous to allow profile load + reload
+    // watcher init.
+    thread::sleep(Duration::from_millis(400));
+
+    // MARK_PRE: pre-edit echo. Should see instance_id colored cyan
+    // AND timestamp colored dim (BrightBlack=90).
+    writer
+        .write_all(b"echo 'MARK_PRE i-0123456789abcdef0 2026-01-01T00:00:00Z'\n")
+        .expect("write pre-mark");
+
+    thread::sleep(Duration::from_millis(300));
+
+    // Edit user-config to disable timestamp.
+    std::fs::write(
+        &cfg_path,
+        r#"
+[[rules]]
+name = "timestamp"
+enabled = false
+"#,
+    )
+    .expect("rewrite config");
+
+    // A.11: increased from 800 to 1500 to absorb macOS notify-backend
+    // latency under load.
+    thread::sleep(Duration::from_millis(1500));
+
+    // MARK_POST: post-edit echo + exit. instance_id still cyan
+    // (profile active throughout); timestamp NOT dim (user-config edit
+    // disabled it).
+    writer
+        .write_all(b"echo 'MARK_POST i-0123456789abcdef0 2026-01-01T00:00:00Z'\nexit\n")
+        .expect("write post-mark + exit");
+    drop(writer);
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let _reader_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            match reader.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(buf);
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let bytes = rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+    let s = String::from_utf8_lossy(&bytes);
+
+    // A.11: split rendered output by MARK_PRE / MARK_POST literal
+    // substring positions.
+    let pre_idx =
+        s.find("MARK_PRE").unwrap_or_else(|| panic!("MARK_PRE absent from output: {s:?}"));
+    let post_idx =
+        s.find("MARK_POST").unwrap_or_else(|| panic!("MARK_POST absent from output: {s:?}"));
+    assert!(pre_idx < post_idx, "MARK_PRE must precede MARK_POST: {s:?}");
+    let pre_region = &s[pre_idx..post_idx];
+    let post_region = &s[post_idx..];
+
+    // Pre-edit assertions: instance_id cyan AND timestamp dim.
+    assert!(
+        pre_region.contains("\u{1b}[36") || pre_region.contains(";36"),
+        "pre-edit: instance_id should be cyan: {pre_region:?}"
+    );
+    assert!(
+        pre_region.contains("\u{1b}[90") || pre_region.contains(";90"),
+        "pre-edit: timestamp should be dim (BrightBlack=90): {pre_region:?}"
+    );
+
+    // Post-edit assertions: instance_id still cyan; timestamp NOT dim.
+    assert!(
+        post_region.contains("\u{1b}[36") || post_region.contains(";36"),
+        "post-edit: instance_id should still be cyan (profile active): {post_region:?}"
+    );
+    assert!(
+        !post_region.contains("\u{1b}[90") && !post_region.contains(";90"),
+        "post-edit: timestamp should NOT be dim (user-config disabled it): {post_region:?}"
+    );
+}
