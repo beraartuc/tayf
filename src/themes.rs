@@ -418,19 +418,22 @@ pub(crate) fn validate_theme_rules(
                     });
                     continue;
                 }
-                match crate::config::validate_styles_map_key(key) {
-                    Some(_n) => {
-                        // Valid grammar; range check deferred to
-                        // Compiled::load_with_theme (Task 10).
-                    }
-                    None => {
-                        errors.push(crate::error::ThemeRuleError {
-                            rule_name: r.name.clone(),
-                            kind: crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed {
-                                key: key.clone(),
-                            },
-                        });
-                    }
+                // v0.5.1 — Phase-1 only gates digit-shape keys; non-digit
+                // keys (e.g. `"scheme"`, `"date"`) defer to Phase-2 named
+                // resolution in `Compiled::load_with_theme`. Previously
+                // this gate rejected all non-digit keys as
+                // CaptureGroupKeyMalformed, making RuleSource::Theme
+                // named-key support effectively dead-code (v0.5.0 final
+                // cross-cutting review §I-1).
+                if key.bytes().all(|b| b.is_ascii_digit())
+                    && crate::config::validate_styles_map_key(key).is_none()
+                {
+                    errors.push(crate::error::ThemeRuleError {
+                        rule_name: r.name.clone(),
+                        kind: crate::error::ThemeRuleErrorKind::CaptureGroupKeyMalformed {
+                            key: key.clone(),
+                        },
+                    });
                 }
             }
         }
@@ -1084,10 +1087,14 @@ styles = { "01" = { fg = "red" } }
 
     #[test]
     fn validate_theme_rules_collects_multiple_styles_key_errors_in_one_pass() {
+        // v0.5.1: Phase-1 only gates digit-shape styles keys; non-digit
+        // keys defer to dispatch-time named resolution. Use two digit-shape
+        // failure modes to keep the fail-collection invariant exercisable
+        // at Phase-1: "0" (IndexZeroForbidden) + "01" (KeyMalformed).
         let src = r#"
 [[rules]]
 name = "ipv4"
-styles = { "0" = { fg = "red" }, "abc" = { fg = "blue" } }
+styles = { "0" = { fg = "red" }, "01" = { fg = "blue" } }
 "#;
         let cfg: crate::config::Config = crate::config::parse("<test>", src).unwrap();
         let err =
