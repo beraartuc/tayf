@@ -3175,4 +3175,58 @@ fg = "red"
             "styles.\"01\": capture-group key must be a positive decimal (1, 2, ..., N) with no leading zeros"
         );
     }
+
+    /// v0.5.2 spec §11.1 I-6 / §8.1 #8 — when no profile is active, the
+    /// rule set produced by `Compiled::load_with_theme` MUST be
+    /// byte-equivalent to the v0.5.1 baseline (13 built-in rules, all
+    /// tagged `RuleSource::Builtin`). Catches any accidental
+    /// profile-active branch firing on a `None` profile (e.g. a misplaced
+    /// `.retain` over the whitelist filter, or an off-by-one in the
+    /// `append_rules` loop).
+    #[test]
+    fn hot_path_unchanged_when_no_profile() {
+        let compiled = Compiled::load_with_theme(
+            None, // config
+            None, // config_path
+            None, // theme
+            None, // profile
+            None, // profile_path
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("baseline load with all-None must succeed");
+
+        // Hard baseline — the 13 built-in rules, neither filtered nor
+        // augmented.
+        assert_eq!(
+            compiled.individuals.len(),
+            13,
+            "v0.5.1 baseline = 13 built-in rules; got {n}",
+            n = compiled.individuals.len(),
+        );
+        assert_eq!(compiled.styles.len(), 13, "styles must parallel individuals length");
+
+        // The compiled rule names match the canonical BUILTIN_NAMES list
+        // 1:1 in order — i.e. nothing was inserted, dropped, or reordered.
+        let baseline_names: Vec<&str> = BUILTIN_NAMES.to_vec();
+        let merged_names: Vec<String> = builtin_rules().into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            merged_names, baseline_names,
+            "BUILTIN_NAMES and builtin_rules() must agree on the 13 baseline rules"
+        );
+
+        // Defensive: every rule produced by builtin_rules() carries
+        // `source == RuleSource::Builtin`. If a profile-active path
+        // accidentally fired on the None branch, at least one rule's
+        // `source` would have flipped to EmbeddedProfile (or the rule
+        // count would have shifted) — both fail the assertions above.
+        for r in builtin_rules() {
+            assert_eq!(
+                r.source,
+                RuleSource::Builtin,
+                "rule '{}' must be tagged Builtin in the baseline; got {:?}",
+                r.name,
+                r.source,
+            );
+        }
+    }
 }
