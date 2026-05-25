@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - TBD
+
+### Fixed
+- `themes::validate_theme_rules` Phase-1 grammar gate now defers non-digit
+  styles-map keys (e.g. `styles.date`, `styles.scheme`, `styles.perm_owner`)
+  to the dispatch-time named-resolution path. Previously these keys were
+  rejected as `CaptureGroupKeyMalformed` before reaching dispatch, making
+  named capture-group styling effectively unavailable from theme TOML
+  (`assets/themes/*.toml` or `~/.config/tayf/themes/*.toml`). Built-in
+  themes (`dark`/`light`) use no `styles` maps, so end-user impact was
+  limited to advanced users authoring custom theme TOML.
+
+### Tests
+- Three new integration tests in `tests/integration_capture_groups.rs`
+  cover the previously dead `RuleSource::Theme` dispatch arms: named-key
+  happy path (`styles.date` styles a timestamp), unknown-name diagnostic
+  (`styles.bogus` surfaces `CaptureGroupNameUnknown` with `available:`
+  list), and duplicate-target diagnostic (`styles."1" + styles.date`
+  colliding on the same slot surfaces `CaptureGroupDuplicateTarget`).
+- One new unit test in `src/themes.rs` pins Phase-1 acceptance of
+  non-digit styles keys.
+
+### Internal
+- No public API change. No new variants on `ThemeRuleErrorKind`. No
+  signature changes. No `Cargo.toml` dependency delta. No MSRV change.
+- Hot path byte-equal to v0.5.0; name → index resolution stays
+  compile-time. Bench baseline regen not required.
+
 ## [0.5.0] — 2026-05-25
 
 ### Added
