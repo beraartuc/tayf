@@ -75,7 +75,7 @@ pub(crate) struct LoadedTheme {
 /// like `../../etc/passwd` would still be caught by the canonical-base
 /// whitelist downstream, but failing here keeps the error message clear
 /// (`Error::Theme` "not found" rather than `Error::Config` "symlink out").
-fn name_is_valid(name: &str) -> bool {
+pub(crate) fn name_is_valid(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
