@@ -377,6 +377,36 @@ pub mod __bench__ {
             .map(|c| CompiledRules(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(c))))
     }
 
+    /// Compile the rule set with an embedded profile active. Mirrors the
+    /// production startup flow's profile-active branch (`crate::lib::Tayf::run`
+    /// → `crate::profiles::load_with` → `crate::rules::Compiled::load_with_theme`),
+    /// but stubs out the env-var lookups so disk discovery in `load_with`
+    /// finds nothing and falls through to the embedded library.
+    ///
+    /// The bench crate is an external crate from rustc's perspective and
+    /// cannot reach the `pub(crate)` profile/rules constructors directly,
+    /// so this adapter wraps them. v0.5.3 only — see `benches/throughput.rs`
+    /// `bench_profile_*` for the call sites.
+    ///
+    /// # Errors
+    /// Forwards any [`crate::Error::Profile`], [`crate::Error::ProfileValidation`],
+    /// or [`crate::Error::RegexCompile`] surfaced by the underlying load/compile.
+    pub fn load_profile_rules(name: &str) -> crate::Result<CompiledRules> {
+        // Force disk discovery to miss → embedded library wins. Empty
+        // closures keep the disk path off, regardless of how the test
+        // environment has `$XDG_CONFIG_HOME` / `$HOME` set.
+        let loaded = crate::profiles::load_with(name, || None, || None)?;
+        let compiled = crate::rules::Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            Some(&loaded.profile),
+            Some(loaded.path_label.as_str()),
+            crate::terminfo::ColorDepth::Truecolor,
+        )?;
+        Ok(CompiledRules(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled))))
+    }
+
     /// Drive the rule scanner against `line`. Scratch is caller-owned and
     /// MUST be hoisted outside any `b.iter` loop so the measurement reflects
     /// the scanner, not the allocator.

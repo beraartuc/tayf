@@ -1,0 +1,12 @@
+NAME                              READY   STATUS    RESTARTS   AGE   IP            NODE
+nginx-deployment-7c79c4bf97-9hk6r   1/1   Running   0          5m    10.244.1.5    worker-1
+coredns-558bd4d5db-vwz2j            1/1   Running   0          2h    10.244.0.3    master
+metrics-server-7df68bc6fc-q4kgs     1/1   Running   1          1d    10.244.2.8    worker-2
+2026-05-26T10:00:00Z INFO Pod nginx-deployment-7c79c4bf97-9hk6r scheduled to worker-1
+2026-05-26T10:00:01Z INFO Service nginx.default.svc.cluster.local resolved to 10.96.0.10
+2026-05-26T10:00:02Z WARN PV pvc-3f8c4d1a-0e8a-4d2b-9c4a-5e9f8c2d1a3b binding stalled 30s
+2026-05-26T10:00:03Z ERROR Pod my-app-bcdfghjklm-xyz25 CrashLoopBackOff
+2026-05-26T10:00:04Z INFO http GET /healthz from 10.244.1.5 status=200 duration=0.5ms
+2026-05-26T10:00:05Z INFO Node worker-1 ready, cpu=200m, memory=512Mi
+2026-05-26T10:00:06Z INFO MAC 00:1c:2d:3e:4f:5a on eth0 of worker-2
+2026-05-26T10:00:07Z INFO IPv6 fd00::1 reachable via master

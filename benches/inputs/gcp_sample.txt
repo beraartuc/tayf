@@ -1,0 +1,11 @@
+NAME      ZONE             MACHINE_TYPE   INTERNAL_IP   EXTERNAL_IP    STATUS
+web-1     us-central1-a    e2-medium      10.128.0.5    35.232.45.123  RUNNING
+worker-1  europe-west1-b   n2-standard-2  10.142.0.7    34.78.92.45    RUNNING
+2026-05-26T10:00:00Z INFO Instance web-1 booted in us-central1-a
+2026-05-26T10:00:01Z INFO Service account my-sa@my-project.iam.gserviceaccount.com authenticated
+2026-05-26T10:00:02Z INFO Cloud Storage URL https://storage.googleapis.com/my-bucket/obj.txt
+2026-05-26T10:00:03Z INFO Trace id 1c4d7e9f-2a8b-4d3c-9e1f-5a6b7c8d9e0f request to api.googleapis.com
+2026-05-26T10:00:04Z WARN Quota exceeded, status=429 duration=120s
+2026-05-26T10:00:05Z INFO Internal IP 10.128.0.5 reachable, external 35.232.45.123
+2026-05-26T10:00:06Z INFO IPv6 2600:1900::1 also assigned
+2026-05-26T10:00:07Z ERROR Unauthorized POST status=403 from admin@my-project.iam.gserviceaccount.com

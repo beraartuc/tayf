@@ -1,0 +1,12 @@
+2026-05-26T10:00:00.123456 IP 192.168.1.42.55321 > 10.0.0.1.443: Flags [S]
+2026-05-26T10:00:00.234567 IP 10.0.0.1.443 > 192.168.1.42.55321: Flags [S.]
+2026-05-26T10:00:00.345678 IP 192.168.1.42.55321 > 10.0.0.1.443: Flags [.]
+2026-05-26T10:00:00.456789 IP fe80::1.55322 > fe80::2.443: Flags [S]
+2026-05-26T10:00:00.567890 ARP aa:bb:cc:dd:ee:ff replied for 192.168.1.1
+2026-05-26T10:00:00.678901 ARP 00:1c:2d:3e:4f:5a request for 192.168.1.42
+;; ANSWER SECTION:
+example.com.            300     IN      A       93.184.216.34
+example.com.            300     IN      AAAA    2606:2800:220:1:248:1893:25c8:1946
+2026-05-26T10:00:01 INFO http GET https://example.com/api status=200
+2026-05-26T10:00:02 WARN http GET https://api.example.org/v1/data status=503
+2026-05-26T10:00:03 INFO Connection to badhost.example.net failed status=504

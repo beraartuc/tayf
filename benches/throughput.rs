@@ -21,8 +21,16 @@
 //!    active (alt-screen / bracketed paste / mouse). Modelled as a raw
 //!    `Write::write_all` to a `Cursor<Vec<u8>>`. Effectively the spec
 //!    target's denominator (`cat`-equivalent).
+//! 5. `apply_rules / profile-{aws,k8s,docker,gcp,network}` — v0.5.3 profile-
+//!    active hot path. One bench per embedded profile, each operating on a
+//!    synthetic domain-typical input (`benches/inputs/*_sample.txt`)
+//!    repeated up to the same ~67 KB scale as the four benches above.
+//!    Characterizes the per-line cost of the additional `append_rules`
+//!    layer + optional built-in whitelist filter on top of the v0.1
+//!    builtin scanner.
 //!
-//! Hot-path internals (`apply_rules`, `Compiled::load_builtins`) live behind
+//! Hot-path internals (`apply_rules`, `Compiled::load_builtins`,
+//! `profiles::load_with` + `Compiled::load_with_theme`) live behind
 //! `pub(crate)`. They are re-exported here via the `#[doc(hidden)] pub`
 //! `tayf::__bench__` module — not part of the public API.
 //!
@@ -39,7 +47,7 @@ use std::io::{Cursor, Write};
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 
-use tayf::__bench__::{apply_rules, load_builtin_rules, BenchScratch};
+use tayf::__bench__::{apply_rules, load_builtin_rules, load_profile_rules, BenchScratch};
 
 /// Synthetic IPv4-heavy input. Three IPv4 addresses, one HTTP status code,
 /// and one log-level token per line — five non-overlapping matches total,
@@ -150,11 +158,77 @@ fn bench_passthrough(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// v0.5.3 — profile-active benches. Characterize the with-profile hot path
+// against synthetic domain-typical input for each embedded profile (aws,
+// k8s, docker, gcp, network). The four benches above (ipv4-heavy /
+// mixed-syslog / captures-heavy / passthrough) continue to characterize
+// the profile-INACTIVE default path; their baselines remain unchanged.
+// ---------------------------------------------------------------------------
+
+/// Shared helper. Mirrors `bench_apply_rules_mixed_syslog`'s shape (per-line
+/// iteration with a hoisted `BenchScratch`) so the profile-active numbers
+/// are directly comparable to the existing mixed-syslog baseline.
+fn run_profile_bench(c: &mut Criterion, name: &str, profile: &str, fixture: &[u8]) {
+    let compiled = load_profile_rules(profile).expect("embedded profile must load and compile");
+    // Same ~67 KB scale as the existing apply_rules benches — a small fixture
+    // (~10-15 lines) repeated until criterion's per-iter overhead amortizes.
+    let input = fixture.repeat(80);
+    let mut scratch = BenchScratch::default();
+
+    let mut group = c.benchmark_group("apply_rules");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function(name, |b| {
+        b.iter(|| {
+            let mut out = Cursor::new(Vec::with_capacity(input.len() * 2));
+            for line in input.split(|&byte| byte == b'\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                apply_rules(black_box(line), &compiled, &mut scratch, &mut out)
+                    .expect("write to in-memory Cursor cannot fail");
+            }
+            black_box(out);
+        });
+    });
+    group.finish();
+}
+
+fn bench_profile_aws(c: &mut Criterion) {
+    let fixture: &[u8] = include_bytes!("inputs/aws_sample.txt");
+    run_profile_bench(c, "profile-aws", "aws", fixture);
+}
+
+fn bench_profile_k8s(c: &mut Criterion) {
+    let fixture: &[u8] = include_bytes!("inputs/k8s_sample.txt");
+    run_profile_bench(c, "profile-k8s", "k8s", fixture);
+}
+
+fn bench_profile_docker(c: &mut Criterion) {
+    let fixture: &[u8] = include_bytes!("inputs/docker_sample.txt");
+    run_profile_bench(c, "profile-docker", "docker", fixture);
+}
+
+fn bench_profile_gcp(c: &mut Criterion) {
+    let fixture: &[u8] = include_bytes!("inputs/gcp_sample.txt");
+    run_profile_bench(c, "profile-gcp", "gcp", fixture);
+}
+
+fn bench_profile_network(c: &mut Criterion) {
+    let fixture: &[u8] = include_bytes!("inputs/network_sample.txt");
+    run_profile_bench(c, "profile-network", "network", fixture);
+}
+
 criterion_group!(
     benches,
     bench_apply_rules_ipv4_heavy,
     bench_apply_rules_mixed_syslog,
     bench_apply_rules_captures_heavy,
     bench_passthrough,
+    bench_profile_aws,
+    bench_profile_k8s,
+    bench_profile_docker,
+    bench_profile_gcp,
+    bench_profile_network,
 );
 criterion_main!(benches);
