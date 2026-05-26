@@ -884,4 +884,129 @@ mod tests {
         let bytes = apply_to_line(&compiled, "Fake pod-aeiouaeiou-12345 status\n");
         assert!(no_sgr_span_for(&bytes, "pod-aeiouaeiou-12345"));
     }
+
+    // --- docker / container_id (§7.2.5) ---
+
+    #[test]
+    fn docker_container_id_matches_12hex() {
+        let compiled = compile_profile("docker");
+        let bytes = apply_to_line(&compiled, "Container abc123def456 created\n");
+        assert!(has_sgr_span_for(&bytes, "abc123def456"));
+    }
+
+    #[test]
+    fn docker_container_id_collision_with_git_short_hash_accepted() {
+        // Pins documented behavior (Q2 brainstorm verdict): 12-hex shape
+        // inside docker profile DOES match git long-form short hashes.
+        // Profile = opt-in domain context.
+        let compiled_docker = compile_profile("docker");
+        let bytes_docker = apply_to_line(&compiled_docker, "git: 7c79c4bf9712 by Alice\n");
+        assert!(has_sgr_span_for(&bytes_docker, "7c79c4bf9712"));
+
+        // Without docker profile (no profile activation), the 12-hex must
+        // NOT match — proves the styling is profile-attributable.
+        // Build a no-profile Compiled directly.
+        let no_profile_compiled = arc_swap::ArcSwap::from_pointee(
+            crate::rules::Compiled::load_with_theme(
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::terminfo::ColorDepth::Truecolor,
+            )
+            .expect("default compile"),
+        );
+        let bytes_default = apply_to_line(&no_profile_compiled, "git: 7c79c4bf9712 by Alice\n");
+        assert!(no_sgr_span_for(&bytes_default, "7c79c4bf9712"));
+    }
+
+    // --- docker / image_tag (§7.2.6) ---
+
+    #[test]
+    fn docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation() {
+        // Pins the v0.5.3 known limitation: when an image-tag's registry-host
+        // prefix is a valid FQDN (gcr.io, docker.io, ghcr.io, ECR host), the
+        // built-in `fqdn` rule (lower pattern index, blue SGR 34) wins via
+        // first-match-wins overlap resolution; docker.image_tag's magenta
+        // envelope match is rejected on the registry-host branch.
+        //
+        // Behavior is still useful — the FQDN portion is styled, just not
+        // the whole image:tag span. The bare `:latest` branch (no FQDN
+        // prefix) is unaffected — see docker_image_tag_bare_latest_branch.
+        //
+        // Future architecture: v0.5.4 may revisit rule-priority semantics
+        // OR special-case profile append_rules to outrank built-ins on
+        // overlapping spans. This test guards the current behavior so the
+        // v0.5.4 fix lands visibly.
+        let cases: &[(&str, &str)] = &[
+            ("gcr.io/google/nginx:1.21", "gcr.io"),
+            ("docker.io/library/redis:6.2-alpine", "docker.io"),
+            ("ghcr.io/user/repo:abc123", "ghcr.io"),
+            (
+                "012345678901.dkr.ecr.us-east-1.amazonaws.com/my-app:v1.2.3",
+                "012345678901.dkr.ecr.us-east-1.amazonaws.com",
+            ),
+        ];
+        let compiled = compile_profile("docker");
+        for (img, host) in cases {
+            let line = format!("Pull {img} done\n");
+            let bytes = apply_to_line(&compiled, &line);
+            let s = String::from_utf8_lossy(&bytes);
+            // FQDN host must surface with blue SGR (color 34).
+            assert!(
+                s.contains(&format!("\u{1b}[34m{host}")),
+                "fqdn blue SGR must wrap registry host {host:?}: {s:?}"
+            );
+            // image_tag magenta SGR (35) MUST NOT wrap the full envelope —
+            // the fqdn claim eats the prefix and the magenta rule cannot
+            // match a span that starts inside another rule's claim.
+            assert!(
+                !s.contains(&format!("\u{1b}[35m{img}")),
+                "image_tag magenta must NOT wrap envelope when fqdn matches host: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn docker_image_tag_bare_latest_branch() {
+        // Bare `:latest` images have no FQDN prefix, so docker.image_tag
+        // fires cleanly with magenta SGR (35) on the full envelope.
+        const IMAGES: &[&str] = &["nginx:latest", "library/redis:latest", "my-app:latest"];
+        let compiled = compile_profile("docker");
+        for img in IMAGES {
+            let line = format!("docker pull {img}\n");
+            let bytes = apply_to_line(&compiled, &line);
+            assert!(has_sgr_span_for(&bytes, img), "bare :latest must match: {img}");
+        }
+    }
+
+    #[test]
+    fn docker_image_tag_does_not_match_bare_non_latest() {
+        // Bare `nginx:1.21` (no registry, non-latest tag) does NOT match.
+        let compiled = compile_profile("docker");
+        let bytes = apply_to_line(&compiled, "docker pull nginx:1.21\n");
+        assert!(no_sgr_span_for(&bytes, "nginx:1.21"));
+    }
+
+    #[test]
+    fn docker_image_tag_does_not_match_fp_shapes() {
+        // JSON key:value, host:port, module:line FP guards. The image_tag
+        // magenta SGR `\x1b[35` must NOT appear in the output for any of
+        // these candidate lines. (Other built-in styles may apply — fine.)
+        const FP_LINES: &[&str] = &[
+            r#"config: {"foo":"bar"}"#,
+            "Connection localhost:8080 ok",
+            "ERROR src/main.rs:42 panicked",
+        ];
+        let compiled = compile_profile("docker");
+        for line in FP_LINES {
+            let bytes = apply_to_line(&compiled, &format!("{line}\n"));
+            let s = String::from_utf8_lossy(&bytes);
+            assert!(
+                !s.contains("\u{1b}[35"),
+                "FP line `{line}` triggered image_tag magenta SGR: {s:?}"
+            );
+        }
+    }
 }

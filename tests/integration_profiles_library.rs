@@ -126,3 +126,67 @@ fn k8s_profile_renders_pod_name_on_kubectl_output() {
         String::from_utf8_lossy(&bytes)
     );
 }
+
+// ---------------------------------------------------------------------------
+// docker profile
+// ---------------------------------------------------------------------------
+
+#[test]
+fn docker_profile_renders_container_id_and_image_tag() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    let input = "Container abc123def456 image=gcr.io/proj/app:v1.2 started";
+    let bytes = run_with_profile(xdg.path(), input, "docker");
+    assert!(
+        has_some_sgr_around(&bytes, "abc123def456"),
+        "expected styling around container_id; got: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(
+        has_some_sgr_around(&bytes, "gcr.io/proj/app:v1.2"),
+        "expected styling around image_tag; got: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gcp profile (filter-only — proves whitelist drops `permission`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gcp_profile_filter_only_drops_permission_keeps_whitelist() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    // Input mixes a permission shape (rwxr-xr-x — whitelisted out) with
+    // whitelist members (timestamp, log_level, http_status).
+    let input = "drwxr-xr-x bucket 2026-05-26T10:00:00Z INFO status=200";
+    let bytes = run_with_profile(xdg.path(), input, "gcp");
+    let s = String::from_utf8_lossy(&bytes);
+    // Whitelist members must appear in output.
+    assert!(s.contains("2026-05-26T10:00:00Z"), "timestamp text must survive");
+    assert!(s.contains("INFO"), "log_level text must survive");
+    assert!(s.contains("200"), "http_status text must survive");
+    // permission rule (`rwxr-xr-x`) must appear plainly (not styled).
+    assert!(
+        s.contains("drwxr-xr-x"),
+        "perm shape must appear plain (whitelist filter dropped permission rule)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// network profile (filter-only — proves whitelist drops `uuid`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn network_profile_filter_only_drops_uuid_keeps_ips() {
+    let xdg = tempfile::tempdir().expect("tmpdir");
+    let input = "192.168.1.1:443 -> 10.0.0.2:8080 \
+         (uuid 123e4567-e89b-12d3-a456-426614174000)";
+    let bytes = run_with_profile(xdg.path(), input, "network");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("192.168.1.1"), "ipv4 #1 must surface");
+    assert!(s.contains("10.0.0.2"), "ipv4 #2 must surface");
+    assert!(
+        s.contains("123e4567-e89b-12d3-a456-426614174000"),
+        "uuid must appear literally (whitelist filter dropped uuid rule)"
+    );
+    assert!(s.contains("\u{1b}["), "expected at least one SGR; got: {s:?}");
+}
