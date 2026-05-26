@@ -25,12 +25,20 @@ all-features = true
 # equivalent to MIT — short, OSI-approved, no copyleft. Tayf's Linux build
 # cannot ship without inotify support, and the inotify maintainer's choice
 # of ISC is industry-standard.
+#
+# Zlib is a permissive license used by `foldhash` 0.2.0, pulled in
+# transitively via ratatui → kasuari (the layout cache we enable with the
+# `layout-cache` feature). The zlib License is OSI-approved and FSF-
+# recognized as Free/Libre; it is functionally equivalent to MIT with the
+# sole addition that modified source files must be marked as changed. It
+# imposes no copyleft contagion on tayf.
 allow = [
     "MIT",
     "Apache-2.0",
     "Unicode-3.0",
     "CC0-1.0",
     "ISC",
+    "Zlib",
 ]
 confidence-threshold = 0.93
 
