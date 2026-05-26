@@ -116,6 +116,7 @@ const EMBEDDED_PROFILES: &[(&str, &str)] = &[
     ("aws", include_str!("../assets/profiles/aws.toml")),
     ("k8s", include_str!("../assets/profiles/k8s.toml")),
     ("docker", include_str!("../assets/profiles/docker.toml")),
+    ("gcp", include_str!("../assets/profiles/gcp.toml")),
 ];
 
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
@@ -614,6 +615,17 @@ mod tests {
             .expect("embedded docker must load");
         assert_eq!(lp.path_label, "<embedded:profile/docker>");
         assert_eq!(lp.profile.append_rules.len(), 2, "docker ships container_id + image_tag");
+    }
+
+    #[test]
+    fn load_embedded_gcp_returns_loadedprofile_with_synthetic_path() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let lp = load_with("gcp", || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded gcp must load");
+        assert_eq!(lp.path_label, "<embedded:profile/gcp>");
+        assert!(lp.profile.append_rules.is_empty(), "gcp is filter-only (no append_rules)");
+        let rules = lp.profile.rules.as_ref().expect("gcp uses whitelist");
+        assert_eq!(rules.len(), 10, "gcp whitelist has 10 built-ins");
     }
 
     // --- aws / instance_id (§7.2.1) ---
