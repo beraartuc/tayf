@@ -8,12 +8,14 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.host }})
+    runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - host: linux
+            runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -36,7 +38,7 @@ jobs:
 
   audit:
     name: Security audit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -48,20 +50,21 @@ jobs:
         run: cargo deny check
 
   bench-regression:
-    name: Bench regression (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Bench regression (${{ matrix.host }})
+    runs-on: ${{ matrix.runs-on }}
     needs: test  # only run if test passes (don't bench broken code)
     strategy:
-      fail-fast: false  # ubuntu + macos independent
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - host: linux
+            runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # jq is preinstalled on ubuntu-latest (1.7) and macos-latest (1.8.1)
-      # per actions/runner-images. No install step needed.
+      # jq must be preinstalled on the self-hosted runner (apt install jq).
 
       - name: Run benches
         run: cargo bench --bench throughput
@@ -78,7 +81,7 @@ jobs:
             }
           done
 
-          baseline="benches/baselines/latest/${{ matrix.os }}.json"
+          baseline="benches/baselines/latest/${{ matrix.host }}.json"
           if [[ -f "$baseline" ]]; then
             for bench in apply_rules/ipv4-heavy apply_rules/mixed-syslog apply_rules/captures-heavy passthrough/write_all; do
               jq -e --arg b "$bench" '.benches[$b].mean_ns' "$baseline" > /dev/null || {
@@ -95,7 +98,7 @@ jobs:
           STRICT_MODE: ${{ contains(github.event.pull_request.labels.*.name, 'bench-ci-strict') }}
         run: |
           set -euo pipefail
-          baseline="benches/baselines/latest/${{ matrix.os }}.json"
+          baseline="benches/baselines/latest/${{ matrix.host }}.json"
           if [[ ! -f "$baseline" ]]; then
             echo "::warning::no baseline at $baseline; skipping comparison"
             exit 0
@@ -145,6 +148,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: criterion-${{ matrix.os }}
+          name: criterion-${{ matrix.host }}
           path: target/criterion/
           retention-days: 14
