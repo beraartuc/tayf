@@ -29,16 +29,20 @@ jobs:
       - name: Build
         run: cargo build --release
       - name: Test
-        timeout-minutes: 10  # surface hung tests with logs instead of running until job timeout
+        timeout-minutes: 10
         env:
           # OSC 11 hang root cause investigation deferred (spec §4.4 D-fallback);
           # integration tests bypass bg_detect entirely. Production behavior
           # unchanged. See CHANGELOG [0.3.2] for the investigation summary.
           TAYF_DISABLE_BG_DETECT: "1"
-        # --test-threads=1 + --nocapture is purely diagnostic to identify
-        # a hung integration test on the self-hosted runner; revert to
-        # parallel test execution once the hang is fixed.
-        run: cargo test --all-targets -- --nocapture --test-threads=1
+        # `cargo test` (default scope) covers lib + bins + integration tests
+        # + examples + doctests.  Benches run in the dedicated bench-regression
+        # job below via `cargo bench`, which is the correct invocation for
+        # criterion — `cargo test --all-targets` triggers criterion's test
+        # mode, which hangs indefinitely on the self-hosted Linux runner
+        # (likely a plotters / system-font interaction); the bench-regression
+        # job still exercises full compilation + execution of every bench.
+        run: cargo test
 
   audit:
     name: Security audit
