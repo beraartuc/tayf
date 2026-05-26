@@ -117,6 +117,7 @@ const EMBEDDED_PROFILES: &[(&str, &str)] = &[
     ("k8s", include_str!("../assets/profiles/k8s.toml")),
     ("docker", include_str!("../assets/profiles/docker.toml")),
     ("gcp", include_str!("../assets/profiles/gcp.toml")),
+    ("network", include_str!("../assets/profiles/network.toml")),
 ];
 
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
@@ -626,6 +627,68 @@ mod tests {
         assert!(lp.profile.append_rules.is_empty(), "gcp is filter-only (no append_rules)");
         let rules = lp.profile.rules.as_ref().expect("gcp uses whitelist");
         assert_eq!(rules.len(), 10, "gcp whitelist has 10 built-ins");
+    }
+
+    #[test]
+    fn load_embedded_network_returns_loadedprofile_with_synthetic_path() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let lp = load_with("network", || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded network must load");
+        assert_eq!(lp.path_label, "<embedded:profile/network>");
+        assert!(lp.profile.append_rules.is_empty(), "network is filter-only");
+        let rules = lp.profile.rules.as_ref().expect("network uses whitelist");
+        assert_eq!(rules.len(), 8, "network whitelist has 8 built-ins");
+    }
+
+    #[test]
+    fn disk_profile_overrides_embedded_with_same_name() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let profiles_dir = xdg.path().join("tayf").join("profiles");
+        std::fs::create_dir_all(&profiles_dir).expect("create profiles dir");
+        std::fs::write(profiles_dir.join("aws.toml"), "rules = [\"timestamp\"]\n")
+            .expect("write disk profile");
+
+        let lp = load_with("aws", || Some(xdg.path().to_path_buf()), || None)
+            .expect("disk override must load");
+        assert!(
+            !lp.path_label.starts_with("<embedded:"),
+            "disk profile path_label must be canonical disk path, not synthetic; got: {}",
+            lp.path_label,
+        );
+        assert!(
+            lp.profile.append_rules.is_empty(),
+            "disk override must replace embedded content; embedded aws has 3 append_rules but disk override has none"
+        );
+    }
+
+    #[test]
+    fn load_nonexistent_profile_returns_notfound_with_embedded_in_searched() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let err = load_with("nonexistent_xyz", || Some(xdg.path().to_path_buf()), || None)
+            .expect_err("nonexistent profile must fail");
+        match err {
+            Error::Profile {
+                source_path, kind: ProfileErrorKind::NotFound { searched }, ..
+            } => {
+                assert_eq!(source_path, "<embedded:profile/nonexistent_xyz>");
+                let any_embedded =
+                    searched.iter().any(|p| p.to_string_lossy().starts_with("<embedded:profile/"));
+                assert!(
+                    any_embedded,
+                    "searched must include embedded namespace; got: {searched:?}"
+                );
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn embedded_profile_count_matches_shipped_library() {
+        assert_eq!(EMBEDDED_PROFILES.len(), 5);
+        let names: Vec<&str> = EMBEDDED_PROFILES.iter().map(|(n, _)| *n).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec!["aws", "docker", "gcp", "k8s", "network"]);
     }
 
     // --- aws / instance_id (§7.2.1) ---
