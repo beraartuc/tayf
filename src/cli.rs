@@ -323,10 +323,7 @@ mod tests {
     #[test]
     fn parses_config_subcommand_no_action() {
         let args = Args::try_parse_from(["tayf", "config"]).unwrap();
-        assert!(matches!(
-            args.cmd,
-            Some(Cmd::Config(ConfigArgs { action: None }))
-        ));
+        assert!(matches!(args.cmd, Some(Cmd::Config(ConfigArgs { action: None }))));
     }
 
     #[test]
