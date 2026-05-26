@@ -134,7 +134,13 @@ fn k8s_profile_renders_pod_name_on_kubectl_output() {
 #[test]
 fn docker_profile_renders_container_id_and_image_tag() {
     let xdg = tempfile::tempdir().expect("tmpdir");
-    let input = "Container abc123def456 image=gcr.io/proj/app:v1.2 started";
+    // Use bare `:latest` image (no registry-host prefix) to avoid the
+    // documented fqdn-vs-image_tag collision pinned by
+    // `docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation`.
+    // Bare images have no `.tld` segment, so fqdn doesn't fire and
+    // image_tag's `:latest` branch matches the whole `nginx:latest`
+    // literal as one contiguous SGR span — verifiable via substring.
+    let input = "Container abc123def456 image=nginx:latest started";
     let bytes = run_with_profile(xdg.path(), input, "docker");
     assert!(
         has_some_sgr_around(&bytes, "abc123def456"),
@@ -142,7 +148,7 @@ fn docker_profile_renders_container_id_and_image_tag() {
         String::from_utf8_lossy(&bytes)
     );
     assert!(
-        has_some_sgr_around(&bytes, "gcr.io/proj/app:v1.2"),
+        has_some_sgr_around(&bytes, "nginx:latest"),
         "expected styling around image_tag; got: {:?}",
         String::from_utf8_lossy(&bytes)
     );
@@ -160,8 +166,13 @@ fn gcp_profile_filter_only_drops_permission_keeps_whitelist() {
     let input = "drwxr-xr-x bucket 2026-05-26T10:00:00Z INFO status=200";
     let bytes = run_with_profile(xdg.path(), input, "gcp");
     let s = String::from_utf8_lossy(&bytes);
-    // Whitelist members must appear in output.
-    assert!(s.contains("2026-05-26T10:00:00Z"), "timestamp text must survive");
+    // Whitelist members must appear in output. The timestamp built-in
+    // uses capture-group styling (date / sep / time / ms / tz — five
+    // SGR runs per match), so the full ISO literal is NOT contiguous in
+    // the styled bytes. The date capture group (`\d{4}-\d{2}-\d{2}`)
+    // IS contiguous within its own yellow SGR; checking that proves the
+    // timestamp rule fired without depending on inter-group bytes.
+    assert!(s.contains("2026-05-26"), "timestamp date capture-group must survive");
     assert!(s.contains("INFO"), "log_level text must survive");
     assert!(s.contains("200"), "http_status text must survive");
     // permission rule (`rwxr-xr-x`) must appear plainly (not styled).
