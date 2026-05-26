@@ -4,6 +4,119 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - TBD
+
+### Added
+- Built-in profile library: `aws`, `k8s`, `docker`, `gcp`, `network` ship
+  in `assets/profiles/`. Activate with `tayf --profile <name>` or
+  `[general] profile = "<name>"` in `~/.config/tayf/config.toml`. Profile
+  semantics (whitelist filter + append_rules + theme override) unchanged
+  from the v0.5.2 mechanism.
+- `aws` profile: `instance_id` (`\bi-[a-f0-9]{17}\b`), `arn` (right-
+  anchored to prevent trailing punctuation), and `region` (34-region
+  exhaustive enumeration covering commercial, GovCloud, and China
+  partitions). Append-only — all 13 built-ins remain active.
+- `k8s` profile: `pod_name` pattern using K8s
+  `apimachinery/pkg/util/rand` base32 alphabet
+  (`bcdfghjklmnpqrstvwxz2456789`). Audit-deviation documented in TOML
+  comments — v0.5.1 spec §11.2 recommended `[a-f0-9]{10}` but real K8s
+  ReplicaSet hashes use base32 subset; hex-only shape would miss ~99%
+  of pods. Append-only.
+- `docker` profile: `container_id` (12-hex) and `image_tag` (registry-
+  host required or bare `:latest` tag). Collision caveats with git short
+  hashes and UUID segments accepted by design — profile activation
+  signals domain context. Append-only.
+- `gcp` profile: filter-only whitelist of 10 built-ins relevant to
+  gcloud CLI output. Excludes `permission` (Unix-perms, not GCP IAM
+  JSON), `mac` (rare in gcloud), and `filename` (Cloud Storage paths
+  covered by `url` built-in).
+- `network` profile: filter-only whitelist of 8 network-relevant
+  built-ins (tcpdump / netstat / dig focus). Excludes `uuid`,
+  `permission`, `email`, `duration`, `filename`.
+- Embedded profile discovery completed — `src/profiles.rs::load_with`
+  now consults an `include_str!`-backed `EMBEDDED_PROFILES` table
+  between disk discovery and `NotFound`. User disk profiles still
+  shadow embedded by writing
+  `~/.config/tayf/profiles/<name>.toml`. v0.5.2 shipped the mechanism
+  with the embedded path stubbed (returned NotFound); v0.5.3 lights
+  it up.
+
+### Changed
+- `Error::Profile { kind: RegexCompile, .. }` exit code now splits on
+  source path: embedded profile (path label
+  `<embedded:profile/...>`) maps to 70 (`EX_SOFTWARE`, tayf library
+  bug); user disk profile maps to 64 (`EX_USAGE`, user TOML error).
+  v0.5.2 single-mapping was correct when zero embedded profiles
+  shipped; v0.5.3 first library mandates the split.
+
+### Known Limitations
+Both items below share the same architectural root cause: tayf's
+pipeline (`src/pipeline.rs::apply_rules`) resolves overlapping rule
+matches by RegexSet pattern-order priority — built-in rules
+(indices 0-12) outrank profile `append_rules` (indices 13+) on
+any byte-overlap. A future sub-version may revisit this (either
+elevate profile rules to higher priority OR tighten the built-in
+patterns); both pinned tests below will fail visibly when that
+landing happens, by design.
+
+- **`aws.arn` envelope yields to built-in `ipv6` on canonical empty-
+  region ARNs.** The built-in `ipv6` pattern's compressed-form
+  alternation matches `3::`, `f::`, etc., consuming a substring
+  inside ARNs like `arn:aws:s3:::my-bucket` before `aws.arn` can
+  match the envelope. Behavior pinned by
+  `aws_arn_yields_to_interior_region_pattern_v0_5_3_limitation` and
+  documented in `assets/profiles/aws.toml`. Collision-free ARN
+  shapes (e.g., IAM role ARNs without hex segments —
+  `arn:aws:iam:::role/MyRole`) still match the envelope correctly.
+
+- **`docker.image_tag` envelope yields to built-in `fqdn` on
+  registry-host image references.** The built-in `fqdn` pattern
+  matches the registry-host prefix (e.g., `gcr.io`, `docker.io`)
+  before `docker.image_tag` can match the full envelope. Behavior
+  pinned by
+  `docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation`.
+  Bare `:latest` shapes (without a registry-host prefix — e.g.,
+  `nginx:latest`) still match the envelope correctly.
+
+### Tests
+- Per-profile PTY integration tests verify SGR injection on
+  representative domain input (one test per profile, 6 total —
+  including the limitation pins).
+- AWS region exhaustive enum unit test — 34 per-region assertions
+  plus a negative-regression unit test pinning enum-exhaustivity
+  (invented future regions must not match).
+- Per-pattern positive + negative regression tests for `instance_id`,
+  `arn`, `pod_name`, `container_id`, `image_tag` (16 unit tests
+  total).
+- EX_USAGE/EX_SOFTWARE split unit tests (3 cases: embedded
+  RegexCompile, disk RegexCompile, embedded non-RegexCompile).
+- Schema invariant unit tests pin `Profile`/`ProfileRule`
+  byte-identical to v0.5.2 plus the `#[serde(deny_unknown_fields)]`
+  enforcement.
+- Embedded profile discovery unit tests (8 across Tasks 1, 2, 4, 5,
+  6): per-profile load success, disk override of embedded by same
+  name, NotFound diagnostic includes the embedded namespace in
+  `searched`, and the EMBEDDED_PROFILES table-shape invariant
+  (count = 5, sorted names).
+- Five new criterion benches characterize the profile-active path
+  with canonical baselines recorded post-tag for Linux and macOS.
+
+### Internal
+- No documented public API change. `Profile` / `ProfileRule` /
+  `RuleSource` / `Error` variants byte-identical to v0.5.2. The
+  `src/lib.rs` change is a single new helper added inside the
+  existing `#[doc(hidden)] pub mod __bench__` adapter module
+  (`load_profile_rules`) — preserves the v0.1.1 convention that
+  bench access is hidden, opaque, and not part of the documented
+  public surface.
+- Profile-inactive hot path byte-equal to v0.5.2 (existing
+  `hot_path_unchanged_when_no_profile` test passes unchanged).
+- `RuleSource::` match-site count remains 72 (no new variant, no
+  new match arms).
+- Duplicate-formatter audit clean (5 sites in `src/rules.rs`
+  unchanged).
+- `assets/profiles/.gitkeep` removed — directory now ships 5 files.
+
 ## [0.5.2] — 2026-05-26
 
 ### Added
