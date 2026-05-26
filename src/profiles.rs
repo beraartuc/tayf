@@ -115,6 +115,7 @@ pub(crate) fn synthetic_path(name: &str) -> String {
 const EMBEDDED_PROFILES: &[(&str, &str)] = &[
     ("aws", include_str!("../assets/profiles/aws.toml")),
     ("k8s", include_str!("../assets/profiles/k8s.toml")),
+    ("docker", include_str!("../assets/profiles/docker.toml")),
 ];
 
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
@@ -604,6 +605,15 @@ mod tests {
             .expect("embedded k8s must load");
         assert_eq!(lp.path_label, "<embedded:profile/k8s>");
         assert_eq!(lp.profile.append_rules.len(), 1, "k8s ships pod_name only");
+    }
+
+    #[test]
+    fn load_embedded_docker_returns_loadedprofile_with_synthetic_path() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let lp = load_with("docker", || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded docker must load");
+        assert_eq!(lp.path_label, "<embedded:profile/docker>");
+        assert_eq!(lp.profile.append_rules.len(), 2, "docker ships container_id + image_tag");
     }
 
     // --- aws / instance_id (§7.2.1) ---
