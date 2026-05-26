@@ -1,12 +1,14 @@
 //! Profile loading, validation, and merging.
 //!
-//! A *profile* is a named bundle of rule configuration. v0.5.2 ships
-//! the **mechanism only**; the curated profile library lands in
-//! v0.5.3 (see umbrella vision §3.4).
+//! A *profile* is a named bundle of rule configuration. v0.5.2 shipped
+//! the mechanism; v0.5.3 ships the curated built-in library (`aws`,
+//! `k8s`, `docker`, `gcp`, `network`) embedded via `include_str!` —
+//! see [`EMBEDDED_PROFILES`].
 //!
 //! Profiles are loaded from disk
-//! (`~/.config/tayf/profiles/<name>.toml`) or from embedded sources
-//! (`assets/profiles/<name>.toml`, none shipped in v0.5.2). Discovery
+//! (`~/.config/tayf/profiles/<name>.toml`) or from the embedded
+//! library. Disk discovery wins over embedded (user customization
+//! shadows shipped defaults). Discovery
 //! and canonicalisation mirror [`crate::themes`] exactly — same file
 //! layout (no `[profile.X]` header in either location; file name is
 //! the profile name), same predicate for valid names
@@ -104,9 +106,17 @@ pub(crate) fn synthetic_path(name: &str) -> String {
     format!("<embedded:profile/{name}>")
 }
 
+/// Profiles shipped with the binary, embedded at compile time via
+/// `include_str!`. Discovery order in `load_with` is: disk first
+/// (user customization wins) → embedded fallback → `NotFound`. To
+/// add a profile, drop a TOML file under `assets/profiles/` and add
+/// an entry here; a unit test added in Task 6 (`network` profile)
+/// will pin the table count + name set.
+const EMBEDDED_PROFILES: &[(&str, &str)] = &[("aws", include_str!("../assets/profiles/aws.toml"))];
+
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
-/// the environment for disk discovery; embedded profiles are not
-/// shipped in v0.5.2 (library lands in v0.5.3).
+/// the environment for disk discovery; falls back to the embedded
+/// library ([`EMBEDDED_PROFILES`]) on miss.
 ///
 /// On success returns [`LoadedProfile`]. On failure returns
 /// [`Error::Profile`] (single-error: `NotFound`, `ParseError`,
@@ -129,8 +139,9 @@ pub(crate) fn load(name: &str) -> Result<LoadedProfile> {
 /// without mutating the process environment.
 ///
 /// Mirrors `themes::load_with`. Discovery order:
-/// 1. Disk: `<config_base>/profiles/<name>.toml`.
-/// 2. Embedded: none shipped in v0.5.2 (reserved for v0.5.3).
+/// 1. Disk: `<config_base>/profiles/<name>.toml` (user customization).
+/// 2. Embedded: [`EMBEDDED_PROFILES`] (v0.5.3 library — aws, k8s,
+///    docker, gcp, network).
 ///
 /// # Errors
 /// See [`load`].
@@ -236,9 +247,22 @@ pub(crate) fn load_with(
         }
     }
 
-    // 4. Embedded discovery — v0.5.2 ships ZERO profiles. Append the
-    //    synthetic path to `searched` so the NotFound diagnostic
-    //    surfaces both the disk attempt and the embedded namespace.
+    // 4. Embedded discovery (v0.5.3 +). Library content shipped via
+    //    `include_str!`; tried AFTER disk so user disk profiles take
+    //    precedence (allows users to override an embedded profile by
+    //    writing ~/.config/tayf/profiles/<name>.toml).
+    if let Some((_, source)) = EMBEDDED_PROFILES.iter().find(|(n, _)| *n == name) {
+        let path_label = synthetic_path(name);
+        let profile: Profile = toml::from_str(source).map_err(|e| Error::Profile {
+            name: name.to_owned(),
+            source_path: path_label.clone(),
+            kind: ProfileErrorKind::ParseError { message: e.to_string() },
+        })?;
+        validate_profile(name, &path_label, &profile)?;
+        return Ok(LoadedProfile { profile, path_label });
+    }
+
+    // 5. NotFound — disk attempt + embedded namespace listed for diagnostics.
     searched.push(std::path::PathBuf::from(synthetic_path(name)));
     Err(Error::Profile {
         name: name.to_owned(),
@@ -491,5 +515,21 @@ mod tests {
             }
             other => panic!("expected ProfileValidation, got {other:?}"),
         }
+    }
+
+    // v0.5.3 — embedded discovery (§7.7).
+
+    #[test]
+    fn load_embedded_aws_returns_loadedprofile_with_synthetic_path() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let lp = load_with("aws", || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded aws must load");
+        assert_eq!(lp.path_label, "<embedded:profile/aws>");
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["instance_id", "region", "arn"],
+            "aws append_rules must ship in this order and with these names"
+        );
     }
 }

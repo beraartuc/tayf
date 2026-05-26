@@ -1,0 +1,27 @@
+# AWS profile — append_rules add 3 AWS-specific shapes on top of all 13
+# built-ins. Activate with `tayf --profile aws` or
+# `[general] profile = "aws"` in ~/.config/tayf/config.toml.
+
+[[append_rules]]
+name = "instance_id"
+# Shape-unique EC2 / EBS / etc. ID prefix: i-<17 hex>.
+# Examples: i-0abcd1234567890ef
+# Audit verdict (v0.5.1 spec §11.2): SHIP-AS-IS.
+pattern = '\bi-[a-f0-9]{17}\b'
+style = { fg = "cyan" }
+
+[[append_rules]]
+name = "region"
+# Exhaustive AWS region enumeration — snapshot 2026-05-26.
+# 34 regions across commercial / GovCloud / China partitions.
+# Future regions require patch release + unit test update + CHANGELOG.
+pattern = '\b(?:us-east-1|us-east-2|us-west-1|us-west-2|us-gov-east-1|us-gov-west-1|ca-central-1|ca-west-1|eu-central-1|eu-central-2|eu-west-1|eu-west-2|eu-west-3|eu-north-1|eu-south-1|eu-south-2|af-south-1|me-south-1|me-central-1|il-central-1|ap-east-1|ap-south-1|ap-south-2|ap-northeast-1|ap-northeast-2|ap-northeast-3|ap-southeast-1|ap-southeast-2|ap-southeast-3|ap-southeast-4|ap-southeast-5|sa-east-1|cn-north-1|cn-northwest-1)\b'
+style = { fg = "green" }
+
+[[append_rules]]
+name = "arn"
+# Amazon Resource Name across commercial / GovCloud / China partitions.
+# Audit verdict: RESHAPE — right-anchor with last-char word-char subset
+# to prevent trailing punctuation (`.`, `:`, `-`) from being eaten.
+pattern = '\barn:aws(?:-us-gov|-cn)?:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9_/.:+@*-]*[a-zA-Z0-9_/+@*-]\b'
+style = { fg = "magenta" }
