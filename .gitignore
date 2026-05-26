@@ -6,3 +6,6 @@ Cargo.lock.bak
 
 # Claude Code session state (per-developer; not source-controlled)
 .claude/
+
+# Superpowers brainstorming visual companion (mockups + server state)
+.superpowers/
