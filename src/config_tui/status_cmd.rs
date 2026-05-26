@@ -116,16 +116,20 @@ pub(crate) fn render(args: &RunArgs) -> StatusOutput {
     let _ = writeln!(stdout, "bg detect: {bg}");
 
     // hot reload watcher status
+    // `read_recent_events` takes the STATE dir (`<cfg_base>/runtime/`),
+    // not the cfg base. Mirrors `ReloadLogger::new`, which writes to
+    // `cfg_dir.join("runtime")/reload.log`.
     let hot_line = match &config_dir_opt {
         Some(dir) => {
-            let events = crate::reload::read_recent_events(dir, RECENT_EVENTS_LIMIT);
+            let state_dir = dir.join("runtime");
+            let events = crate::reload::read_recent_events(&state_dir, RECENT_EVENTS_LIMIT);
             if events.is_empty() {
                 "hot reload: no active wrapper detected\n".to_owned()
             } else {
                 format!(
-                    "hot reload: {} recent event(s) in {}/runtime/reload.log\n",
+                    "hot reload: {} recent event(s) in {}/reload.log\n",
                     events.len(),
-                    dir.display()
+                    state_dir.display()
                 )
             }
         }
@@ -212,5 +216,44 @@ mod tests {
         args.theme = Some("light".to_owned());
         let out = render(&args);
         assert!(out.stdout.contains("theme: light"), "got: {}", out.stdout);
+    }
+
+    #[test]
+    fn status_reports_seeded_reload_events_from_runtime_log() {
+        // Integration pin: render() must read the reload log from
+        // `<cfg_base>/runtime/reload.log` — same path that
+        // `ReloadLogger::new(cfg_base)` writes to. A bug where the
+        // lookup omits the `runtime/` join would always emit "no
+        // active wrapper" regardless of seeded events.
+        use crate::reload::{ReloadEvent, ReloadLogger, ReloadOutcome};
+        use std::time::SystemTime;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("tayf.toml");
+        std::fs::write(&cfg_path, "[general]\n").expect("write minimal config");
+
+        let logger = ReloadLogger::new(tmp.path());
+        assert!(logger.enabled, "logger must enable for the seeding step");
+        for i in 1..=3u64 {
+            logger.append(&ReloadEvent {
+                timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(i * 100),
+                reload_count: i,
+                outcome: ReloadOutcome::Ok,
+            });
+        }
+
+        let mut args = baseline_args();
+        args.config = Some(cfg_path);
+        let out = render(&args);
+
+        assert!(
+            out.stdout.contains("hot reload: 3 recent event(s)"),
+            "render must surface seeded events from <cfg_base>/runtime/reload.log; got: {}",
+            out.stdout
+        );
+        assert!(
+            out.stdout.contains("/runtime/reload.log"),
+            "hot reload line must name the runtime/reload.log path; got: {}",
+            out.stdout
+        );
     }
 }
