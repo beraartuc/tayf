@@ -5,7 +5,7 @@
 //! `--kind` restricts the output to one section; default emits all
 //! three concatenated with one blank line between sections.
 
-use std::fmt::Write as FmtWrite;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -14,8 +14,8 @@ use crate::cli::DumpKind;
 /// Entry point invoked by `crate::config_tui::dump` dispatcher.
 ///
 /// Writes the catalog to stdout. Returns `ExitCode::SUCCESS` on
-/// success; `ExitCode::from(70)` (`EX_SOFTWARE`) if a serialize bug
-/// fires (theoretically unreachable — tested round-trip).
+/// success; `ExitCode::from(70)` (`EX_SOFTWARE`) on a stdout write
+/// error (practically unreachable in a normal process context).
 pub(crate) fn run(kind: Option<DumpKind>) -> ExitCode {
     let body = render(kind);
     let mut out = std::io::stdout().lock();
@@ -28,6 +28,7 @@ pub(crate) fn run(kind: Option<DumpKind>) -> ExitCode {
 /// Pure render fn — returns the catalog string. Separated from `run`
 /// so unit tests can assert byte-pinned output without intercepting
 /// stdout.
+#[must_use]
 pub(crate) fn render(kind: Option<DumpKind>) -> String {
     let mut out = String::new();
     let want_patterns = matches!(kind, None | Some(DumpKind::Patterns));
@@ -35,14 +36,15 @@ pub(crate) fn render(kind: Option<DumpKind>) -> String {
     let want_profiles = matches!(kind, None | Some(DumpKind::Profiles));
 
     if want_patterns {
-        out.push_str("# Built-in patterns shipped with tayf. Edit a user copy by\n");
-        out.push_str("# placing a `[[rules]]` entry with the same `name` in your\n");
-        out.push_str("# ~/.config/tayf/config.toml; tayf's user-config layer\n");
-        out.push_str("# overrides the built-in pattern + style.\n\n");
+        out.push_str("# Built-in pattern CATALOG (reference, not paste-ready).\n");
+        out.push_str("# The [[patterns]] table below is documentation only — your\n");
+        out.push_str("# user config uses [[rules]] (not [[patterns]]). To override a\n");
+        out.push_str("# built-in style, add a [[rules]] entry in ~/.config/tayf/config.toml\n");
+        out.push_str("# with the same `name` and your `pattern` + `style` fields.\n\n");
         for rule in crate::rules::builtin_rules() {
             out.push_str("[[patterns]]\n");
-            // reason: writeln! on String (FmtWrite) avoids a temporary
-            // allocation per push_str(&format!(...)) call.
+            // reason: writeln! on String avoids the temporary allocation
+            // that push_str(&format!(...)) would create per call.
             let _ = writeln!(out, "name = {:?}", rule.name);
             let _ = writeln!(out, "pattern = {:?}", rule.pattern);
             out.push('\n');
@@ -110,6 +112,40 @@ mod tests {
         assert!(out.contains("[profiles.docker]"), "default dump must emit [profiles.docker]");
         assert!(out.contains("[profiles.gcp]"), "default dump must emit [profiles.gcp]");
         assert!(out.contains("[profiles.network]"), "default dump must emit [profiles.network]");
+    }
+
+    #[test]
+    fn dump_themes_only_excludes_patterns_and_profiles() {
+        let out = super::render(Some(DumpKind::Themes));
+        assert!(
+            out.contains("[themes."),
+            "dump --kind themes must emit at least one [themes.*] table; got: {out}"
+        );
+        assert!(
+            !out.contains("[[patterns]]"),
+            "dump --kind themes must NOT emit [[patterns]]; got: {out}"
+        );
+        assert!(
+            !out.contains("[profiles."),
+            "dump --kind themes must NOT emit [profiles.*]; got: {out}"
+        );
+    }
+
+    #[test]
+    fn dump_profiles_only_excludes_patterns_and_themes() {
+        let out = super::render(Some(DumpKind::Profiles));
+        assert!(
+            out.contains("[profiles."),
+            "dump --kind profiles must emit at least one [profiles.*] table; got: {out}"
+        );
+        assert!(
+            !out.contains("[[patterns]]"),
+            "dump --kind profiles must NOT emit [[patterns]]; got: {out}"
+        );
+        assert!(
+            !out.contains("[themes."),
+            "dump --kind profiles must NOT emit [themes.*]; got: {out}"
+        );
     }
 
     #[test]
