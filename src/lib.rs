@@ -69,7 +69,11 @@ pub(crate) mod themes;
 pub(crate) mod tty_guard;
 pub(crate) mod watch;
 
-pub use cli::Args;
+/// Interactive `tayf config` TUI + dump + status. v0.5.4. Public so
+/// `main.rs` can dispatch; subordinate items remain `pub(crate)`.
+pub mod config_tui;
+
+pub use cli::{Args, Cmd, ConfigAction, ConfigArgs, DumpArgs, DumpKind, RunArgs};
 pub use error::{
     Error, ProfileErrorKind, ProfileRuleError, ProfileRuleErrorKind, Result, ThemeRuleError,
     ThemeRuleErrorKind,
@@ -108,7 +112,7 @@ impl Tayf {
     // reason: `Args` is the parsed CLI surface and this is the process entry
     // point; taking ownership is the conventional shape even though we
     // currently only read individual fields.
-    pub fn run(args: Args) -> Result<ExitCode> {
+    pub fn run(args: RunArgs) -> Result<ExitCode> {
         log::init_from_env();
 
         // Resolve bypass at process start; single-read guarantee (race-free).

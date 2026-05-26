@@ -14,15 +14,38 @@
 
 use std::process::ExitCode;
 
-use tayf::{Args, Error, Tayf};
+use tayf::{Args, Cmd, ConfigAction, Error, Tayf};
 
 fn main() -> ExitCode {
     match Args::try_parse_from_env() {
-        Ok(args) => match Tayf::run(args) {
-            Ok(code) => code,
-            Err(err) => {
-                eprintln!("tayf: {err}");
-                ExitCode::from(map_error_to_exit_code(&err))
+        Ok(args) => match args.cmd {
+            None => match Tayf::run(args.run) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("tayf: {err}");
+                    ExitCode::from(map_error_to_exit_code(&err))
+                }
+            },
+            // Subcommand dispatch — non-PTY code paths.
+            // v0.5.4 — stubs in `tayf::config_tui` are filled by
+            // Phase B (dump/status) and Phase C (run) tasks.
+            Some(Cmd::Config(cfg)) => match cfg.action {
+                None => tayf::config_tui::run(args.run),
+                Some(ConfigAction::Dump(d)) => tayf::config_tui::dump(d.kind),
+                Some(ConfigAction::Status) => tayf::config_tui::status(args.run),
+                // reason: ConfigAction is #[non_exhaustive] for additive
+                // forward compat (future `tayf config new-profile` etc.).
+                // Compile-time exhaustiveness requires this catch-all in
+                // downstream consumers — including this binary.
+                Some(_) => {
+                    eprintln!("tayf config: unknown sub-subcommand");
+                    ExitCode::from(64) // EX_USAGE
+                }
+            },
+            // Same forward-compat catch-all for Cmd::* additions.
+            Some(_) => {
+                eprintln!("tayf: unknown subcommand");
+                ExitCode::from(64)
             }
         },
         Err(e) => {
