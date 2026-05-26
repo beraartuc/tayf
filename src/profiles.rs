@@ -369,6 +369,67 @@ pub(crate) fn validate_profile(name: &str, source_path: &str, profile: &Profile)
 mod tests {
     use super::*;
 
+    // v0.5.3 — per-pattern test helpers (§7.2).
+
+    /// Compile the named embedded profile against the 13 built-ins (no
+    /// theme, no user config, truecolor depth) and wrap the result in an
+    /// `ArcSwap<Compiled>` — the handle shape `pipeline::apply_rules`
+    /// expects. `Compiled` itself is not `Clone`, so once you build it
+    /// you can only feed it to the pipeline through the `ArcSwap` handle.
+    fn compile_profile(name: &str) -> arc_swap::ArcSwap<crate::rules::Compiled> {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let lp = load_with(name, || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded profile must load");
+        let compiled = crate::rules::Compiled::load_with_theme(
+            /* config */ None,
+            /* config_path */ None,
+            /* theme */ None,
+            /* profile */ Some(&lp.profile),
+            /* profile_path */ Some(&lp.path_label),
+            /* depth */ crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("profile must compile");
+        arc_swap::ArcSwap::from_pointee(compiled)
+    }
+
+    /// Apply a compiled-profile handle to a single input line and return
+    /// the stylized bytes (SGR-injected output). Wraps
+    /// `pipeline::apply_rules`; allocates a fresh `PipelineScratch` per
+    /// call since these are correctness tests, not hot-path benches.
+    fn apply_to_line(compiled: &arc_swap::ArcSwap<crate::rules::Compiled>, line: &str) -> Vec<u8> {
+        let mut scratch = crate::pipeline::PipelineScratch::default();
+        let mut out = Vec::new();
+        crate::pipeline::apply_rules(line.as_bytes(), compiled, &mut scratch, &mut out)
+            .expect("apply_rules writes into Vec");
+        out
+    }
+
+    /// True if the stylized bytes contain the substring AND at least one
+    /// SGR escape (ANSI CSI `\x1b[...m`) lies somewhere in the output.
+    /// Pragmatic check — does not parse SGR codes, just requires "some
+    /// style was applied to this line."
+    fn has_sgr_span_for(bytes: &[u8], substring: &str) -> bool {
+        let s = String::from_utf8_lossy(bytes);
+        if !s.contains(substring) {
+            return false;
+        }
+        s.contains("\u{1b}[")
+    }
+
+    /// True if the substring appears in the output and NO SGR escape
+    /// precedes it on this line. Conservative single-line check used by
+    /// negative-regression tests where the input is short and no other
+    /// rule should fire.
+    fn no_sgr_span_for(bytes: &[u8], substring: &str) -> bool {
+        let s = String::from_utf8_lossy(bytes);
+        if !s.contains(substring) {
+            return false;
+        }
+        let idx = s.find(substring).expect("checked above");
+        let before = &s[..idx];
+        !before.contains("\u{1b}[")
+    }
+
     fn profile_with_rules(rules: Option<Vec<String>>) -> Profile {
         Profile { rules, append_rules: Vec::new(), theme: None }
     }
@@ -543,5 +604,199 @@ mod tests {
             .expect("embedded k8s must load");
         assert_eq!(lp.path_label, "<embedded:profile/k8s>");
         assert_eq!(lp.profile.append_rules.len(), 1, "k8s ships pod_name only");
+    }
+
+    // --- aws / instance_id (§7.2.1) ---
+
+    #[test]
+    fn aws_instance_id_matches_canonical_shape() {
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(&compiled, "Instance: i-0abcd1234567890ef status=running\n");
+        assert!(has_sgr_span_for(&bytes, "i-0abcd1234567890ef"));
+    }
+
+    #[test]
+    fn aws_instance_id_rejects_wrong_length() {
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(&compiled, "fake: i-0abcd1234567890e end\n");
+        assert!(no_sgr_span_for(&bytes, "i-0abcd1234567890e"));
+    }
+
+    #[test]
+    fn aws_instance_id_rejects_uppercase_hex() {
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(&compiled, "fake: i-0ABCD1234567890EF end\n");
+        assert!(no_sgr_span_for(&bytes, "i-0ABCD1234567890EF"));
+    }
+
+    // --- aws / region (§7.2.2) ---
+
+    #[test]
+    fn aws_region_pattern_matches_every_enumerated_region() {
+        const REGIONS: &[&str] = &[
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+            "us-gov-east-1",
+            "us-gov-west-1",
+            "ca-central-1",
+            "ca-west-1",
+            "eu-central-1",
+            "eu-central-2",
+            "eu-west-1",
+            "eu-west-2",
+            "eu-west-3",
+            "eu-north-1",
+            "eu-south-1",
+            "eu-south-2",
+            "af-south-1",
+            "me-south-1",
+            "me-central-1",
+            "il-central-1",
+            "ap-east-1",
+            "ap-south-1",
+            "ap-south-2",
+            "ap-northeast-1",
+            "ap-northeast-2",
+            "ap-northeast-3",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "ap-southeast-3",
+            "ap-southeast-4",
+            "ap-southeast-5",
+            "sa-east-1",
+            "cn-north-1",
+            "cn-northwest-1",
+        ];
+        let compiled = compile_profile("aws");
+        for region in REGIONS {
+            let line = format!("Region: {region} pending\n");
+            let bytes = apply_to_line(&compiled, &line);
+            assert!(
+                has_sgr_span_for(&bytes, region),
+                "region {region} must match aws profile region pattern"
+            );
+        }
+        assert_eq!(REGIONS.len(), 34, "snapshot enum count = 34 regions");
+    }
+
+    #[test]
+    fn aws_region_rejects_invented_future_region() {
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(&compiled, "Region: eu-south-3 pending\n");
+        assert!(no_sgr_span_for(&bytes, "eu-south-3"));
+    }
+
+    // --- aws / arn (§7.2.3, revised for v0.5.3 rule-priority collision) ---
+    //
+    // The built-in `ipv6` pattern's compressed-form alternation
+    // `(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}` matches `3::`, `f::`,
+    // etc. Tayf's pipeline uses RegexSet pattern-order priority for
+    // overlap resolution — built-ins (indices 0-12) outrank profile
+    // `append_rules` (13+). So canonical AWS empty-region ARNs like
+    // `arn:aws:s3:::my-bucket` lose their envelope match to `3::` (ipv6).
+    //
+    // v0.5.3 known limitation, documented in assets/profiles/aws.toml.
+    // Tests below use ARN shapes WITHOUT interior IPv6/region/instance_id
+    // substrings so aws.arn can fire cleanly, plus one limitation-pinning
+    // test that pins the fragment behavior.
+
+    #[test]
+    fn aws_arn_matches_collision_free_shapes() {
+        // IAM ARNs with text-only resources (no hex sequences, no region
+        // shape). The aws.arn rule fires on the envelope.
+        const ARNS: &[&str] = &[
+            "arn:aws:iam:::role/MyRole",
+            "arn:aws-us-gov:iam:::group/AdminGroup",
+            "arn:aws-cn:iam:::policy/Default",
+            "arn:aws:sns:::topic/Default",
+        ];
+        let compiled = compile_profile("aws");
+        for arn in ARNS {
+            let line = format!("Found {arn} ok\n");
+            let bytes = apply_to_line(&compiled, &line);
+            assert!(has_sgr_span_for(&bytes, arn), "ARN must match: {arn}");
+        }
+    }
+
+    #[test]
+    fn aws_arn_right_anchor_avoids_trailing_punctuation() {
+        // Collision-free ARN (text-only IAM resource) so aws.arn fires.
+        // The trailing `.` must NOT be eaten by the right-anchored regex.
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(&compiled, "Found arn:aws:iam:::role/MyRole. Done.\n");
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("arn:aws:iam:::role/MyRole"), "ARN must appear: {s:?}");
+        // Trailing `.` must follow an SGR reset, not sit inside the ARN style.
+        assert!(
+            s.contains("MyRole\u{1b}[0m.") || s.contains("MyRole\u{1b}[m."),
+            "trailing `.` must follow an SGR reset, not be inside the ARN style: {s:?}"
+        );
+    }
+
+    #[test]
+    fn aws_arn_yields_to_interior_region_pattern_v0_5_3_limitation() {
+        // Pins the v0.5.3 known limitation: when an ARN contains a region
+        // substring, aws.region (lower profile rule index) wins via
+        // first-match-wins overlap resolution; aws.arn envelope match is
+        // rejected. Interior region SGR fires; aws.arn magenta does not
+        // wrap the envelope.
+        //
+        // Future architecture: v0.5.4 may revisit rule-priority semantics
+        // OR tighten the ipv6 built-in to require ≥1 trailing hex group.
+        // This test guards the current behavior so the v0.5.4 fix lands
+        // visibly.
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(
+            &compiled,
+            "Found arn:aws:lambda:us-west-2:123456789012:function:foo done\n",
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        // Region (us-west-2) must surface with green SGR (color 32).
+        assert!(s.contains("us-west-2"), "region substring must appear in output: {s:?}");
+        assert!(
+            s.contains("\u{1b}[32") || s.contains(";32") || s.contains("32m"),
+            "aws.region green SGR must fire on us-west-2: {s:?}"
+        );
+        // aws.arn magenta MUST NOT wrap the envelope (interior region claim).
+        // Verify by checking that the ARN's literal prefix `arn:aws:lambda:`
+        // is NOT followed by a magenta-open SGR (color 35).
+        assert!(
+            !s.contains("\u{1b}[35marn:aws") && !s.contains("\u{1b}[35;arn:aws"),
+            "aws.arn magenta must NOT wrap envelope when interior region matches: {s:?}"
+        );
+    }
+
+    // --- k8s / pod_name (§7.2.4) ---
+
+    #[test]
+    fn k8s_pod_name_matches_realistic_replicaset_pods() {
+        const PODS: &[&str] = &[
+            "nginx-deployment-7c79c4bf97-9hk6r",
+            "coredns-558bd4d5db-vwz2j",
+            "my-app-bcdfghjklm-xwz25",
+            "metrics-server-7df68bc6fc-q4kgs",
+        ];
+        let compiled = compile_profile("k8s");
+        for pod in PODS {
+            let line = format!("Pod {pod} Running\n");
+            let bytes = apply_to_line(&compiled, &line);
+            assert!(has_sgr_span_for(&bytes, pod), "pod must match: {pod}");
+        }
+    }
+
+    #[test]
+    fn k8s_pod_name_rejects_bare_git_short_hash() {
+        let compiled = compile_profile("k8s");
+        let bytes = apply_to_line(&compiled, "Commit 7c79c4bf97 by Alice\n");
+        assert!(no_sgr_span_for(&bytes, "7c79c4bf97"));
+    }
+
+    #[test]
+    fn k8s_pod_name_rejects_vowels_in_hash() {
+        let compiled = compile_profile("k8s");
+        let bytes = apply_to_line(&compiled, "Fake pod-aeiouaeiou-12345 status\n");
+        assert!(no_sgr_span_for(&bytes, "pod-aeiouaeiou-12345"));
     }
 }
