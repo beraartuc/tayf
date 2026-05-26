@@ -112,7 +112,10 @@ pub(crate) fn synthetic_path(name: &str) -> String {
 /// add a profile, drop a TOML file under `assets/profiles/` and add
 /// an entry here; a unit test added in Task 6 (`network` profile)
 /// will pin the table count + name set.
-const EMBEDDED_PROFILES: &[(&str, &str)] = &[("aws", include_str!("../assets/profiles/aws.toml"))];
+const EMBEDDED_PROFILES: &[(&str, &str)] = &[
+    ("aws", include_str!("../assets/profiles/aws.toml")),
+    ("k8s", include_str!("../assets/profiles/k8s.toml")),
+];
 
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
 /// the environment for disk discovery; falls back to the embedded
@@ -531,5 +534,14 @@ mod tests {
             vec!["instance_id", "region", "arn"],
             "aws append_rules must ship in this order and with these names"
         );
+    }
+
+    #[test]
+    fn load_embedded_k8s_returns_loadedprofile_with_synthetic_path() {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        let lp = load_with("k8s", || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded k8s must load");
+        assert_eq!(lp.path_label, "<embedded:profile/k8s>");
+        assert_eq!(lp.profile.append_rules.len(), 1, "k8s ships pod_name only");
     }
 }
