@@ -159,15 +159,14 @@ mod tests {
     }
 
     #[test]
-    fn status_no_config_renders_byte_pinned_lines() {
-        // Use a nonexistent config path to force the "no config file" branch
-        // deterministically, regardless of whether the test runner has a real
-        // ~/.config/tayf/config.toml. An explicit nonexistent path triggers the
-        // Err branch (cannot stat), so we instead rely on NULL env vars approach:
-        // pass `config: None` and let load() discover nothing under a temp XDG.
-        // In practice, on a CI machine without a real config file, load(None)
-        // returns Ok(None). On a developer machine with a real config, it returns
-        // Ok(Some(...)). Either branch must produce the required keys.
+    fn status_renders_required_line_keys_in_all_branches() {
+        // XDG-state-agnostic smoke: loose substring assertions
+        // because `load(None)` returns Ok(None) on CI but
+        // Ok(Some(...)) on developer machines with a real config.
+        // The byte-pinned variants of this contract live in
+        // `status_with_bad_config_path_*` (deterministic Err branch)
+        // and `status_reports_seeded_reload_events_*` (deterministic
+        // Ok(Some) branch).
         let out: StatusOutput = render(&baseline_args());
         assert!(out.stdout.contains("config:"), "got: {}", out.stdout);
         assert!(out.stdout.contains("theme:"), "got: {}", out.stdout);

@@ -309,7 +309,8 @@ pub(crate) struct ReloadLogger {
     /// subsequent `append` calls become no-ops.
     pub(crate) enabled: bool,
     /// Tracks the last file size for which the 1 MB warn fired so we
-    /// emit it at most once per size-band (I-7 fold).
+    /// emit it at most once total (when the file first crosses 1 MB).
+    /// I-7 fold. v0.6+ rotation will reset this on rotate.
     last_warned_size: Mutex<Option<u64>>,
 }
 
@@ -386,9 +387,14 @@ impl ReloadLogger {
             event.reload_count,
             event.outcome.render(),
         );
-        // POSIX O_APPEND atomicity (I-7 fold): writes ≤ PIPE_BUF
-        // (4096 bytes) are atomic across processes. Our lines are
-        // ~50-100 bytes — well under the limit.
+        // POSIX O_APPEND atomicity (I-7 fold): on a regular file,
+        // each write(2) atomically seeks to EOF and writes — no size
+        // ceiling applies (PIPE_BUF is the pipe/FIFO bound, not the
+        // regular-file bound). Rust's `OpenOptions::append(true)` maps
+        // to `O_APPEND | O_WRONLY` on Unix. Concurrent writers from
+        // separate threads therefore never interleave bytes within a
+        // single write call. Our lines are ~50-100 bytes — one write
+        // each, no torn-line risk.
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
             let _ = f.write_all(line.as_bytes());
         }
@@ -421,6 +427,7 @@ impl ReloadLogger {
 }
 
 /// Read the last `n` parseable lines of `<state_dir>/reload.log`.
+/// Returned in **reverse-chronological order** (most recent first).
 /// Returns an empty Vec if the log doesn't exist (no wrapper has run yet).
 /// Malformed lines are silently skipped.
 pub(crate) fn read_recent_events(state_dir: &std::path::Path, n: usize) -> Vec<ReloadEvent> {
@@ -751,8 +758,13 @@ style = { fg = "yellow" }
 
         let log_path = tmpdir.path().join("runtime").join("reload.log");
         let body = std::fs::read_to_string(&log_path).expect("reload.log must exist");
-        assert!(body.contains("reload #1"), "appended line must include reload #1; got: {body}");
-        assert!(body.contains("ok"), "Ok outcome must serialize as 'ok'; got: {body}");
+        // Timestamp is UNIX_EPOCH → deterministic `epoch-ms=0`; pin
+        // the full line shape rather than loose substrings (per
+        // memory `feedback_test_assertion_specificity`).
+        assert_eq!(
+            body, "epoch-ms=0 reload #1 ok\n",
+            "appended line must be byte-identical; got: {body:?}"
+        );
     }
 
     #[test]
