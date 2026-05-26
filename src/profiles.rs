@@ -1009,4 +1009,44 @@ mod tests {
             );
         }
     }
+
+    // v0.5.3 — schema invariant (§7.5). Pins Profile / ProfileRule field
+    // set byte-identical to v0.5.2.
+
+    #[test]
+    fn profile_schema_byte_identical_to_v0_5_2() {
+        // Concrete TOML round-trip with every documented v0.5.2 field.
+        let toml = r#"
+rules = ["timestamp"]
+theme = "dark"
+
+[[append_rules]]
+name = "x"
+pattern = '\bx\b'
+style = { fg = "red" }
+
+[[append_rules]]
+name = "y"
+pattern = '\b(?P<n>y)\b'
+styles = { n = { fg = "blue" } }
+"#;
+        let p: Profile =
+            toml::from_str(toml).expect("schema must accept v0.5.2 field set byte-identical");
+        assert_eq!(p.rules.as_deref(), Some(&["timestamp".to_owned()][..]));
+        assert_eq!(p.theme.as_deref(), Some("dark"));
+        assert_eq!(p.append_rules.len(), 2);
+        assert_eq!(p.append_rules[0].name, "x");
+        assert_eq!(p.append_rules[1].name, "y");
+    }
+
+    #[test]
+    fn profile_schema_rejects_unknown_field() {
+        // Negative guard — `#[serde(deny_unknown_fields)]` enforcement.
+        let toml = r#"
+rules = ["timestamp"]
+unexpected_field = "this must fail"
+"#;
+        let result: std::result::Result<Profile, _> = toml::from_str(toml);
+        assert!(result.is_err(), "deny_unknown_fields must reject typo `unexpected_field`");
+    }
 }
