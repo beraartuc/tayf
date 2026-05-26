@@ -120,6 +120,13 @@ const EMBEDDED_PROFILES: &[(&str, &str)] = &[
     ("network", include_str!("../assets/profiles/network.toml")),
 ];
 
+/// Iterator over the names of profiles embedded at compile time.
+/// Used by [`crate::config_tui::dump_cmd`] (v0.5.4) to enumerate
+/// the library without exposing the `(name, body)` tuple shape.
+pub(crate) fn embedded_profile_names() -> impl Iterator<Item = &'static str> {
+    EMBEDDED_PROFILES.iter().map(|(n, _)| *n)
+}
+
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
 /// the environment for disk discovery; falls back to the embedded
 /// library ([`EMBEDDED_PROFILES`]) on miss.

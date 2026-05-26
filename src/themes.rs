@@ -333,11 +333,10 @@ pub(crate) fn load_with(
     })
 }
 
-/// Alphabetically-sorted slice of BUILT-IN theme names. Production code
-/// no longer calls this — disk + built-in merging happens via
-/// [`available_theme_names_from_base`]. Retained for the in-module test
-/// suite (built-in registry sort-order + shipped-theme integrity checks).
-#[cfg(test)]
+/// Alphabetically-sorted slice of BUILT-IN theme names. Used by
+/// [`crate::config_tui::dump_cmd`] (v0.5.4) and by the in-module
+/// test suite. Production-path resolution otherwise goes through
+/// [`available_theme_names_from_base`].
 pub(crate) fn names() -> &'static [&'static str] {
     &THEME_NAMES
 }

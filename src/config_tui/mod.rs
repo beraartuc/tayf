@@ -53,11 +53,11 @@ pub fn run(_args: RunArgs) -> ExitCode {
 }
 
 /// `tayf config dump [--kind …]` — write built-in catalog to stdout.
-/// v0.5.4 stub — full impl lands in B1.
 #[allow(clippy::must_use_candidate)]
-pub fn dump(_kind: Option<DumpKind>) -> ExitCode {
-    eprintln!("tayf config dump: not yet implemented (v0.5.4 stub)");
-    ExitCode::SUCCESS
+// reason: ExitCode is returned for the caller (main.rs) to propagate; the
+// function's primary effect is writing to stdout, so #[must_use] adds noise.
+pub fn dump(kind: Option<DumpKind>) -> ExitCode {
+    dump_cmd::run(kind)
 }
 
 /// `tayf config status` — resolved config state + reload event tail.
