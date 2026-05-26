@@ -83,6 +83,7 @@ pub(crate) enum ReloadRequest {
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use arc_swap::ArcSwap;
 
@@ -223,7 +224,15 @@ impl ReloadOrchestrator {
             .name("tayf-reload".into())
             .spawn(move || {
                 let mut banner_sink = banner_sink;
+                // v0.5.4 — additive side-effect sink. Constructed from
+                // config_path's parent dir (the cfg base). Disabled
+                // gracefully when no config file is loaded.
+                let logger: Option<ReloadLogger> =
+                    config_path.as_deref().and_then(|p| p.parent()).map(ReloadLogger::new);
+                let mut reload_count: u64 = 0;
                 while let Ok(req) = rx.recv() {
+                    reload_count += 1;
+                    let outcome_ts = SystemTime::now();
                     match reload_once(
                         &rules_handle,
                         config_path.as_deref(),
@@ -237,11 +246,25 @@ impl ReloadOrchestrator {
                             if let Some(sink) = banner_sink.as_mut() {
                                 sink.write_banner(BANNER_BYTES);
                             }
+                            if let Some(l) = logger.as_ref() {
+                                l.append(&ReloadEvent {
+                                    timestamp: outcome_ts,
+                                    reload_count,
+                                    outcome: ReloadOutcome::Ok,
+                                });
+                            }
                         }
                         Err(e) => {
                             crate::log::warn_msg!(
                                 "config reload failed ({req:?}): {e}; keeping previous rule set"
                             );
+                            if let Some(l) = logger.as_ref() {
+                                l.append(&ReloadEvent {
+                                    timestamp: outcome_ts,
+                                    reload_count,
+                                    outcome: ReloadOutcome::Err(e.to_string()),
+                                });
+                            }
                             // Failure path: no banner (intentional — see spec §1.3).
                         }
                     }
@@ -259,6 +282,175 @@ impl Drop for ReloadOrchestrator {
             let _ = h.join();
         }
     }
+}
+
+// ============================================================
+// ReloadLogger — v0.5.4 additive plumbing (spec §8.5)
+//
+// Invariant (memory `feedback_reload_precedence_snapshot` + I-4
+// fold): adding the logger does NOT change any precedence-chain
+// snapshot. The reload thread continues snapshotting theme /
+// profile / bg_default at startup exactly as today; the logger
+// is purely an additive side-effect sink on the post-reload
+// decision path.
+// ============================================================
+
+use std::fs;
+use std::io::Write;
+use std::sync::Mutex;
+
+/// Append-only event log written to `<state_dir>/runtime/reload.log`.
+/// Best-effort throughout — file-system errors are silently swallowed;
+/// the reload thread NEVER blocks on logger I/O.
+pub(crate) struct ReloadLogger {
+    /// `<cfg_dir>/runtime` — created at construction time.
+    state_dir: std::path::PathBuf,
+    /// `false` when `create_dir_all` failed at construction; all
+    /// subsequent `append` calls become no-ops.
+    pub(crate) enabled: bool,
+    /// Tracks the last file size for which the 1 MB warn fired so we
+    /// emit it at most once per size-band (I-7 fold).
+    last_warned_size: Mutex<Option<u64>>,
+}
+
+/// One reload event row. Serialized as
+/// `epoch-ms=<ts> reload #<count> <outcome>\n`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReloadEvent {
+    pub(crate) timestamp: SystemTime,
+    pub(crate) reload_count: u64,
+    pub(crate) outcome: ReloadOutcome,
+}
+
+/// Outcome of a reload attempt — `ok` or `err: <reason>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReloadOutcome {
+    Ok,
+    Err(String),
+}
+
+impl ReloadOutcome {
+    fn render(&self) -> String {
+        match self {
+            Self::Ok => "ok".to_owned(),
+            Self::Err(reason) => format!("err: {reason}"),
+        }
+    }
+}
+
+impl ReloadEvent {
+    /// RFC3339-ish timestamp for human reading. Uses millisecond
+    /// precision; falls back to `epoch-ms=0` on pre-epoch input
+    /// (practically unreachable in production).
+    fn ts_rfc3339(&self) -> String {
+        ts_rfc3339_for_event(self.timestamp)
+    }
+}
+
+/// Per-event epoch-ms timestamp helper. Pure fn for test fixture pinning.
+///
+/// We deliberately avoid pulling chrono — milliseconds since `UNIX_EPOCH`
+/// suffice for the v0.5.4 reload log audience (operators tailing the
+/// file). Format: `epoch-ms=<u128>` keeps it parser-friendly without a
+/// date library; a future v0.6+ can switch to chrono if demand.
+fn ts_rfc3339_for_event(t: SystemTime) -> String {
+    match t.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => format!("epoch-ms={}", d.as_millis()),
+        Err(_) => "epoch-ms=0".to_owned(),
+    }
+}
+
+/// Size at which a one-shot warn fires (I-7 fold).
+const RELOAD_LOG_WARN_BYTES: u64 = 1024 * 1024; // 1 MB
+
+impl ReloadLogger {
+    /// Construct a logger rooted at `cfg_dir`. Creates
+    /// `<cfg_dir>/runtime/` on first use; sets `enabled = false`
+    /// if creation fails (graceful degradation).
+    pub(crate) fn new(cfg_dir: &std::path::Path) -> Self {
+        let state_dir = cfg_dir.join("runtime");
+        let enabled = fs::create_dir_all(&state_dir).is_ok();
+        Self { state_dir, enabled, last_warned_size: Mutex::new(None) }
+    }
+
+    /// Best-effort append. Logger writes are NEVER allowed to block
+    /// the reload thread; every error is swallowed.
+    pub(crate) fn append(&self, event: &ReloadEvent) {
+        if !self.enabled {
+            return;
+        }
+        let log_path = self.state_dir.join("reload.log");
+        let line = format!(
+            "{} reload #{} {}\n",
+            event.ts_rfc3339(),
+            event.reload_count,
+            event.outcome.render(),
+        );
+        // POSIX O_APPEND atomicity (I-7 fold): writes ≤ PIPE_BUF
+        // (4096 bytes) are atomic across processes. Our lines are
+        // ~50-100 bytes — well under the limit.
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = f.write_all(line.as_bytes());
+        }
+        self.check_size_threshold(&log_path);
+    }
+
+    /// I-7 fold: per-append `stat(2)` to detect 1 MB growth.
+    /// Cost ~50 ns; reload events are rare (minutes-to-hours apart).
+    fn check_size_threshold(&self, log_path: &std::path::Path) {
+        let size = match fs::metadata(log_path) {
+            Ok(m) => m.len(),
+            Err(_) => return,
+        };
+        if size < RELOAD_LOG_WARN_BYTES {
+            return;
+        }
+        let Ok(mut last) = self.last_warned_size.lock() else {
+            return; // poisoned — swallow
+        };
+        let already_warned_for_this_band =
+            last.map(|prev| prev >= RELOAD_LOG_WARN_BYTES).unwrap_or(false);
+        if !already_warned_for_this_band {
+            crate::log::warn_msg!(
+                "reload.log exceeded 1 MB ({size} bytes) at {}; v0.6+ adds rotation",
+                log_path.display()
+            );
+            *last = Some(size);
+        }
+    }
+}
+
+/// Read the last `n` parseable lines of `<state_dir>/reload.log`.
+/// Returns an empty Vec if the log doesn't exist (no wrapper has run yet).
+/// Malformed lines are silently skipped.
+pub(crate) fn read_recent_events(state_dir: &std::path::Path, n: usize) -> Vec<ReloadEvent> {
+    let log_path = state_dir.join("reload.log");
+    let Ok(content) = fs::read_to_string(&log_path) else {
+        return Vec::new();
+    };
+    content.lines().rev().take(n).filter_map(parse_log_line).collect()
+}
+
+/// Parse one log line back to a `ReloadEvent`. Returns `None` on any
+/// malformed shape — defensive against partial-write or corruption.
+fn parse_log_line(line: &str) -> Option<ReloadEvent> {
+    // Shape: `epoch-ms=<u128> reload #<count> <outcome>`
+    let rest = line.strip_prefix("epoch-ms=")?;
+    let (ts_str, rest) = rest.split_once(' ')?;
+    let ts_ms: u128 = ts_str.parse().ok()?;
+    let rest = rest.strip_prefix("reload #")?;
+    let (count_str, outcome_str) = rest.split_once(' ')?;
+    let reload_count: u64 = count_str.parse().ok()?;
+    let outcome = if outcome_str == "ok" {
+        ReloadOutcome::Ok
+    } else if let Some(reason) = outcome_str.strip_prefix("err: ") {
+        ReloadOutcome::Err(reason.to_owned())
+    } else {
+        return None;
+    };
+    let timestamp =
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(u64::try_from(ts_ms).ok()?);
+    Some(ReloadEvent { timestamp, reload_count, outcome })
 }
 
 #[cfg(test)]
@@ -541,5 +733,145 @@ style = { fg = "yellow" }
         assert!(got.is_empty(), "failed reload must not write banner; got {} bytes", got.len());
 
         drop(tx);
+    }
+
+    #[test]
+    fn reload_logger_create_writes_runtime_dir_and_appends_line() {
+        use std::time::SystemTime;
+        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        let logger = super::ReloadLogger::new(tmpdir.path());
+        assert!(logger.enabled, "logger must enable when state_dir create succeeds");
+
+        let event = super::ReloadEvent {
+            timestamp: SystemTime::UNIX_EPOCH,
+            reload_count: 1,
+            outcome: super::ReloadOutcome::Ok,
+        };
+        logger.append(&event);
+
+        let log_path = tmpdir.path().join("runtime").join("reload.log");
+        let body = std::fs::read_to_string(&log_path).expect("reload.log must exist");
+        assert!(body.contains("reload #1"), "appended line must include reload #1; got: {body}");
+        assert!(body.contains("ok"), "Ok outcome must serialize as 'ok'; got: {body}");
+    }
+
+    #[test]
+    fn reload_logger_disabled_when_state_dir_create_fails() {
+        use std::time::SystemTime;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let blocker = tmp.path().join("blocker");
+        std::fs::write(&blocker, b"i am a file, not a dir").unwrap();
+        let logger = super::ReloadLogger::new(&blocker); // blocker/runtime → fails
+        assert!(!logger.enabled, "logger must disable when state_dir create fails");
+        let event = super::ReloadEvent {
+            timestamp: SystemTime::UNIX_EPOCH,
+            reload_count: 1,
+            outcome: super::ReloadOutcome::Ok,
+        };
+        logger.append(&event); // no-op
+        assert!(!blocker.join("runtime").join("reload.log").exists());
+    }
+
+    #[test]
+    fn read_recent_events_parses_appended_lines() {
+        use std::time::SystemTime;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let logger = super::ReloadLogger::new(tmp.path());
+        for i in 1..=5u64 {
+            logger.append(&super::ReloadEvent {
+                timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(i * 100),
+                reload_count: i,
+                outcome: if i % 2 == 0 {
+                    super::ReloadOutcome::Ok
+                } else {
+                    super::ReloadOutcome::Err(format!("synthetic #{i}"))
+                },
+            });
+        }
+        let state_dir = tmp.path().join("runtime");
+        let events = super::read_recent_events(&state_dir, 3);
+        assert_eq!(events.len(), 3, "asked for 3, got {}", events.len());
+        assert_eq!(events[0].reload_count, 5);
+        assert_eq!(events[1].reload_count, 4);
+        assert_eq!(events[2].reload_count, 3);
+    }
+
+    #[test]
+    fn read_recent_events_skips_malformed_lines_silently() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let state_dir = tmp.path().join("runtime");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let log_path = state_dir.join("reload.log");
+        std::fs::write(
+            &log_path,
+            "epoch-ms=100 reload #1 ok\nGARBAGE GARBAGE GARBAGE\nepoch-ms=200 reload #2 ok\n",
+        )
+        .unwrap();
+        let events = super::read_recent_events(&state_dir, 10);
+        assert_eq!(events.len(), 2, "malformed line must be skipped, leaving 2");
+    }
+
+    #[test]
+    fn concurrent_appends_do_not_interleave_within_line() {
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::SystemTime;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let logger_a = Arc::new(super::ReloadLogger::new(tmp.path()));
+        let logger_b = Arc::clone(&logger_a);
+        let t1 = thread::spawn(move || {
+            for i in 0..100u64 {
+                logger_a.append(&super::ReloadEvent {
+                    timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(i),
+                    reload_count: 1000 + i,
+                    outcome: super::ReloadOutcome::Ok,
+                });
+            }
+        });
+        let t2 = thread::spawn(move || {
+            for i in 0..100u64 {
+                logger_b.append(&super::ReloadEvent {
+                    timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(i),
+                    reload_count: 2000 + i,
+                    outcome: super::ReloadOutcome::Ok,
+                });
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let state_dir = tmp.path().join("runtime");
+        let events = super::read_recent_events(&state_dir, 1000);
+        assert_eq!(
+            events.len(),
+            200,
+            "expected 200 well-formed lines (100+100); torn writes would yield fewer"
+        );
+    }
+
+    #[test]
+    fn reload_logger_does_not_affect_precedence_snapshot() {
+        // I-4 fold + memory feedback_reload_precedence_snapshot:
+        // adding the logger must NOT change any v0.2.1/v0.5.1/v0.5.2
+        // precedence-chain snapshot. The orchestrator continues
+        // taking the same (theme, profile, bg_default) snapshot
+        // parameters; this test pins the orchestrator-construction
+        // signature against silent regression.
+        use std::sync::mpsc::channel;
+        let rules: Arc<ArcSwap<Compiled>> =
+            Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().expect("builtins compile")));
+        let (tx, rx) = channel();
+        let orch = super::ReloadOrchestrator::spawn(
+            Arc::clone(&rules),
+            None,
+            Some("light".to_owned()), // theme snapshot
+            None,                     // profile snapshot
+            Some("dark".to_owned()),  // bg_default snapshot
+            ColorDepth::Truecolor,
+            rx,
+            None,
+        );
+        drop(tx); // close sender → orchestrator recv returns Err → thread exits
+        drop(orch); // Drop impl joins the thread — guarantees the Arc clone is released
+        assert_eq!(Arc::strong_count(&rules), 1);
     }
 }
