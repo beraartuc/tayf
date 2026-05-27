@@ -356,6 +356,49 @@ mod tests {
     }
 
     #[test]
+    fn integration_save_roundtrip_creates_backup_and_preserves_content() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        let source = b"# Original comment header\n[general]\ntheme = \"dark\"\n";
+        std::fs::write(&cfg_path, source).expect("write");
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let edits = crate::config_tui::edit::PendingEdits::default();
+        let new_snap = commit_save(&snap, &edits, SystemTime::now()).expect("save");
+        let after = std::fs::read(&cfg_path).expect("re-read");
+        assert_eq!(after, source as &[u8]);
+        assert!(String::from_utf8_lossy(&after).contains("# Original comment header"));
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
+            .collect();
+        assert_eq!(entries.len(), 1);
+        let reread = std::fs::read(&cfg_path).expect("re-read 2");
+        assert_eq!(new_snap.source_hash, crate::config_tui::snapshot::sha256(&reread));
+    }
+
+    #[test]
+    fn integration_save_rotation_keeps_at_most_max_backups() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\ntheme = \"dark\"\n").expect("write");
+        for _ in 0..7 {
+            let snap = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path))
+                .unwrap();
+            let edits = crate::config_tui::edit::PendingEdits::default();
+            commit_save(&snap, &edits, SystemTime::now()).expect("save");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let count = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
+            .count();
+        assert!(count <= MAX_BACKUPS, "expected <= {MAX_BACKUPS}; got {count}");
+    }
+
+    #[test]
     fn merge_collision_user_config_name_clobbers_silently() {
         // I-6 fold (spec §8.1): same-name UserConfig RuleId collision
         // = last-writer-wins by-key. C1c uses pass-through
