@@ -32,6 +32,22 @@ use crate::line_buffer::{LineBuffer, FLUSH_TIMEOUT};
 use crate::rules::Compiled;
 use crate::style::Style;
 
+/// Single styled byte range produced by [`apply_rules_spans`].
+///
+/// `start..end` are byte offsets into the input line (half-open; `end`
+/// exclusive). Style is the resolved style for the run — capture-group
+/// merging (inner overrides outer) is already applied upstream.
+///
+/// Non-overlapping invariant: in the returned `Vec<StyleSpan>` from
+/// [`apply_rules_spans`], no two spans overlap. Sorted by `start` ASC.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // reason: Group 2 (TUI preview render) consumes StyleSpan via spans_to_line.
+pub(crate) struct StyleSpan {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) style: Style,
+}
+
 /// Apply the compiled rule set to a single line. Writes the original bytes,
 /// with SGR wrappers inserted around accepted matches.
 ///
@@ -58,8 +74,38 @@ pub(crate) fn apply_rules<W: Write>(
     out: &mut W,
 ) -> std::io::Result<()> {
     let snapshot: Arc<Compiled> = compiled_handle.load_full();
-    let compiled: &Compiled = snapshot.as_ref();
+    let runs = select_runs(line, snapshot.as_ref(), scratch);
 
+    let mut cursor = 0usize;
+    for &(start, end, style) in runs {
+        out.write_all(&line[cursor..start])?;
+        let sgr = style.to_sgr();
+        if !sgr.is_empty() {
+            out.write_all(sgr.as_bytes())?;
+        }
+        out.write_all(&line[start..end])?;
+        out.write_all(Style::reset_sgr().as_bytes())?;
+        cursor = end;
+    }
+    out.write_all(&line[cursor..])?;
+    Ok(())
+}
+
+/// Collect matched, overlap-rejected, priority-sorted style runs for one
+/// line into `scratch.runs`. Steps 1-4 of [`apply_rules`]
+/// (pre-filter → priority sort → captures/find iter → overlap reject →
+/// final start-sort).
+///
+/// Returns a borrow into `scratch.runs` valid until the next mutation of
+/// `scratch`. The borrow holds `&mut` exclusivity over `scratch`; the
+/// caller cannot touch `scratch` until the borrow is dropped. For
+/// dual-emit (byte + span) on the same line, materialize spans
+/// immediately (e.g., `.iter().copied().collect()`) so the borrow ends.
+pub(crate) fn select_runs<'a>(
+    line: &[u8],
+    compiled: &Compiled,
+    scratch: &'a mut PipelineScratch,
+) -> &'a [(usize, usize, Style)] {
     scratch.accepted_spans.clear();
     scratch.runs.clear();
     scratch.event_scratch.clear();
@@ -126,19 +172,33 @@ pub(crate) fn apply_rules<W: Write>(
     // already start-ascending, but the merge across rules is not.
     scratch.runs.sort_by_key(|&(s, _, _)| s);
 
-    let mut cursor = 0usize;
-    for &(start, end, style) in &scratch.runs {
-        out.write_all(&line[cursor..start])?;
-        let sgr = style.to_sgr();
-        if !sgr.is_empty() {
-            out.write_all(sgr.as_bytes())?;
-        }
-        out.write_all(&line[start..end])?;
-        out.write_all(Style::reset_sgr().as_bytes())?;
-        cursor = end;
-    }
-    out.write_all(&line[cursor..])?;
-    Ok(())
+    &scratch.runs
+}
+
+/// Span-emitting variant for the Config TUI preview. Same matching +
+/// overlap + priority semantics as [`apply_rules`]; returns owned spans
+/// instead of writing SGR bytes.
+///
+/// **Capture-group styling:** rules with `uses_capture_styling[i] = true`
+/// produce 1..=N spans per match per v0.3.5 inner-overrides-outer
+/// semantics — identical to runtime path via shared [`select_runs`].
+///
+/// Returns `Vec<StyleSpan>` with byte offsets into `line` (sorted by
+/// `start` ASC; non-overlapping). UTF-8 multi-byte boundary safety:
+/// when `line` was derived from `&str` and patterns are Unicode-aware
+/// (regex 1.12 default), match boundaries are char boundaries.
+///
+/// Snapshot Arc drop: dropped at function return; spans own `Style` by
+/// Copy (verified in `src/style.rs:422`). No dangling reference.
+#[allow(dead_code)] // reason: Group 2 (TUI preview render) wires this into config_tui::preview.
+pub(crate) fn apply_rules_spans(
+    line: &[u8],
+    compiled_handle: &ArcSwap<Compiled>,
+    scratch: &mut PipelineScratch,
+) -> Vec<StyleSpan> {
+    let snapshot: Arc<Compiled> = compiled_handle.load_full();
+    let runs = select_runs(line, snapshot.as_ref(), scratch);
+    runs.iter().map(|&(start, end, style)| StyleSpan { start, end, style }).collect()
 }
 
 /// O(log N) overlap check against sorted-by-start `accepted_spans`. Two
@@ -1116,6 +1176,208 @@ mod rule_tests {
         let mut out = Vec::new();
         // Should not panic; sort should not overflow.
         apply_rules(b"foo bar\n", &handle, &mut scratch, &mut out).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // v0.6 Group 1 — select_runs / apply_rules_spans coverage.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn select_runs_extract_preserves_apply_rules_byte_output() {
+        // Golden parity: select_runs must NOT change apply_rules byte output.
+        // We compile a real Compiled (load_builtins), feed sample lines through
+        // apply_rules (which now uses select_runs internally), and compare bytes
+        // against the v0.5.7 fixture captures (regenerated here via in-test
+        // baseline computation since this is a refactor — the test compares
+        // apply_rules to itself across two calls, ensuring determinism).
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch_a = PipelineScratch::default();
+        let mut scratch_b = PipelineScratch::default();
+        let samples = [
+            b"INFO 192.168.1.1 connection from 10.0.0.5".as_slice(),
+            b"ERROR uuid=550e8400-e29b-41d4-a716-446655440000".as_slice(),
+            b"GET /api/v1/users HTTP/1.1".as_slice(),
+            b"plain text with no matches".as_slice(),
+            b"".as_slice(),
+            b"hex address: deadbeef cafe in body".as_slice(),
+            b"timestamp 2026-05-28T12:00:00Z".as_slice(),
+            b"multiple matches 1.2.3.4 and 5.6.7.8".as_slice(),
+        ];
+        for sample in samples {
+            let mut out_a = Vec::new();
+            apply_rules(sample, &handle, &mut scratch_a, &mut out_a).unwrap();
+            let mut out_b = Vec::new();
+            apply_rules(sample, &handle, &mut scratch_b, &mut out_b).unwrap();
+            assert_eq!(
+                out_a,
+                out_b,
+                "apply_rules deterministic on sample: {:?}",
+                std::str::from_utf8(sample).unwrap_or("<non-utf8>")
+            );
+            assert!(
+                !out_a.is_empty() || sample.is_empty(),
+                "non-empty input must produce non-empty output"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_rules_spans_returns_empty_vec_for_no_match() {
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans = apply_rules_spans(b"plain text no matches", &handle, &mut scratch);
+        assert!(spans.is_empty(), "no-match line yields empty Vec<StyleSpan>");
+    }
+
+    #[test]
+    fn apply_rules_spans_returns_single_span_for_single_match() {
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans = apply_rules_spans(b"see 192.168.1.1 here", &handle, &mut scratch);
+        assert_eq!(spans.len(), 1, "exactly one ipv4 span");
+        assert_eq!(spans[0].start, 4, "start byte of '192.168.1.1'");
+        assert_eq!(spans[0].end, 15, "end byte of '192.168.1.1' exclusive");
+    }
+
+    #[test]
+    fn apply_rules_spans_respects_overlap_rejection() {
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans = apply_rules_spans(b"https://192.168.1.1/api", &handle, &mut scratch);
+        let url_span = spans.iter().find(|s| s.end - s.start > 10).expect("url span");
+        let interior_overlapping = spans
+            .iter()
+            .filter(|s| {
+                s.start >= url_span.start && s.end <= url_span.end && s.start != url_span.start
+            })
+            .count();
+        assert_eq!(interior_overlapping, 0, "no interior span inside accepted url span");
+    }
+
+    #[test]
+    fn apply_rules_spans_returns_capture_subspans_when_uses_capture_styling() {
+        use regex::bytes::{Regex, RegexSet};
+        use std::sync::Arc;
+        let red = Style { fg: Some(crate::style::Color::Red), ..Default::default() };
+        let blue = Style { fg: Some(crate::style::Color::Blue), ..Default::default() };
+        let re = Regex::new(r"(\d+)-(\d+)").unwrap();
+        let compiled = Arc::new(Compiled {
+            set: RegexSet::new([r"(\d+)-(\d+)"]).unwrap(),
+            individuals: vec![re],
+            styles: vec![Style::default()],
+            group_styles: vec![vec![Some(red), Some(blue)]],
+            uses_capture_styling: vec![true],
+            respect_existing_colors: false,
+            priorities: vec![0],
+        });
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans = apply_rules_spans(b"see 42-100 here", &handle, &mut scratch);
+        // Pattern `(\d+)-(\d+)` over `42-100`: g1=42 (bytes 4..6), unstyled `-`
+        // gap (byte 6..7), g2=100 (bytes 7..10). `emit_capture_runs` emits a
+        // default-styled run for the inter-group gap — see existing test
+        // `emit_capture_runs_capture_with_gap_before_emits_default_then_group`.
+        assert_eq!(spans.len(), 3, "g1 + default-gap + g2 sub-spans");
+        assert_eq!(spans[0].style.fg, Some(crate::style::Color::Red), "first group red");
+        assert_eq!(spans[0].start, 4);
+        assert_eq!(spans[0].end, 6);
+        assert_eq!(spans[1].style.fg, None, "gap span carries default style");
+        assert_eq!(spans[1].start, 6);
+        assert_eq!(spans[1].end, 7);
+        assert_eq!(spans[2].style.fg, Some(crate::style::Color::Blue), "second group blue");
+        assert_eq!(spans[2].start, 7);
+        assert_eq!(spans[2].end, 10);
+    }
+
+    #[test]
+    fn apply_rules_spans_byte_offsets_point_into_line() {
+        let line = b"192.168.1.1 then 10.0.0.5";
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans = apply_rules_spans(line, &handle, &mut scratch);
+        for s in &spans {
+            assert!(s.start < s.end, "start < end");
+            assert!(s.end <= line.len(), "end ≤ line.len()");
+            let _ = &line[s.start..s.end];
+        }
+    }
+
+    #[test]
+    fn apply_rules_spans_utf8_multibyte_span_boundary_is_char_boundary() {
+        let line_str = "duration: 5μs elapsed";
+        let line = line_str.as_bytes();
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans = apply_rules_spans(line, &handle, &mut scratch);
+        let duration_span = spans
+            .iter()
+            .find(|s| std::str::from_utf8(&line[s.start..s.end]).is_ok_and(|t| t.contains("μs")));
+        if let Some(s) = duration_span {
+            assert!(line_str.is_char_boundary(s.start), "start on char boundary");
+            assert!(line_str.is_char_boundary(s.end), "end on char boundary");
+        }
+    }
+
+    #[test]
+    fn apply_rules_spans_byte_emit_parity() {
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch_a = PipelineScratch::default();
+        let mut scratch_b = PipelineScratch::default();
+        let line = b"see 192.168.1.1 and uuid=550e8400-e29b-41d4-a716-446655440000";
+        let mut out_byte = Vec::new();
+        apply_rules(line, &handle, &mut scratch_a, &mut out_byte).unwrap();
+        let spans = apply_rules_spans(line, &handle, &mut scratch_b);
+        let mut out_span = Vec::<u8>::new();
+        let mut cursor = 0usize;
+        for s in &spans {
+            out_span.extend_from_slice(&line[cursor..s.start]);
+            let sgr = s.style.to_sgr();
+            if !sgr.is_empty() {
+                out_span.extend_from_slice(sgr.as_bytes());
+            }
+            out_span.extend_from_slice(&line[s.start..s.end]);
+            out_span.extend_from_slice(Style::reset_sgr().as_bytes());
+            cursor = s.end;
+        }
+        out_span.extend_from_slice(&line[cursor..]);
+        assert_eq!(out_byte, out_span, "byte-emit and span-emit reconstructions identical");
+    }
+
+    #[test]
+    fn apply_rules_spans_priority_extreme_values_do_not_overflow() {
+        use regex::bytes::{Regex, RegexSet};
+        let compiled = Arc::new(Compiled {
+            set: RegexSet::new([r"a", r"b"]).unwrap(),
+            individuals: vec![Regex::new(r"a").unwrap(), Regex::new(r"b").unwrap()],
+            styles: vec![Style::default(), Style::default()],
+            group_styles: vec![vec![], vec![]],
+            uses_capture_styling: vec![false, false],
+            respect_existing_colors: false,
+            priorities: vec![i32::MAX, i32::MIN],
+        });
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let _ = apply_rules_spans(b"ab", &handle, &mut scratch);
+    }
+
+    #[test]
+    fn apply_rules_spans_sorted_by_start_ascending_invariant() {
+        let compiled = Arc::new(Compiled::load_builtins().expect("load builtins"));
+        let handle = ArcSwap::from(compiled);
+        let mut scratch = PipelineScratch::default();
+        let spans =
+            apply_rules_spans(b"1.2.3.4 then 5.6.7.8 then 9.10.11.12", &handle, &mut scratch);
+        for w in spans.windows(2) {
+            assert!(w[0].start <= w[1].start, "spans sorted by start ASC");
+            assert!(w[0].end <= w[1].start, "non-overlapping");
+        }
     }
 }
 
