@@ -81,7 +81,8 @@ fn has_some_sgr_around(bytes: &[u8], needle: &str) -> bool {
 fn aws_profile_renders_instance_id_region_on_canonical_ec2_input() {
     let xdg = tempfile::tempdir().expect("tmpdir");
     // Canonical EC2 line — interior region (us-east-2) + instance_id
-    // will highlight; aws.arn envelope will NOT (interior overlap).
+    // will highlight; v0.5.6: aws.arn priority 200 wins envelope over
+    // interior region priority 100. has_some_sgr_around tolerates both.
     let input = "Launching i-0abcd1234567890ef in us-east-2 \
          (arn:aws:ec2:us-east-2:123456789012:instance/i-0abcd1234567890ef)";
     let bytes = run_with_profile(xdg.path(), input, "aws");
@@ -135,8 +136,8 @@ fn k8s_profile_renders_pod_name_on_kubectl_output() {
 fn docker_profile_renders_container_id_and_partial_image_tag() {
     // v0.5.4 E1 retighten: prior test asserted has_some_sgr_around on
     // `nginx:latest` which was satisfied by either correct image_tag
-    // styling OR the fqdn-wins limitation pinned by
-    // `docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation`.
+    // styling OR the old fqdn-wins limitation (renamed in v0.5.6 to
+    // `docker_image_tag_wins_over_registry_host_fqdn` with flipped assertions).
     // Rename clarifies "partial" (per-segment styling on bare image
     // tag without registry-host prefix) and tightens the assertion
     // to require magenta SGR around the `:` separator specifically,

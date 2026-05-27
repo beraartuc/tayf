@@ -789,19 +789,22 @@ mod tests {
         assert!(no_sgr_span_for(&bytes, "eu-south-3"));
     }
 
-    // --- aws / arn (§7.2.3, revised for v0.5.3 rule-priority collision) ---
+    // --- aws / arn (§7.2.3, revised for v0.5.6 priority semantics) ---
     //
-    // The built-in `ipv6` pattern's compressed-form alternation
-    // `(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}` matches `3::`, `f::`,
-    // etc. Tayf's pipeline uses RegexSet pattern-order priority for
-    // overlap resolution — built-ins (indices 0-12) outrank profile
-    // `append_rules` (13+). So canonical AWS empty-region ARNs like
-    // `arn:aws:s3:::my-bucket` lose their envelope match to `3::` (ipv6).
+    // v0.5.6 priority sort: aws.arn ships priority 200; aws.region and
+    // aws.instance_id ship priority 100; all built-ins ship priority 0.
+    // Overlap resolution now sorts candidates by descending priority before
+    // first-match-wins, so aws.arn (200) beats interior region (100) or
+    // interior ipv4/uuid (0) on the envelope span. Tests below cover
+    // collision-free IAM shapes plus positive envelope-wins cases.
     //
-    // v0.5.3 known limitation, documented in assets/profiles/aws.toml.
-    // Tests below use ARN shapes WITHOUT interior IPv6/region/instance_id
-    // substrings so aws.arn can fire cleanly, plus one limitation-pinning
-    // test that pins the fragment behavior.
+    // Remaining known limitation: ARNs with the empty-account segment
+    // `arn:aws:s3:::my-bucket` contain a `3::` substring matching ipv6
+    // (built-in, priority 0). Because the ipv6 span starts inside the
+    // arn envelope, bidirectional overlap resolution rejects the later rule
+    // (arn) regardless of priority — the earlier-indexed ipv6 already
+    // accepted its span. This edge case is rare in real output; documented
+    // in assets/profiles/aws.toml as a known v0.5.3 carry-forward limitation.
 
     #[test]
     fn aws_arn_matches_collision_free_shapes() {
@@ -837,35 +840,27 @@ mod tests {
     }
 
     #[test]
-    fn aws_arn_yields_to_interior_region_pattern_v0_5_3_limitation() {
-        // Pins the v0.5.3 known limitation: when an ARN contains a region
-        // substring, aws.region (lower profile rule index) wins via
-        // first-match-wins overlap resolution; aws.arn envelope match is
-        // rejected. Interior region SGR fires; aws.arn magenta does not
-        // wrap the envelope.
-        //
-        // Future architecture: v0.5.4 may revisit rule-priority semantics
-        // OR tighten the ipv6 built-in to require ≥1 trailing hex group.
-        // This test guards the current behavior so the v0.5.4 fix lands
-        // visibly.
+    fn aws_arn_wins_over_interior_region_pattern() {
+        // v0.5.6 priority semantics: arn priority 200 wins envelope over
+        // region priority 100. The full ARN envelope is wrapped in magenta
+        // SGR (35); the interior region substring is suppressed because it
+        // falls inside the arn's claimed span.
         let compiled = compile_profile("aws");
         let bytes = apply_to_line(
             &compiled,
             "Found arn:aws:lambda:us-west-2:123456789012:function:foo done\n",
         );
         let s = String::from_utf8_lossy(&bytes);
-        // Region (us-west-2) must surface with green SGR (color 32).
-        assert!(s.contains("us-west-2"), "region substring must appear in output: {s:?}");
+        // aws.arn magenta (35) MUST wrap the envelope.
         assert!(
-            s.contains("\u{1b}[32") || s.contains(";32") || s.contains("32m"),
-            "aws.region green SGR must fire on us-west-2: {s:?}"
+            s.contains("\u{1b}[35marn:aws:lambda:us-west-2:123456789012:function:foo"),
+            "aws.arn magenta must wrap envelope (priority 200 beats region 100): {s:?}"
         );
-        // aws.arn magenta MUST NOT wrap the envelope (interior region claim).
-        // Verify by checking that the ARN's literal prefix `arn:aws:lambda:`
-        // is NOT followed by a magenta-open SGR (color 35).
+        // Interior region must NOT receive its own green SGR (34 or 32) —
+        // the arn envelope already claimed the span.
         assert!(
-            !s.contains("\u{1b}[35marn:aws") && !s.contains("\u{1b}[35;arn:aws"),
-            "aws.arn magenta must NOT wrap envelope when interior region matches: {s:?}"
+            !s.contains("\u{1b}[32mus-west-2") && !s.contains("\u{1b}[34mus-west-2"),
+            "interior region SGR must be suppressed under arn priority 200: {s:?}"
         );
     }
 
@@ -940,21 +935,11 @@ mod tests {
     // --- docker / image_tag (§7.2.6) ---
 
     #[test]
-    fn docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation() {
-        // Pins the v0.5.3 known limitation: when an image-tag's registry-host
-        // prefix is a valid FQDN (gcr.io, docker.io, ghcr.io, ECR host), the
-        // built-in `fqdn` rule (lower pattern index, blue SGR 34) wins via
-        // first-match-wins overlap resolution; docker.image_tag's magenta
-        // envelope match is rejected on the registry-host branch.
-        //
-        // Behavior is still useful — the FQDN portion is styled, just not
-        // the whole image:tag span. The bare `:latest` branch (no FQDN
-        // prefix) is unaffected — see docker_image_tag_bare_latest_branch.
-        //
-        // Future architecture: v0.5.4 may revisit rule-priority semantics
-        // OR special-case profile append_rules to outrank built-ins on
-        // overlapping spans. This test guards the current behavior so the
-        // v0.5.4 fix lands visibly.
+    fn docker_image_tag_wins_over_registry_host_fqdn() {
+        // v0.5.6 priority semantics: image_tag priority 200 wins envelope over
+        // built-in fqdn priority 0. The full image:tag envelope is wrapped in
+        // magenta SGR (35); the fqdn registry-host substring is suppressed
+        // because it falls inside image_tag's claimed span.
         let cases: &[(&str, &str)] = &[
             ("gcr.io/google/nginx:1.21", "gcr.io"),
             ("docker.io/library/redis:6.2-alpine", "docker.io"),
@@ -969,17 +954,16 @@ mod tests {
             let line = format!("Pull {img} done\n");
             let bytes = apply_to_line(&compiled, &line);
             let s = String::from_utf8_lossy(&bytes);
-            // FQDN host must surface with blue SGR (color 34).
+            // image_tag magenta (35) MUST wrap the full envelope.
             assert!(
-                s.contains(&format!("\u{1b}[34m{host}")),
-                "fqdn blue SGR must wrap registry host {host:?}: {s:?}"
+                s.contains(&format!("\u{1b}[35m{img}")),
+                "image_tag magenta must wrap envelope (priority 200 beats fqdn 0): {s:?}"
             );
-            // image_tag magenta SGR (35) MUST NOT wrap the full envelope —
-            // the fqdn claim eats the prefix and the magenta rule cannot
-            // match a span that starts inside another rule's claim.
+            // FQDN host must NOT receive its own blue SGR (34) —
+            // the image_tag envelope already claimed the span.
             assert!(
-                !s.contains(&format!("\u{1b}[35m{img}")),
-                "image_tag magenta must NOT wrap envelope when fqdn matches host: {s:?}"
+                !s.contains(&format!("\u{1b}[34m{host}")),
+                "fqdn blue SGR must be suppressed under image_tag priority 200: {s:?}"
             );
         }
     }
@@ -1152,5 +1136,117 @@ unexpected_field = "this must fail"
         let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
         let pos = names.iter().position(|n| *n == "pod_name").expect("pod_name in k8s profile");
         assert_eq!(compiled.priorities[12 + pos], 100, "k8s.pod_name must default to priority 100");
+    }
+
+    // --- v0.5.6 envelope-wins positive tests (spec §2.1.C, §9.5, §9.6) ---
+
+    #[test]
+    fn aws_arn_wins_over_interior_ipv4() {
+        // FP audit C-12: arn priority 200 wins over interior ipv4 priority 0.
+        // The full ARN envelope fires; the interior ipv4 substring is suppressed.
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(&compiled, "arn:aws:ec2:us-west-2:111111111111:vpc/1.2.3.4\n");
+        assert!(
+            has_sgr_span_for(&bytes, "arn:aws:ec2:us-west-2:111111111111:vpc/1.2.3.4"),
+            "arn envelope should fire over interior ipv4"
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(
+            !s.contains("\u{1b}[32m1.2.3.4") && !s.contains("\u{1b}[34m1.2.3.4"),
+            "interior ipv4 should be suppressed under arn priority 200: {s:?}"
+        );
+    }
+
+    #[test]
+    fn aws_arn_wins_over_interior_uuid() {
+        // FP audit C-13: arn priority 200 wins over interior uuid priority 0.
+        // The full ARN envelope fires; the interior uuid substring is suppressed.
+        let compiled = compile_profile("aws");
+        let bytes = apply_to_line(
+            &compiled,
+            "arn:aws:secretsmanager:us-east-1:111111111111:secret:my-550e8400-e29b-41d4-a716-446655440000\n",
+        );
+        assert!(
+            has_sgr_span_for(&bytes, "arn:aws:secretsmanager:us-east-1:111111111111:secret:my-550e8400-e29b-41d4-a716-446655440000"),
+            "arn envelope should fire over interior uuid"
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(
+            !s.contains("\u{1b}[32m550e8400") && !s.contains("\u{1b}[34m550e8400"),
+            "interior uuid should be suppressed under arn priority 200: {s:?}"
+        );
+    }
+
+    #[test]
+    fn mac_yields_to_ipv6_eight_pair_v0_5_5_limitation() {
+        // FP audit C-1: 8-pair colon chain truly IS an IPv6 (branch 2 full
+        // 7-pair form). ipv6 index 6 < mac index 7; both priority 0;
+        // tie-break to lower index → ipv6 wins the envelope.
+        // Documented limitation; no architectural fix in v0.5.6 (rare in
+        // real terminal output).
+        let no_profile_compiled = arc_swap::ArcSwap::from_pointee(
+            crate::rules::Compiled::load_with_theme(
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::terminfo::ColorDepth::Truecolor,
+            )
+            .expect("default compile"),
+        );
+        let bytes = apply_to_line(&no_profile_compiled, "aa:bb:cc:dd:ee:ff:11:22\n");
+        assert!(
+            has_sgr_span_for(&bytes, "aa:bb:cc:dd:ee:ff:11:22"),
+            "ipv6 should claim full 8-pair chain (matches branch 2 full 7-pair form)"
+        );
+    }
+
+    #[test]
+    fn docker_container_id_wins_over_interior_uuid_via_priority() {
+        // v0.5.6 §9.6 F3: container_id priority 100 wins over uuid priority 0
+        // on overlapping spans. Input `abc12345-1234-1234-1234-123456789012`
+        // matches uuid (8-4-4-4-12 full envelope) and container_id matches
+        // `123456789012` (the trailing 12-hex segment inside the uuid).
+        // Priority sort: container_id (100) iterates before uuid (0); it
+        // accepts `123456789012`. uuid then encounters bidirectional overlap
+        // with the already-claimed span → REJECT.
+        // Net: container_id wins; uuid envelope is suppressed.
+        let compiled = compile_profile("docker");
+        let bytes = apply_to_line(&compiled, "abc12345-1234-1234-1234-123456789012\n");
+        assert!(
+            has_sgr_span_for(&bytes, "123456789012"),
+            "container_id (trailing 12-hex segment) should fire under priority 100"
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        // uuid bright-magenta (SGR 95) must NOT wrap the full 36-char envelope
+        // because container_id already claimed an interior span.
+        assert!(
+            !s.contains("\u{1b}[95mabc12345-1234-1234-1234-123456789012"),
+            "uuid envelope should be suppressed when container_id interior wins: {s:?}"
+        );
+    }
+
+    #[test]
+    fn docker_container_id_yields_to_uuid_envelope_outside_docker_profile() {
+        // Inverse: no docker profile → container_id pattern doesn't exist;
+        // uuid wins the full 36-char envelope unconditionally (priority 0
+        // built-in). Pins the priority-mechanism's profile-scope contract.
+        let no_profile_compiled = arc_swap::ArcSwap::from_pointee(
+            crate::rules::Compiled::load_with_theme(
+                None,
+                None,
+                None,
+                None,
+                None,
+                crate::terminfo::ColorDepth::Truecolor,
+            )
+            .expect("default compile"),
+        );
+        let bytes = apply_to_line(&no_profile_compiled, "abc12345-1234-1234-1234-123456789012\n");
+        assert!(
+            has_sgr_span_for(&bytes, "abc12345-1234-1234-1234-123456789012"),
+            "uuid envelope wins outside docker profile"
+        );
     }
 }
