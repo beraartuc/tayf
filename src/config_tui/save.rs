@@ -2,10 +2,11 @@
 //!
 //! Spec §8.1 + §8.3. Detailed flow:
 //!   1. `rotate_backups_to(MAX_BACKUPS - 1)` — I-3 fold (rotate first)
-//!   2. `fs::write(backup_path, disk_now)`
-//!   3. build new content via `toml_edit` (pass-through stub for C1c)
-//!   4. `TmpFileGuard::create_in_parent_dir` with preserved mode
-//!   5. `tmp.write_all` + `tmp.sync_all` (`sync_all` NOT `sync_data` per I-1)
+//!   2. read current on-disk bytes (`disk_now`)
+//!   3. write backup with preserved mode (I-2 fold)
+//!   4. build new content via `toml_edit` (pass-through stub for C1c)
+//!   5. `TmpFileGuard::create_in_parent_dir` + `write_all` + `sync_all`
+//!      (I-2 preserved mode; I-1 `sync_all` NOT `sync_data`)
 //!   6. `tmp.persist` — atomic POSIX rename
 //!   7. parent dir `sync_all` (best-effort; APFS underdocumented)
 //!   8. snapshot reparse
@@ -193,21 +194,41 @@ pub(crate) fn commit_save(
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "cfg_path has no filename")
     })?;
 
-    // Step 1: rotate FIRST (I-3 fold). Failure → caller decides.
-    let _ = rotate_backups_to(cfg_dir, cfg_stem, MAX_BACKUPS - 1);
+    // Step 1: rotate FIRST (I-3 fold). Surface read_dir failures so
+    // the caller (C2a SaveDiff modal) can downgrade to Toast::warn.
+    rotate_backups_to(cfg_dir, cfg_stem, MAX_BACKUPS - 1)?;
 
-    // Step 2: write backup of current disk content.
+    // Step 2: read current on-disk content (captures any concurrent
+    // manual edits between TUI read and save; backup reflects actual
+    // disk state, not the stale snapshot view).
     let disk_now = fs::read(cfg_path)?;
-    let backup_path =
-        cfg_dir.join(format!("{cfg_stem}.tayf-backup-{}", ts_for_backup_filename(now)));
-    fs::write(&backup_path, &disk_now)?;
 
-    // Step 3: build new content.
-    let new_content = build_new_content(snapshot, edits);
-
-    // Step 4: tmpfile in parent dir with preserved mode (I-2 fold).
+    // preserved_mode hoisted: applies to BOTH the backup write
+    // (Step 3) and the tmpfile create (Step 5). I-2 fold must cover
+    // both paths so a 0o600 source produces 0o600 backup AND 0o600
+    // tmpfile — otherwise the backup leaks config content to other
+    // local users via umask-default 0o644.
     let preserved_mode: u32 =
         fs::metadata(cfg_path).map_or(0o600, |m| m.permissions().mode() & 0o777);
+
+    // Step 3: write backup with preserved mode (I-2 fold).
+    let backup_path =
+        cfg_dir.join(format!("{cfg_stem}.tayf-backup-{}", ts_for_backup_filename(now)));
+    {
+        let mut backup_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_CREAT | O_EXCL — no symlink-precreate
+            .mode(preserved_mode)
+            .open(&backup_path)?;
+        backup_file.write_all(&disk_now)?;
+        backup_file.sync_all()?;
+    }
+
+    // Step 4: build new content.
+    let new_content = build_new_content(snapshot, edits);
+
+    // Step 5: tmpfile in parent dir with preserved mode (I-2 fold),
+    // write, sync_all (I-1 fold).
     let pid = std::process::id();
     let tmp_ms = now.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis());
     let tmp_path = cfg_dir.join(format!("{cfg_stem}.tayf-tmp-{pid}-{tmp_ms}"));
@@ -220,15 +241,15 @@ pub(crate) fn commit_save(
     tmp.write_all(new_content.as_bytes())?;
     tmp.sync_all()?;
 
-    // Step 5: atomic POSIX rename.
+    // Step 6: atomic POSIX rename.
     tmp.persist(cfg_path)?;
 
-    // Step 6: parent dir sync_all (best-effort; APFS underdocumented).
+    // Step 7: parent dir sync_all (best-effort; APFS underdocumented).
     if let Ok(dir) = fs::File::open(cfg_dir) {
         let _ = dir.sync_all();
     }
 
-    // Step 7: rebuild snapshot.
+    // Step 8: rebuild snapshot.
     crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(cfg_path))
         .map_err(|e| std::io::Error::other(format!("post-save reparse: {e}")))
 }
@@ -331,8 +352,9 @@ mod tests {
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
             .count();
-        // Asked for target_max = 4 → 4 newest survive.
-        assert!(remaining <= 4, "rotation kept {remaining}; expected ≤ 4");
+        // Asked for target_max = 4 → exactly 4 newest survive (per
+        // feedback_test_assertion_specificity: pin the contract).
+        assert_eq!(remaining, 4, "rotation must keep exactly 4 newest; got {remaining}");
     }
 
     #[test]
