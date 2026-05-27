@@ -19,5 +19,4 @@ rules = [
     "mac",
     "fqdn",
     "url",
-    "http_status",
 ]

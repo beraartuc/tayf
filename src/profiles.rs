@@ -633,7 +633,7 @@ mod tests {
         assert_eq!(lp.path_label, "<embedded:profile/gcp>");
         assert!(lp.profile.append_rules.is_empty(), "gcp is filter-only (no append_rules)");
         let rules = lp.profile.rules.as_ref().expect("gcp uses whitelist");
-        assert_eq!(rules.len(), 10, "gcp whitelist has 10 built-ins");
+        assert_eq!(rules.len(), 9, "gcp whitelist has 9 built-ins");
     }
 
     #[test]
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(lp.path_label, "<embedded:profile/network>");
         assert!(lp.profile.append_rules.is_empty(), "network is filter-only");
         let rules = lp.profile.rules.as_ref().expect("network uses whitelist");
-        assert_eq!(rules.len(), 8, "network whitelist has 8 built-ins");
+        assert_eq!(rules.len(), 7, "network whitelist has 7 built-ins");
     }
 
     #[test]

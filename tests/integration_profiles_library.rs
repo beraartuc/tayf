@@ -175,7 +175,7 @@ fn docker_profile_renders_container_id_and_partial_image_tag() {
 fn gcp_profile_filter_only_drops_permission_keeps_whitelist() {
     let xdg = tempfile::tempdir().expect("tmpdir");
     // Input mixes a permission shape (rwxr-xr-x — whitelisted out) with
-    // whitelist members (timestamp, log_level, http_status).
+    // whitelist members (timestamp, log_level).
     let input = "drwxr-xr-x bucket 2026-05-26T10:00:00Z INFO status=200";
     let bytes = run_with_profile(xdg.path(), input, "gcp");
     let s = String::from_utf8_lossy(&bytes);
@@ -187,7 +187,7 @@ fn gcp_profile_filter_only_drops_permission_keeps_whitelist() {
     // timestamp rule fired without depending on inter-group bytes.
     assert!(s.contains("2026-05-26"), "timestamp date capture-group must survive");
     assert!(s.contains("INFO"), "log_level text must survive");
-    assert!(s.contains("200"), "http_status text must survive");
+    assert!(s.contains("200"), "plain status=200 text must pass through");
     // permission rule (`rwxr-xr-x`) must appear plainly (not styled).
     assert!(
         s.contains("drwxr-xr-x"),

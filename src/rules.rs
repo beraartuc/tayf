@@ -455,14 +455,6 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             source: RuleSource::Builtin,
         },
         BuiltinRule {
-            name: "http_status".into(),
-            pattern: r"(?:^|[\s/:])([1-5]\d{2})\b".into(),
-            style: Style { fg: Some(Color::Magenta), ..Style::DEFAULT },
-            group_styles: Vec::new(),
-            styles_override: None,
-            source: RuleSource::Builtin,
-        },
-        BuiltinRule {
             name: "filename".into(),
             pattern: build_filename_pattern(),
             style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
@@ -511,7 +503,6 @@ pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "ipv6",
     "mac",
     "log_level",
-    "http_status",
     "filename",
     "fqdn",
     "duration",
@@ -1381,14 +1372,6 @@ mod tests {
     }
 
     #[test]
-    fn http_status_matches() {
-        assert!(matches("http_status", "HTTP/1.1 404 Not Found"));
-        assert!(matches("http_status", "status: 500"));
-        assert!(matches("http_status", "200 OK"));
-        assert!(!matches("http_status", "abc500def"));
-    }
-
-    #[test]
     fn fqdn_matches() {
         assert!(matches("fqdn", "https://example.com/"));
         assert!(matches("fqdn", "api.staging.internal.corp.net"));
@@ -1534,7 +1517,7 @@ mod tests {
         assert_eq!(c.individuals.len(), n);
         assert_eq!(c.styles.len(), n);
         assert_eq!(c.set.len(), n);
-        assert_eq!(n, 13, "v0.2.2 ships thirteen built-in rules");
+        assert_eq!(n, 12, "v0.5.6 ships twelve built-in rules");
     }
 
     #[test]
@@ -1666,7 +1649,7 @@ mod tests {
             Some(_) => {}
             None => panic!("user rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 14, "13 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 13, "12 built-ins + 1 user rule");
     }
 
     #[test]
@@ -3178,7 +3161,7 @@ fg = "red"
 
     /// v0.5.2 spec §11.1 I-6 / §8.1 #8 — when no profile is active, the
     /// rule set produced by `Compiled::load_with_theme` MUST be
-    /// byte-equivalent to the v0.5.1 baseline (13 built-in rules, all
+    /// byte-equivalent to the v0.5.6 baseline (12 built-in rules, all
     /// tagged `RuleSource::Builtin`). Catches any accidental
     /// profile-active branch firing on a `None` profile (e.g. a misplaced
     /// `.retain` over the whitelist filter, or an off-by-one in the
@@ -3195,15 +3178,15 @@ fg = "red"
         )
         .expect("baseline load with all-None must succeed");
 
-        // Hard baseline — the 13 built-in rules, neither filtered nor
+        // Hard baseline — the 12 built-in rules, neither filtered nor
         // augmented.
         assert_eq!(
             compiled.individuals.len(),
-            13,
-            "v0.5.1 baseline = 13 built-in rules; got {n}",
+            12,
+            "v0.5.6 baseline = 12 built-in rules; got {n}",
             n = compiled.individuals.len(),
         );
-        assert_eq!(compiled.styles.len(), 13, "styles must parallel individuals length");
+        assert_eq!(compiled.styles.len(), 12, "styles must parallel individuals length");
 
         // The compiled rule names match the canonical BUILTIN_NAMES list
         // 1:1 in order — i.e. nothing was inserted, dropped, or reordered.
@@ -3211,7 +3194,7 @@ fg = "red"
         let merged_names: Vec<String> = builtin_rules().into_iter().map(|r| r.name).collect();
         assert_eq!(
             merged_names, baseline_names,
-            "BUILTIN_NAMES and builtin_rules() must agree on the 13 baseline rules"
+            "BUILTIN_NAMES and builtin_rules() must agree on the 12 baseline rules"
         );
 
         // Defensive: every rule produced by builtin_rules() carries

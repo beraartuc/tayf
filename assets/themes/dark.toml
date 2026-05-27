@@ -45,10 +45,6 @@ name = "log_level"
 style = { fg = "bright_red", bold = true }
 
 [[rules]]
-name = "http_status"
-style = { fg = "magenta" }
-
-[[rules]]
 name = "filename"
 style = { fg = "bright_cyan" }
 
