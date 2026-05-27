@@ -43,11 +43,11 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(cfg_dir) = app.snapshot.source_path.as_deref().and_then(|p| p.parent()) {
         // reload.rs writes to <cfg_dir>/runtime/reload.log per ReloadLogger::create.
         let state_dir = cfg_dir.join("runtime");
-        let events = crate::reload::read_recent_events(&state_dir, 50);
+        let events = crate::reload::read_recent_events(&state_dir, 20);
         if events.is_empty() {
             lines.push(Line::from("  (no events recorded — no wrapper active)"));
         } else {
-            for ev in events.iter().take(20) {
+            for ev in &events {
                 let outcome = match &ev.outcome {
                     crate::reload::ReloadOutcome::Ok => "ok".to_owned(),
                     crate::reload::ReloadOutcome::Err(e) => format!("err: {e}"),
