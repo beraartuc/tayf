@@ -113,7 +113,9 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 Some(crate::config_tui::app::Toast::warn("new-pattern editor lands in v0.6+"));
         }
         KeyCode::Char('c') if app.modal.is_none() => {
-            app.modal = Some(Modal::ColorPicker);
+            app.modal = Some(Modal::ColorPicker(
+                crate::config_tui::widgets::color_picker::ColorPickerState::default(),
+            ));
         }
         KeyCode::Char('e') => {
             app.toast = Some(crate::config_tui::app::Toast::warn(

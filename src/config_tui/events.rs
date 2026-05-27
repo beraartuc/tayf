@@ -64,10 +64,35 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             handle_confirm_modal_key(app, k);
             return;
         }
-        // C4-owned modals: events.rs dispatches the global keys
-        // (Esc, Ctrl+C handled above); per-modal key sets land in
-        // widgets/color_picker.rs / widgets/save_diff.rs / etc.
-        // For C2a we no-op modal-absorbed keys.
+        // C4-owned modals: dispatch into the widget's key handler.
+        // reason: arms differ semantically (placeholder vs already-dispatched)
+        // even though both currently no-op; future C4b/C4c work distinguishes them.
+        #[allow(clippy::match_same_arms)]
+        match modal {
+            Modal::ColorPicker(_) => {
+                if let Some(Modal::ColorPicker(state)) = app.modal.as_mut() {
+                    let out = crate::config_tui::widgets::color_picker::dispatch_key(state, k);
+                    match out {
+                        crate::config_tui::widgets::color_picker::ColorPickerOutcome::Accept => {
+                            app.modal = None;
+                            app.toast = Some(crate::config_tui::app::Toast::ok(
+                                "color accepted (binding to selected rule lands in v0.6+)",
+                            ));
+                        }
+                        crate::config_tui::widgets::color_picker::ColorPickerOutcome::Cancel => {
+                            app.modal = None;
+                        }
+                        crate::config_tui::widgets::color_picker::ColorPickerOutcome::StayOpen => {}
+                    }
+                }
+            }
+            Modal::SaveDiff | Modal::FullPreview | Modal::Search | Modal::SampleSet => {
+                // SaveDiff body lands in C4b; Search + SampleSet in C4c.
+            }
+            Modal::Confirm { .. } | Modal::Error(_) | Modal::QuitWithUnsavedEdits => {
+                // Handled above by their dedicated arms.
+            }
+        }
         return;
     }
     // 4. Global keys (no modal).

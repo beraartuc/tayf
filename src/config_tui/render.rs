@@ -39,6 +39,7 @@ pub(crate) fn frame(frame: &mut Frame, app: &App) {
         render_mini_preview_placeholder(frame, chunks[2], app);
     }
     render_status_bar(frame, chunks[3], app, size.width, preview_visible);
+    crate::config_tui::widgets::render_modal(frame, size, app);
 }
 
 /// < 60 × 16 hard block (spec §7.4).

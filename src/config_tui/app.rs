@@ -97,8 +97,7 @@ pub(crate) enum Modal {
     Confirm { msg: String, action: ConfirmAction },
     Error(String),
     QuitWithUnsavedEdits,
-    // C4-shipped placeholder variants until widgets land:
-    ColorPicker,
+    ColorPicker(crate::config_tui::widgets::color_picker::ColorPickerState),
     SaveDiff,
     FullPreview,
     Search,
