@@ -502,6 +502,7 @@ mod tests {
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }
     }
 
@@ -1134,6 +1135,7 @@ styles = { "1" = { fg = "red" }, "10" = { fg = "blue" } }
                 style: None,
                 enabled: true,
                 styles: Some(styles),
+                priority: None,
             }],
         };
         validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)

@@ -106,6 +106,20 @@ pub(crate) struct UserRule {
     /// See spec §1.3 / §3.3.
     #[serde(default)]
     pub(crate) styles: Option<std::collections::BTreeMap<String, UserStyle>>,
+    /// Overlap-resolution priority override (NEW v0.5.6).
+    ///
+    /// When present, overrides the default priority for this rule.
+    /// Higher-priority rules accept their match span before lower-priority
+    /// rules. Built-in defaults ship at priority `0`; profile interior
+    /// rules at `100`; profile envelope rules at `200`. Default (omitted):
+    /// for new rules → `0`; for built-in/profile overrides → preserve
+    /// underlying tier (conditional overwrite, see `apply_user_rules_with_source`).
+    ///
+    /// Negative values legal — `priority = -1` causes this rule to yield
+    /// overlap-acceptance to any overlapping built-in match. See spec §4.4
+    /// Örnek 4.
+    #[serde(default)]
+    pub(crate) priority: Option<i32>,
 }
 
 /// Inline `style = { ... }` table. Field types are strings/bools so user
@@ -544,6 +558,12 @@ pub(crate) fn apply_user_rules_with_source(
                 existing.styles_override.clone_from(&ur.styles);
                 existing.source = source;
             }
+            // v0.5.6 §7.2 site #5 — conditional overwrite: user omitting
+            // `priority` preserves the underlying tier (built-in 0, profile
+            // 100/200). User-explicit `priority = N` overwrites.
+            if let Some(p) = ur.priority {
+                existing.priority = p;
+            }
         } else {
             // New custom rule — both pattern and style required.
             let Some(pattern) = ur.pattern.clone() else {
@@ -573,7 +593,7 @@ pub(crate) fn apply_user_rules_with_source(
                 style,
                 group_styles: Vec::new(),
                 styles_override: ur.styles.clone(),
-                priority: 0,
+                priority: ur.priority.unwrap_or(0),
                 // New custom rule from theme TOML is currently unreachable —
                 // `themes::validate_theme_rules` rejects names not in
                 // `BUILTIN_NAMES` before this point. We still propagate
@@ -1023,7 +1043,14 @@ style = { fg = "red" }
     use crate::rules::{builtin_rules, BUILTIN_NAMES};
 
     fn user_rule(name: &str) -> UserRule {
-        UserRule { name: name.into(), pattern: None, style: None, enabled: true, styles: None }
+        UserRule {
+            name: name.into(),
+            pattern: None,
+            style: None,
+            enabled: true,
+            styles: None,
+            priority: None,
+        }
     }
 
     #[test]
@@ -1044,6 +1071,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("yellow".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         let log = rules.iter().find(|r| r.name == "log_level").expect("present");
@@ -1068,6 +1096,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("#888888".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         let appended = rules.last().expect("appended");
@@ -1085,6 +1114,7 @@ style = { fg = "red" }
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             },
             UserRule {
                 name: "b".into(),
@@ -1092,6 +1122,7 @@ style = { fg = "red" }
                 style: Some(UserStyle { fg: Some("blue".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             },
         ];
         apply_user_rules("/x", &mut rules, &user).unwrap();
@@ -1108,6 +1139,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         let ipv4 = rules.iter().find(|r| r.name == "ipv4").unwrap();
@@ -1123,6 +1155,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1139,6 +1172,7 @@ style = { fg = "red" }
             style: None,
             enabled: true,
             styles: None,
+            priority: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         assert!(err.to_string().contains("custom_id"));
@@ -1156,6 +1190,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: false,
             styles: None,
+            priority: None,
         }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
         assert_eq!(rules.len(), before_len);
@@ -1179,6 +1214,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("turquoise".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         let err = apply_user_rules("/x/cfg.toml", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1195,6 +1231,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1210,6 +1247,7 @@ style = { fg = "red" }
             style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
             enabled: true,
             styles: None,
+            priority: None,
         }];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
         let msg = err.to_string();
@@ -1227,6 +1265,7 @@ style = { fg = "red" }
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             },
             UserRule {
                 name: "uuid".into(),
@@ -1234,6 +1273,7 @@ style = { fg = "red" }
                 style: Some(UserStyle { fg: Some("blue".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             },
         ];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
@@ -1257,6 +1297,7 @@ style = { fg = "red" }
                 style: Some(UserStyle { fg: Some("yellow".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             },
             UserRule {
                 name: "log_level".into(),
@@ -1264,6 +1305,7 @@ style = { fg = "red" }
                 style: Some(UserStyle { fg: Some("cyan".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             },
         ];
         let err = apply_user_rules("/x", &mut rules, &user).unwrap_err();
@@ -1382,5 +1424,162 @@ theme = "light"
         assert_eq!(validate_styles_map_key("abc"), None);
         assert_eq!(validate_styles_map_key("1abc"), None);
         assert_eq!(validate_styles_map_key("a1"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // v0.5.6 Task 5 — UserRule::priority schema parse tests (TDD phase: red)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn user_rule_parses_priority_field() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+priority = 50
+"#;
+        let cfg: Config = toml::from_str(toml_input).expect("parse");
+        assert_eq!(cfg.rules[0].priority, Some(50));
+    }
+
+    #[test]
+    fn user_rule_priority_defaults_to_none_when_omitted() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+"#;
+        let cfg: Config = toml::from_str(toml_input).expect("parse");
+        assert_eq!(cfg.rules[0].priority, None);
+    }
+
+    #[test]
+    fn user_rule_accepts_negative_priority() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+priority = -100
+"#;
+        let cfg: Config = toml::from_str(toml_input).expect("parse");
+        assert_eq!(cfg.rules[0].priority, Some(-100));
+    }
+
+    #[test]
+    fn user_rule_deny_unknown_fields_still_active() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+priorty = 50
+"#;
+        let err = toml::from_str::<Config>(toml_input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown field") || msg.contains("priorty"), "got: {msg}");
+    }
+
+    #[test]
+    fn user_rule_rejects_string_priority() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+priority = "100"
+"#;
+        let err = toml::from_str::<Config>(toml_input).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid type") || err.to_string().contains("expected"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn user_rule_rejects_float_priority() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+priority = 100.5
+"#;
+        let err = toml::from_str::<Config>(toml_input).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid type") || err.to_string().contains("expected"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn user_rule_rejects_out_of_range_priority() {
+        let toml_input = r#"
+[[rules]]
+name = "ipv6"
+priority = 99999999999999
+"#;
+        let err = toml::from_str::<Config>(toml_input).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("out of range") || msg.contains("invalid"), "got: {msg}");
+    }
+
+    // -----------------------------------------------------------------------
+    // v0.5.6 Task 5 — priority merge-behavior tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn priority_unset_user_config_defaults_preserve_existing() {
+        // User overrides a built-in but doesn't specify priority → preserve 0.
+        let mut rules = crate::rules::builtin_rules();
+        let user = vec![UserRule {
+            name: "ipv6".to_string(),
+            pattern: None,
+            style: Some(UserStyle { fg: Some("red".to_string()), ..Default::default() }),
+            enabled: true,
+            styles: None,
+            priority: None,
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let ipv6 = rules.iter().find(|r| r.name == "ipv6").unwrap();
+        assert_eq!(ipv6.priority, 0, "user override w/o priority must preserve existing 0");
+    }
+
+    #[test]
+    fn priority_explicit_user_config_overrides_existing() {
+        let mut rules = crate::rules::builtin_rules();
+        let user = vec![UserRule {
+            name: "ipv6".to_string(),
+            pattern: None,
+            style: Some(UserStyle { fg: Some("red".to_string()), ..Default::default() }),
+            enabled: true,
+            styles: None,
+            priority: Some(-50),
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let ipv6 = rules.iter().find(|r| r.name == "ipv6").unwrap();
+        assert_eq!(ipv6.priority, -50);
+    }
+
+    #[test]
+    fn priority_new_custom_rule_unset_defaults_to_zero() {
+        let mut rules = crate::rules::builtin_rules();
+        let user = vec![UserRule {
+            name: "my_custom".to_string(),
+            pattern: Some(r"\bfoo\b".to_string()),
+            style: Some(UserStyle { fg: Some("red".to_string()), ..Default::default() }),
+            enabled: true,
+            styles: None,
+            priority: None,
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let custom = rules.iter().find(|r| r.name == "my_custom").unwrap();
+        assert_eq!(custom.priority, 0);
+    }
+
+    #[test]
+    fn priority_negative_user_config_value_propagates() {
+        let mut rules = crate::rules::builtin_rules();
+        let user = vec![UserRule {
+            name: "my_custom".to_string(),
+            pattern: Some(r"\bfoo\b".to_string()),
+            style: Some(UserStyle { fg: Some("red".to_string()), ..Default::default() }),
+            enabled: true,
+            styles: None,
+            priority: Some(-100),
+        }];
+        apply_user_rules("/x", &mut rules, &user).unwrap();
+        let custom = rules.iter().find(|r| r.name == "my_custom").unwrap();
+        assert_eq!(custom.priority, -100);
     }
 }

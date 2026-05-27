@@ -1681,6 +1681,7 @@ mod tests {
                 style: Some(UserStyle { fg: Some("#ff8800".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             }],
         };
         // At Basic16 depth, the appended user rule's Rgb fg downgrades to an ANSI color.
@@ -1717,6 +1718,7 @@ mod tests {
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             }],
         };
         let err = Compiled::load_with_theme(
@@ -1749,6 +1751,7 @@ mod tests {
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             }],
         };
         let err = Compiled::load_with_theme(
@@ -1782,6 +1785,7 @@ mod tests {
                     style: None,
                     enabled: false,
                     styles: None,
+                    priority: None,
                 })
                 .collect(),
         };
@@ -2129,6 +2133,7 @@ mod tests {
                 style: None,
                 enabled: false,
                 styles: None,
+                priority: None,
             }],
         };
         let compiled = Compiled::load_with_theme(
@@ -2262,6 +2267,7 @@ mod tests {
                 }),
                 enabled: true,
                 styles: None,
+                priority: None,
             }],
         };
         let c = Compiled::load_with_theme(
@@ -2318,6 +2324,7 @@ mod tests {
                 style: Some(UserStyle { fg: Some("red".into()), ..UserStyle::default() }),
                 enabled: true,
                 styles: None,
+                priority: None,
             }],
         };
         let err = Compiled::load_with_theme(
@@ -2481,6 +2488,7 @@ fg = "red"
                 enabled: true,
                 style: None,
                 styles: Some(user_styles),
+                priority: None,
             }],
         };
         let err = Compiled::load_with_theme(
@@ -2533,6 +2541,7 @@ fg = "red"
                 enabled: true,
                 style: None,
                 styles: Some(user_styles),
+                priority: None,
             }],
         };
         let err = Compiled::load_with_theme(
@@ -2576,6 +2585,7 @@ fg = "red"
                 enabled: true,
                 style: None,
                 styles: Some(user_styles),
+                priority: None,
             }],
         };
         let err = Compiled::load_with_theme(
@@ -2612,6 +2622,7 @@ fg = "red"
                 enabled: true,
                 style: Some(UserStyle { fg: Some("yellow".to_owned()), ..UserStyle::default() }),
                 styles: Some(user_styles),
+                priority: None,
             }],
         };
         let c = Compiled::load_with_theme(
