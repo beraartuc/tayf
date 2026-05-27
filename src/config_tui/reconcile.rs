@@ -11,10 +11,6 @@
 use crate::config_tui::edit::{GeneralEdits, NewStyle, PendingEdits, RuleEdit, RuleId, StyleKey};
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-// reason: UnsupportedDeletionTarget consumed by Task B5 (apply_deletion);
-// TypeMismatch path reachable via [[general]] user-written shape in
-// ensure_general_table (B5 fold).
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReconcileError {
     #[error(
@@ -359,6 +355,32 @@ fn apply_new_rule(
     Ok(())
 }
 
+/// Remove the `[[rules]]` entry identified by `rule_id` from `doc`.
+///
+/// Only [`RuleId::UserConfig`] deletion is supported. `Builtin`, `Embedded`, and
+/// `DiskProfile` variants return [`ReconcileError::UnsupportedDeletionTarget`].
+///
+/// [`ArrayOfTables::remove`] drops the leading-comment block attached to the
+/// entry (`toml_edit` 0.25 Decor semantic — test #19 pins this contract).
+/// Spec §5.6.
+fn apply_deletion(doc: &mut DocumentMut, rule_id: &RuleId) -> Result<(), ReconcileError> {
+    match rule_id {
+        RuleId::UserConfig(name) => {
+            // Spec §5.6: ArrayOfTables::remove drops leading-comment block
+            // attached to the entry (documented contract; test #19 pins).
+            if let Some(arr) = doc.get_mut("rules").and_then(Item::as_array_of_tables_mut) {
+                if let Some(idx) = find_rule_index_by_name(arr, name) {
+                    arr.remove(idx);
+                }
+            }
+            Ok(())
+        }
+        RuleId::Builtin(_) | RuleId::Embedded { .. } | RuleId::DiskProfile { .. } => {
+            Err(ReconcileError::UnsupportedDeletionTarget { rule_id: format!("{rule_id:?}") })
+        }
+    }
+}
+
 /// Walk `edits` into `doc` (cloned internally) and serialize to TOML
 /// string. Spec §5 algorithm. **Implementation note:** `doc` is cloned
 /// internally (`DocumentMut::clone()` is O(n) tree-walk; acceptable for
@@ -381,6 +403,9 @@ pub(crate) fn apply_edits(
     }
     for new_rule in &edits.added {
         apply_new_rule(&mut working, new_rule)?;
+    }
+    for rule_id in &edits.deleted {
+        apply_deletion(&mut working, rule_id)?;
     }
     Ok(working.to_string())
 }
@@ -696,6 +721,73 @@ mod tests {
         assert!(out.contains("[rules.style]"), "block form preserved: {out:?}");
         assert!(out.contains("fg = \"blue\""), "fg updated: {out:?}");
         assert!(!out.contains("style = { "), "must NOT flip to inline form: {out:?}");
+    }
+
+    #[test]
+    fn deleted_builtin_returns_unsupported_error() {
+        // Spec §7.1 #14 + §13.2 I5 fold — full Display assert_eq! (no
+        // version-string substring search; future-proof wording).
+        use crate::config_tui::edit::RuleId;
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.deleted.insert(RuleId::Builtin("uuid"));
+        let err = apply_edits(&doc, &edits).expect_err("must error");
+        match &err {
+            ReconcileError::UnsupportedDeletionTarget { rule_id } => {
+                assert_eq!(rule_id, "Builtin(\"uuid\")", "Debug-formatted rule_id");
+            }
+            other @ ReconcileError::TypeMismatch { .. } => {
+                panic!("expected UnsupportedDeletionTarget, got {other:?}")
+            }
+        }
+        let display = format!("{err}");
+        assert_eq!(
+            display,
+            "unsupported deletion target: Builtin(\"uuid\") (currently only `RuleId::UserConfig` deletion is supported; other variants are reserved for future work)",
+            "Display string byte-pinned (no version-string anti-pattern per memory feedback_test_assertion_specificity)"
+        );
+    }
+
+    #[test]
+    fn deleted_user_config_removes_entry() {
+        // Spec §7.1 #13.
+        use crate::config_tui::edit::RuleId;
+        let source = "[[rules]]\nname = \"x\"\npattern = \"a\"\n\n[[rules]]\nname = \"y\"\npattern = \"b\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.deleted.insert(RuleId::UserConfig("x".to_owned()));
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(!out.contains("name = \"x\""), "x entry must be gone: {out:?}");
+        assert!(out.contains("name = \"y\""), "y entry must remain: {out:?}");
+    }
+
+    #[test]
+    fn removing_user_rule_deletes_its_leading_comment_block() {
+        // Spec §7.1 #19 + §13.2 I11 fold — ArrayOfTables::remove drops
+        // leading-comment block attached to the entry.
+        use crate::config_tui::edit::RuleId;
+        let source = "# Before-x comment\n\
+                      [[rules]]\n\
+                      name = \"x\"\n\
+                      pattern = \"a\"\n\
+                      \n\
+                      # After-x / before-y comment\n\
+                      [[rules]]\n\
+                      name = \"y\"\n\
+                      pattern = \"b\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.deleted.insert(RuleId::UserConfig("x".to_owned()));
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(
+            !out.contains("# Before-x comment"),
+            "Before-x comment must be gone (attached to deleted x entry): {out:?}"
+        );
+        assert!(
+            out.contains("# After-x / before-y comment"),
+            "After-x comment must survive (attached to y entry): {out:?}"
+        );
     }
 
     #[test]
