@@ -118,17 +118,19 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         (KeyCode::Char('?'), m) if m.is_empty() => {
-            // Help overlay placeholder — C4 wires real help modal.
-            app.toast =
-                Some(crate::config_tui::app::Toast::ok("help overlay (C4 wires real impl)"));
+            app.toast = Some(crate::config_tui::app::Toast::warn(
+                "help overlay lands in v0.5.5+ (Modal::Help wiring deferred)",
+            ));
         }
         (KeyCode::F(1), _) => {
-            app.toast =
-                Some(crate::config_tui::app::Toast::ok("help overlay (C4 wires real impl)"));
+            app.toast = Some(crate::config_tui::app::Toast::warn(
+                "help overlay lands in v0.5.5+ (Modal::Help wiring deferred)",
+            ));
         }
         (KeyCode::Char('P'), m) if m == KeyModifiers::SHIFT => {
-            // Shift+P — full-preview overlay (C4 wires real impl).
-            app.modal = Some(Modal::FullPreview);
+            if app.modal.is_none() {
+                app.modal = Some(Modal::FullPreview);
+            }
         }
         (KeyCode::Char('s'), m) if m == KeyModifiers::CONTROL => {
             if app.modal.is_none() {
@@ -163,7 +165,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         (KeyCode::Char('p'), m) if m.is_empty() => {
             app.mini_preview_visible = !app.mini_preview_visible;
         }
-        // C4c wires the rest (Shift+D init).
+        // Shift+D first-run init (§9.6) lands in v0.5.5+.
         _ => {
             crate::config_tui::tabs::dispatch_key(app, k);
         }
@@ -306,11 +308,42 @@ fn handle_confirm_modal_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// C2a stub — C3 / C4 wire real action execution.
+/// Apply a confirmed action. Spec §12.2 (Patterns d/r) +
+/// §12.1.1 / §9.6 (`DiscardEditsAndReload` / `InitFromDump` are v0.5.5+).
 fn apply_confirm(app: &mut App, action: &ConfirmAction) {
-    app.toast = Some(crate::config_tui::app::Toast::ok(format!(
-        "confirm action: {action:?} (impl lands in C3 / C4)"
-    )));
+    match action {
+        ConfirmAction::DeleteUserRule(name) => {
+            let removed = app
+                .edits
+                .rules
+                .remove(&crate::config_tui::edit::RuleId::UserConfig(name.clone()))
+                .is_some();
+            let msg = if removed {
+                format!("Removed staged override of '{name}' (built-in restored)")
+            } else {
+                format!("No staged override of '{name}' to remove; built-in remains active")
+            };
+            app.toast = Some(crate::config_tui::app::Toast::ok(msg));
+        }
+        ConfirmAction::ResetUserOverride(name) => {
+            let removed = app
+                .edits
+                .rules
+                .remove(&crate::config_tui::edit::RuleId::UserConfig(name.clone()))
+                .is_some();
+            let msg = if removed {
+                format!("Reset '{name}' to built-in (override discarded)")
+            } else {
+                format!("No staged override of '{name}' to reset")
+            };
+            app.toast = Some(crate::config_tui::app::Toast::ok(msg));
+        }
+        ConfirmAction::DiscardEditsAndReload | ConfirmAction::InitFromDump => {
+            app.toast = Some(crate::config_tui::app::Toast::warn(
+                "this action lands in v0.5.5+ (init-from-dump and discard-reload deferred)",
+            ));
+        }
+    }
 }
 
 /// Debounce tick — fires `recompile_preview` once per quiescent window.

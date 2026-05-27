@@ -11,12 +11,10 @@
 //!   7. parent dir `sync_all` (best-effort; APFS underdocumented)
 //!   8. snapshot reparse
 
-// reason: `MAX_BACKUPS`, `ts_for_backup_filename`, `civil_from_days`,
-// `TmpFileGuard`, `commit_save`, `rotate_backups_to`,
-// `build_new_content` are consumed by Phase C tasks (C2a app.rs +
-// C3 reconciliation); silence dead-code lint until downstream wiring
-// lands. Remove this attribute once C2a wires the save path into the
-// TUI event loop.
+// reason: helpers like `ts_for_backup_filename` and `civil_from_days`
+// are only reachable on the v0.5.5+ first-run-init dump path (the
+// timestamp filename helper is for the dump-backup case). Module-level
+// allow until that path lands.
 #![allow(dead_code)]
 
 use std::fs;

@@ -47,8 +47,6 @@ impl Tab {
 
 /// Per-tab cursor / scroll state. Each tab maintains its own focus
 /// so switching tabs preserves position.
-// reason: fields wired by C3 per-tab dispatch; dead until C3 lands.
-#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct TabFocus {
     pub(crate) patterns: PatternsFocus,
@@ -57,41 +55,39 @@ pub(crate) struct TabFocus {
     pub(crate) status: StatusFocus,
 }
 
-// reason: fields wired by C3 patterns tab; dead until C3 lands.
-#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct PatternsFocus {
     pub(crate) selected_idx: usize,
+    // reason: written by h/l/Enter dispatch; v0.5.5+ wires the render-side
+    // split-pane focus indicator that reads it.
+    #[allow(dead_code)]
     pub(crate) detail_focused: bool,
 }
-// reason: fields wired by C3 themes tab; dead until C3 lands.
-#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct ThemesFocus {
     pub(crate) selected_idx: usize,
+    // reason: written by Enter dispatch; v0.5.5+ wires the render-side
+    // split-pane focus indicator that reads it.
+    #[allow(dead_code)]
     pub(crate) detail_focused: bool,
 }
-// reason: fields wired by C3 profiles tab; dead until C3 lands.
-#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct ProfilesFocus {
     pub(crate) selected_idx: usize,
+    // reason: written by Enter dispatch; v0.5.5+ wires the render-side
+    // split-pane focus indicator that reads it.
+    #[allow(dead_code)]
     pub(crate) detail_focused: bool,
 }
-// reason: field wired by C3 status tab; dead until C3 lands.
-#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct StatusFocus {
     pub(crate) scroll: usize,
 }
 
 /// Modal overlay. `App.modal` is `Option<Modal>` — no stacking (spec §7.2);
-/// every modal-opening code path is guarded by `modal.is_none()`.
-/// Detailed state types land in C4 (widgets/* modules) — C2a holds
-/// only the tag variants needed for key dispatch.
-// reason: Confirm and Error variants wired by C3/C4; ColorPicker/SaveDiff/Search/SampleSet
-// land in C4; tag variants declared here now so dispatch_key can pattern-match them.
-#[allow(dead_code)]
+/// every modal-opening code path is guarded by `modal.is_none()`. Detailed
+/// state types for the C4 modals live in widgets/* modules; tag variants
+/// declared here so `dispatch_key` can pattern-match them.
 #[derive(Debug)]
 pub(crate) enum Modal {
     Confirm { msg: String, action: ConfirmAction },
@@ -104,19 +100,21 @@ pub(crate) enum Modal {
     SampleSet,
 }
 
-// reason: ConfirmAction variants constructed by C3/C4 action handlers; dead until those land.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum ConfirmAction {
+    // reason: v0.5.5+ "Discard edits and reload" Confirm path; tag declared
+    // here so events.rs apply_confirm pattern-match stays exhaustive.
+    #[allow(dead_code)]
     DiscardEditsAndReload,
     DeleteUserRule(String),
     ResetUserOverride(String),
+    // reason: v0.5.5+ Shift+D init-from-dump Confirm path; tag declared
+    // here so events.rs apply_confirm pattern-match stays exhaustive.
+    #[allow(dead_code)]
     InitFromDump,
 }
 
 /// Toast — auto-dismiss after 3 s.
-// reason: text and kind read by C2b render.rs; dead until C2b lands.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Toast {
     pub(crate) text: String,
@@ -144,12 +142,9 @@ impl Toast {
 
 /// Catalog — read-only enumeration of available rules / themes /
 /// profiles. Built once at `App` init from existing tayf accessors.
-/// (C3 fills detail; C2a holds the type only.)
 // reason: field names must carry their category prefix for clarity even though
 // they share the `_names` postfix — renaming would obscure the domain.
 #[allow(clippy::struct_field_names)]
-// reason: catalog fields read by C3 tab dispatch; dead until C3 lands.
-#[allow(dead_code)]
 #[derive(Default, Debug)]
 pub(crate) struct Catalog {
     pub(crate) builtin_rule_names: Vec<&'static str>,
@@ -157,19 +152,20 @@ pub(crate) struct Catalog {
     pub(crate) embedded_profile_names: Vec<&'static str>,
 }
 
-/// Live-preview state (C4 wires real recompile).
-// reason: fields wired by C4 preview recompile; dead until C4 lands.
-#[allow(dead_code)]
+/// Live-preview state. `compiled` is the rule set the preview applies;
+/// `compile_error` is set when the latest debounced recompile failed.
 #[derive(Default, Debug)]
 pub(crate) struct PreviewState {
+    // reason: populated by v0.5.5+ recompile_preview body when the
+    // span-emitting preview pipeline (spec §5.4 DOKUNULMAZ blocker)
+    // is unblocked; v0.5.4 ships the scaffold field only.
+    #[allow(dead_code)]
     pub(crate) compiled: Option<Arc<crate::rules::Compiled>>,
     pub(crate) compile_error: Option<String>,
     pub(crate) debouncer: crate::config_tui::debounce::Debouncer,
 }
 
 /// Session sample input shown in the live-preview strip.
-// reason: text field read by C2b render.rs; dead until C2b lands.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct SampleInput {
     pub(crate) text: String,
@@ -182,8 +178,6 @@ impl Default for SampleInput {
 }
 
 /// Top-level App state.
-// reason: scaffold fields consumed by C2b/C3/C4; dead until those tasks land.
-#[allow(dead_code)]
 pub(crate) struct App {
     pub(crate) snapshot: ConfigSnapshot,
     pub(crate) edits: PendingEdits,

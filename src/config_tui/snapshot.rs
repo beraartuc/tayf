@@ -4,10 +4,11 @@
 //! to detect concurrent manual edits (D1 conflict modal trigger) and to
 //! reconstruct the typed `ParsedConfigView` overlay for live preview.
 
-// reason: ConfigSnapshot/ParsedConfigView fields + sha256 helper are
-// consumed by Phase C tasks (C1c save.rs, C2a app.rs); silence
-// dead-code lint until those tasks land. Remove this attribute once
-// downstream wiring lands.
+// reason: `ParsedConfigView::general` and `rules` are populated for
+// v0.5.5+ "edit detail view" + "rules diff visualization" paths
+// (currently the live preview only consults `compiled`, which lives
+// on PreviewState — see app.rs). Module-level allow until those
+// detail views are wired.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};

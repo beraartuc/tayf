@@ -112,7 +112,11 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, width: u16, previ
         bits.push(format!("⚠ pattern won't compile: {err}"));
     }
     if let Some(t) = &app.toast {
-        bits.push(format!("[{}]", t.text));
+        let prefix = match t.kind {
+            crate::config_tui::app::ToastKind::Ok => "",
+            crate::config_tui::app::ToastKind::Warn => "⚠ ",
+        };
+        bits.push(format!("[{prefix}{}]", t.text));
     }
     let line = bits.join("  ");
     // Truncate for narrow terminal (UX 🔵 #10).

@@ -3,11 +3,10 @@
 //! Accumulates in-TUI mutations not yet on disk. `is_dirty()` is
 //! consulted by the quit-confirm modal and the save button.
 
-// reason: PendingEdits / RuleId / StyleKey / NewStyle / RuleEdit /
-// GeneralEdits / NewRule fields + helpers are consumed by Phase C
-// tasks (C1c save.rs, C2a app.rs); silence dead-code lint until
-// downstream wiring lands. Remove this attribute once C2a wires
-// the aggregator into the TUI event loop.
+// reason: NewStyle / NewRule + several aggregator helpers are reachable
+// only via v0.5.5+ "new pattern" / "edit regex source" modal paths that
+// are spec'd in §9.6 but unwired in v0.5.4 (n / e keys land a Toast::warn
+// instead). Module-level allow until those wires land.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
