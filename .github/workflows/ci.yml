@@ -35,6 +35,11 @@ jobs:
           # integration tests bypass bg_detect entirely. Production behavior
           # unchanged. See CHANGELOG [0.3.2] for the investigation summary.
           TAYF_DISABLE_BG_DETECT: "1"
+          # reload::tests::orchestrator_* hang indefinitely on this self-hosted
+          # Linux runner when threads run in parallel (local: <2s; CI: >10min
+          # timeout). Likely a runner-state / fs-watcher interaction; v0.6+
+          # root cause investigation deferred. For now serialize test execution.
+          RUST_TEST_THREADS: "1"
         # `cargo test` (default scope) covers lib + bins + integration tests
         # + examples + doctests.  Benches run in the dedicated bench-regression
         # job below via `cargo bench`, which is the correct invocation for
