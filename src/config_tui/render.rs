@@ -82,17 +82,9 @@ fn render_tab_strip(frame: &mut Frame, area: Rect, app: &App, width: u16) {
     frame.render_widget(p, area);
 }
 
-/// Main pane — C2c populates per-tab routing.
+/// Main pane — routes to the per-tab renderer via the tabs facade.
 fn render_main_pane(frame: &mut Frame, area: Rect, app: &App) {
-    let title = match app.tab {
-        Tab::Patterns => "Patterns",
-        Tab::Themes => "Themes",
-        Tab::Profiles => "Profiles",
-        Tab::Status => "Status",
-    };
-    let block = Block::default().borders(Borders::ALL).title(title);
-    let p = Paragraph::new("(C2c wires real tab content)").block(block);
-    frame.render_widget(p, area);
+    crate::config_tui::tabs::render(frame, area, app);
 }
 
 /// 5-row mini-preview placeholder. C4 wires real Compiled-applied preview.

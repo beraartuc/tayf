@@ -98,7 +98,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         }
         // C3 / C4 wire the rest (Ctrl+S save, s sample, / search, Shift+D init).
         _ => {
-            // Tab-internal — C3 will dispatch.
+            crate::config_tui::tabs::dispatch_key(app, k);
         }
     }
 }
