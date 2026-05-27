@@ -8,11 +8,12 @@
 //!
 //! Spec §5 — handler-by-handler walk. Spec §6 — [`ReconcileError`] variants.
 
-use crate::config_tui::edit::PendingEdits;
-use toml_edit::DocumentMut;
+use crate::config_tui::edit::{GeneralEdits, PendingEdits};
+use toml_edit::{DocumentMut, Table};
 
-// reason: variants consumed by Task B5 (apply_deletion) + Task B1 (ensure_general_table);
-// v0.5.5 Phase A2 skeleton.
+// reason: UnsupportedDeletionTarget consumed by Task B5 (apply_deletion);
+// v0.5.5 Phase A2 skeleton, used by B1 (TypeMismatch path reachable via
+// [[general]] user-written shape in ensure_general_table).
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReconcileError {
@@ -31,27 +32,117 @@ pub(crate) enum ReconcileError {
     TypeMismatch { path: String, expected: &'static str, actual: &'static str },
 }
 
+/// Apply `[general]` staged edits (theme + profile tri-state) to `doc`.
+///
+/// Tri-state semantics per [`GeneralEdits`]:
+/// - `None`         — field untouched.
+/// - `Some(None)`   — remove the key from `[general]`.
+/// - `Some(Some(s))`— set (or overwrite) the key to `s`.
+///
+/// Creates the `[general]` table if it does not yet exist.
+fn apply_general(doc: &mut DocumentMut, ge: &GeneralEdits) -> Result<(), ReconcileError> {
+    // N1 NIT fold: no early-return; both arms (None / Some) below are no-ops if no edit.
+    let general = ensure_general_table(doc)?;
+    match &ge.theme {
+        None => {}
+        Some(None) => {
+            general.remove("theme");
+        }
+        Some(Some(name)) => {
+            general["theme"] = toml_edit::value(name.as_str());
+        }
+    }
+    match &ge.profile {
+        None => {}
+        Some(None) => {
+            general.remove("profile");
+        }
+        Some(Some(name)) => {
+            general["profile"] = toml_edit::value(name.as_str());
+        }
+    }
+    Ok(())
+}
+
+/// Return a mutable reference to the `[general]` table, creating it if absent.
+///
+/// Returns [`ReconcileError::TypeMismatch`] if `doc["general"]` exists but is
+/// not a `Table` (e.g. user hand-wrote `[[general]]`). Spec §6 B5 fold.
+fn ensure_general_table(doc: &mut DocumentMut) -> Result<&mut Table, ReconcileError> {
+    if !doc.contains_key("general") {
+        let mut t = Table::new();
+        // N4 NIT: defensive — Table::new() default is non-implicit but explicit
+        // pin guards against toml_edit default-change in future versions.
+        t.set_implicit(false);
+        doc["general"] = toml_edit::Item::Table(t);
+        return Ok(doc["general"].as_table_mut().unwrap_or_else(|| {
+            unreachable!(
+                "doc[\"general\"] was just set to Item::Table; toml_edit invariant violation if not Table now"
+            )
+        }));
+    }
+    // B5 fold: existing-key path — emit TypeMismatch on non-Table Item.
+    let item = &mut doc["general"];
+    let actual_ty = item.type_name();
+    item.as_table_mut().ok_or(ReconcileError::TypeMismatch {
+        path: "general".into(),
+        expected: "table",
+        actual: actual_ty,
+    })
+}
+
 /// Walk `edits` into `doc` (cloned internally) and serialize to TOML
 /// string. Spec §5 algorithm. **Implementation note:** `doc` is cloned
 /// internally (`DocumentMut::clone()` is O(n) tree-walk; acceptable for
 /// save-on-Ctrl+S frequency, not a hot path). Caller's snapshot.doc is
 /// not mutated.
-// reason: unnecessary_wraps — Phase A3 facade now calls this, but the
-// body is still the pass-through skeleton; ReconcileError variants are
-// only produced in Phase B handlers (B1 + B5 consumers).
-#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn apply_edits(
     doc: &DocumentMut,
-    _edits: &PendingEdits,
+    edits: &PendingEdits,
 ) -> Result<String, ReconcileError> {
-    // Phase A2 skeleton: pass-through. Phase B fills in per-handler walk.
-    let working = doc.clone();
+    let mut working = doc.clone();
+    apply_general(&mut working, &edits.general)?;
     Ok(working.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn general_theme_set_appends_or_updates() {
+        // Spec §7.1 #2.
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.general.theme = Some(Some("light".to_owned()));
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert_eq!(out, "[general]\ntheme = \"light\"\n");
+    }
+
+    #[test]
+    fn general_theme_clear_removes_key() {
+        // Spec §7.1 #3.
+        let source = "[general]\ntheme = \"dark\"\nprofile = \"docker\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.general.theme = Some(None);
+        let out = apply_edits(&doc, &edits).expect("ok");
+        // theme line gone; profile + [general] header preserved.
+        assert_eq!(out, "[general]\nprofile = \"docker\"\n");
+    }
+
+    #[test]
+    fn general_theme_creates_section_when_absent() {
+        // Spec §7.1 #4.
+        let source = "";
+        let doc: DocumentMut = source.parse().expect("valid TOML (empty)");
+        let mut edits = PendingEdits::default();
+        edits.general.theme = Some(Some("dark".to_owned()));
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains("[general]"), "must create [general] section: {out:?}");
+        assert!(out.contains("theme = \"dark\""), "must set theme: {out:?}");
+    }
 
     #[test]
     fn empty_edits_yields_identical_bytes() {
