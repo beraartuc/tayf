@@ -1,20 +1,163 @@
-//! Frame composition (Layout split, narrow-term gate). v0.5.4 C2b target.
-//!
-//! C2a minimal stub: provides `DEFAULT_PREVIEW_SAMPLE` and a placeholder
-//! `frame` fn so that `app.rs` and `events.rs` compile. C2b replaces this
-//! file entirely with the full layout implementation.
+//! Frame composition — Layout split per spec §7.3 + narrow-terminal
+//! degradation gate §7.4.
 
-use ratatui::widgets::Paragraph;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::Frame;
 
-use crate::config_tui::app::App;
+use crate::config_tui::app::{App, Tab};
 
-/// Default sample text shown in the live-preview strip.
-/// C2b wires the real multi-line sample (spec §9.3).
+/// Default sample input shown in the live-preview strip. Spec §9.3
+/// (Unicode coverage + collision-avoidance N-7 fold).
 pub(crate) const DEFAULT_PREVIEW_SAMPLE: &str =
-    "2026-01-15T14:32:01Z INFO  user@host.example.com permission denied";
+    "[2026-05-26T17:18:42Z] INFO  192.168.1.42 GET /api/health 200 OK 12ms\n\
+[2026-05-26T17:18:43Z] WARN  pod-frontend-a1b2c3d4e5 restart count=3 reason=OOMKilled\n\
+[2026-05-26T17:18:44Z] ERROR conn refused gateway.internal — fallback to read replica\n\
+[2026-05-26T17:18:45Z] DEBUG user=ñame action=façade pid=4096 elapsed=完了\n";
 
-/// Render one TUI frame. C2a placeholder — C2b replaces with full layout.
-pub(crate) fn frame(f: &mut ratatui::Frame, _app: &App) {
-    let area = f.area();
-    f.render_widget(Paragraph::new("tayf config TUI — loading (C2b wires full layout)"), area);
+/// Top-level draw. Dispatches narrow-term degradation gate first.
+pub(crate) fn frame(frame: &mut Frame, app: &App) {
+    let size = frame.area();
+    if size.width < 60 || size.height < 16 {
+        render_too_small(frame, size);
+        return;
+    }
+    let preview_visible = app.mini_preview_visible && size.height >= 24;
+    let preview_rows = if preview_visible { 5 } else { 0 };
+    let chunks = Layout::vertical([
+        Constraint::Length(1),            // tab strip
+        Constraint::Min(10),              // main pane
+        Constraint::Length(preview_rows), // mini-preview (collapsible)
+        Constraint::Length(1),            // status bar
+    ])
+    .split(size);
+    render_tab_strip(frame, chunks[0], app, size.width);
+    render_main_pane(frame, chunks[1], app);
+    if preview_visible {
+        render_mini_preview_placeholder(frame, chunks[2], app);
+    }
+    render_status_bar(frame, chunks[3], app, size.width, preview_visible);
+}
+
+/// < 60 × 16 hard block (spec §7.4).
+fn render_too_small(frame: &mut Frame, size: Rect) {
+    let msg = format!("Resize to ≥60×16 (currently {}×{})", size.width, size.height);
+    let p = Paragraph::new(msg).block(Block::default().borders(Borders::NONE));
+    frame.render_widget(p, size);
+}
+
+/// 1-row tab strip. Three-letter labels at 60-79 col (spec §7.4 short-tab pin).
+fn render_tab_strip(frame: &mut Frame, area: Rect, app: &App, width: u16) {
+    let labels: &[(&str, Tab)] = if width < 80 {
+        &[
+            ("Pat", Tab::Patterns),
+            ("Thm", Tab::Themes),
+            ("Pro", Tab::Profiles),
+            ("Sta", Tab::Status),
+        ]
+    } else {
+        &[
+            ("Patterns", Tab::Patterns),
+            ("Themes", Tab::Themes),
+            ("Profiles", Tab::Profiles),
+            ("Status", Tab::Status),
+        ]
+    };
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, (label, t)) in labels.iter().enumerate() {
+        let style = if *t == app.tab {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        if i > 0 {
+            spans.push(Span::raw(" │ "));
+        }
+        spans.push(Span::styled((*label).to_owned(), style));
+    }
+    let line = Line::from(spans);
+    let p = Paragraph::new(line);
+    frame.render_widget(p, area);
+}
+
+/// Main pane — C2c populates per-tab routing.
+fn render_main_pane(frame: &mut Frame, area: Rect, app: &App) {
+    let title = match app.tab {
+        Tab::Patterns => "Patterns",
+        Tab::Themes => "Themes",
+        Tab::Profiles => "Profiles",
+        Tab::Status => "Status",
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let p = Paragraph::new("(C2c wires real tab content)").block(block);
+    frame.render_widget(p, area);
+}
+
+/// 5-row mini-preview placeholder. C4 wires real Compiled-applied preview.
+fn render_mini_preview_placeholder(frame: &mut Frame, area: Rect, _app: &App) {
+    let header = "─── live preview ─── [s] sample [P] hide [Shift+P] full ──";
+    let block = Block::default().borders(Borders::TOP).title(header);
+    let p = Paragraph::new("(C4 wires real preview)").block(block);
+    frame.render_widget(p, area);
+}
+
+/// Status bar: bottom 1-row line with dirty marker, narrow-term hint, compile
+/// error, and toast. Truncated to `width` with trailing `…` (UX 🔵 #10).
+fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, width: u16, preview_visible: bool) {
+    let mut bits: Vec<String> = Vec::new();
+    if app.edits.is_dirty() {
+        bits.push("[unsaved]".to_owned());
+    }
+    // Narrow-term auto-hide marker (§7.4 + UX #1 fold).
+    if !preview_visible && app.mini_preview_visible {
+        bits.push("[preview hidden — press P to force show]".to_owned());
+    }
+    if let Some(err) = &app.preview.compile_error {
+        // Priority marker — error always visible.
+        bits.push(format!("⚠ pattern won't compile: {err}"));
+    }
+    if let Some(t) = &app.toast {
+        bits.push(format!("[{}]", t.text));
+    }
+    let line = bits.join("  ");
+    // Truncate for narrow terminal (UX 🔵 #10).
+    let line_truncated = if line.len() > width as usize {
+        let max_len = (width as usize).saturating_sub(1);
+        let truncated: String = line.chars().take(max_len).collect();
+        format!("{truncated}…")
+    } else {
+        line
+    };
+    let p = Paragraph::new(line_truncated);
+    frame.render_widget(p, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_preview_sample_has_4_lines_unicode_coverage() {
+        // Spec §9.3 + 🔵 #9 fold — 4 lines, line 4 holds Unicode probes.
+        let lines: Vec<&str> = DEFAULT_PREVIEW_SAMPLE.lines().collect();
+        assert_eq!(lines.len(), 4, "sample must have 4 lines");
+        assert!(
+            lines[3].contains("ñame") && lines[3].contains("façade") && lines[3].contains("完了"),
+            "line 4 must carry combining diacritics + CJK wide chars; got: {}",
+            lines[3]
+        );
+    }
+
+    #[test]
+    fn default_preview_sample_avoids_v0_5_5_collision_n7() {
+        // N-7 fold: `10.0.0.5:5432` shape is the v0.5.5 fqdn-vs-image_tag
+        // collision example — must NOT appear in the default first-impression
+        // preview. Power-users can paste it via `s` sample-set modal.
+        assert!(
+            !DEFAULT_PREVIEW_SAMPLE.contains("10.0.0.5:5432"),
+            "default sample must not include the v0.5.5 collision shape"
+        );
+    }
 }
