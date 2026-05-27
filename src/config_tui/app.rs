@@ -2,7 +2,6 @@
 //!
 //! Single-thread design (spec §6.2). No `Arc<Mutex<App>>`.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config_tui::edit::PendingEdits;
@@ -58,25 +57,16 @@ pub(crate) struct TabFocus {
 #[derive(Default, Debug)]
 pub(crate) struct PatternsFocus {
     pub(crate) selected_idx: usize,
-    // reason: written by h/l/Enter dispatch; v0.5.5+ wires the render-side
-    // split-pane focus indicator that reads it.
-    #[allow(dead_code)]
     pub(crate) detail_focused: bool,
 }
 #[derive(Default, Debug)]
 pub(crate) struct ThemesFocus {
     pub(crate) selected_idx: usize,
-    // reason: written by Enter dispatch; v0.5.5+ wires the render-side
-    // split-pane focus indicator that reads it.
-    #[allow(dead_code)]
     pub(crate) detail_focused: bool,
 }
 #[derive(Default, Debug)]
 pub(crate) struct ProfilesFocus {
     pub(crate) selected_idx: usize,
-    // reason: written by Enter dispatch; v0.5.5+ wires the render-side
-    // split-pane focus indicator that reads it.
-    #[allow(dead_code)]
     pub(crate) detail_focused: bool,
 }
 #[derive(Default, Debug)]
@@ -154,15 +144,49 @@ pub(crate) struct Catalog {
 
 /// Live-preview state. `compiled` is the rule set the preview applies;
 /// `compile_error` is set when the latest debounced recompile failed.
-#[derive(Default, Debug)]
 pub(crate) struct PreviewState {
-    // reason: populated by v0.5.5+ recompile_preview body when the
-    // span-emitting preview pipeline (spec §5.4 DOKUNULMAZ blocker)
-    // is unblocked; v0.5.4 ships the scaffold field only.
-    #[allow(dead_code)]
-    pub(crate) compiled: Option<Arc<crate::rules::Compiled>>,
+    pub(crate) compiled: std::sync::Arc<arc_swap::ArcSwap<crate::rules::Compiled>>,
     pub(crate) compile_error: Option<String>,
     pub(crate) debouncer: crate::config_tui::debounce::Debouncer,
+    pub(crate) runs: Vec<Vec<crate::pipeline::StyleSpan>>,
+    pub(crate) scratch: crate::pipeline::PipelineScratch,
+}
+
+impl std::fmt::Debug for PreviewState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviewState")
+            .field("compiled", &"<ArcSwap<Compiled>>")
+            .field("compile_error", &self.compile_error)
+            .field("debouncer", &self.debouncer)
+            .field("runs", &self.runs.len())
+            .field("scratch", &"<PipelineScratch>")
+            .finish()
+    }
+}
+
+impl PreviewState {
+    pub(crate) fn new(compiled: crate::rules::Compiled) -> Self {
+        Self {
+            compiled: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled)),
+            compile_error: None,
+            debouncer: crate::config_tui::debounce::Debouncer::default(),
+            runs: Vec::new(),
+            scratch: crate::pipeline::PipelineScratch::default(),
+        }
+    }
+
+    /// Run `apply_rules_spans` across all sample lines, populating `runs`.
+    pub(crate) fn recompile(&mut self, sample_text: &str) {
+        self.runs.clear();
+        for line in sample_text.lines() {
+            let spans = crate::pipeline::apply_rules_spans(
+                line.as_bytes(),
+                &self.compiled,
+                &mut self.scratch,
+            );
+            self.runs.push(spans);
+        }
+    }
 }
 
 /// Session sample input shown in the live-preview strip.
@@ -204,11 +228,26 @@ impl App {
         let builtin_theme_names: Vec<&'static str> = crate::themes::names().to_vec();
         let embedded_profile_names: Vec<&'static str> =
             crate::profiles::embedded_profile_names().collect();
-        Self {
+
+        let theme = snapshot.parsed.theme.as_deref();
+        let profile = snapshot.parsed.profile.as_deref();
+        let synth_config = crate::config::Config {
+            general: snapshot.parsed.general.clone(),
+            rules: snapshot.parsed.rules.clone(),
+        };
+        let (compiled, compile_error) =
+            match crate::rules::compile_from_config(&synth_config, theme, profile) {
+                Ok(c) => (c, None),
+                Err(e) => (crate::rules::Compiled::empty(), Some(e.to_string())),
+            };
+        let mut preview = PreviewState::new(compiled);
+        preview.compile_error = compile_error;
+
+        let mut app = Self {
             snapshot,
             edits: PendingEdits::default(),
             catalog: Catalog { builtin_rule_names, builtin_theme_names, embedded_profile_names },
-            preview: PreviewState::default(),
+            preview,
             tab: Tab::Patterns,
             focus: TabFocus::default(),
             modal: None,
@@ -220,7 +259,9 @@ impl App {
             search_state: None,
             sample_set_state: None,
             should_quit: false,
-        }
+        };
+        app.preview.recompile(&app.sample_input.text);
+        app
     }
 }
 

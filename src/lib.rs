@@ -347,6 +347,43 @@ impl Tayf {
     }
 }
 
+/// Test-only adapters for `tests/` integration binaries. Not part of
+/// the public API — hidden from rustdoc, no stability guarantees. Exposes
+/// the minimum Config-TUI surface required by `tests/common/tui_harness.rs`
+/// to drive headless TUI integration tests.
+#[doc(hidden)]
+pub mod __test_api {
+    use ratatui::backend::Backend;
+
+    /// Opaque newtype around the internal `App` so tests don't need to
+    /// reach `pub(crate)` fields directly.
+    pub struct AppHandle(pub(crate) crate::config_tui::app::App);
+
+    /// Boot a fresh App on an empty snapshot, with the provided sample
+    /// text seeded into the live-preview pipeline. Equivalent to the
+    /// production `App::from_snapshot(ConfigSnapshot::empty())` path
+    /// plus a sample swap + recompile.
+    #[must_use]
+    pub fn boot_app_with_sample(sample: &str) -> AppHandle {
+        let snapshot = crate::config_tui::snapshot::ConfigSnapshot::empty();
+        let mut app = crate::config_tui::app::App::from_snapshot(snapshot);
+        sample.clone_into(&mut app.sample_input.text);
+        app.preview.recompile(&app.sample_input.text);
+        AppHandle(app)
+    }
+
+    /// Drive one frame through the internal `render::frame` entry-point.
+    ///
+    /// # Errors
+    /// Forwards any backend `Error` produced by the backend's `draw`.
+    pub fn draw_app<B: Backend>(
+        app: &AppHandle,
+        terminal: &mut ratatui::Terminal<B>,
+    ) -> Result<(), B::Error> {
+        terminal.draw(|f| crate::config_tui::render::frame(f, &app.0)).map(|_| ())
+    }
+}
+
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`
 /// crate (an external crate from rustc's perspective) can drive the hot
 /// path directly.

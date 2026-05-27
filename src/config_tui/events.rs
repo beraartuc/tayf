@@ -363,11 +363,12 @@ pub(crate) fn check_debounce(app: &mut App) {
     }
 }
 
-/// Recompile the live-preview rule set. v0.5.4 stub — true Compiled
-/// rebuild lands in v0.6+ when the span-emitting preview pipeline is
-/// ready. For now this just clears any stale compile-error indicator.
-fn recompile_preview(app: &mut App) {
+/// Recompile the live-preview rule set. Delegates to
+/// [`PreviewState::recompile`], which runs `apply_rules_spans` across
+/// every sample line and refreshes `preview.runs`.
+pub(crate) fn recompile_preview(app: &mut App) {
     app.preview.compile_error = None;
+    app.preview.recompile(&app.sample_input.text);
 }
 
 /// Toast expiration tick.

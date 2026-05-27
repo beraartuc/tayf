@@ -41,7 +41,6 @@ use crate::style::Style;
 /// Non-overlapping invariant: in the returned `Vec<StyleSpan>` from
 /// [`apply_rules_spans`], no two spans overlap. Sorted by `start` ASC.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // reason: Group 2 (TUI preview render) consumes StyleSpan via spans_to_line.
 pub(crate) struct StyleSpan {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -190,7 +189,6 @@ pub(crate) fn select_runs<'a>(
 ///
 /// Snapshot Arc drop: dropped at function return; spans own `Style` by
 /// Copy (verified in `src/style.rs:422`). No dangling reference.
-#[allow(dead_code)] // reason: Group 2 (TUI preview render) wires this into config_tui::preview.
 pub(crate) fn apply_rules_spans(
     line: &[u8],
     compiled_handle: &ArcSwap<Compiled>,

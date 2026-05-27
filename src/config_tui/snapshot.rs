@@ -4,12 +4,6 @@
 //! to detect concurrent manual edits (D1 conflict modal trigger) and to
 //! reconstruct the typed `ParsedConfigView` overlay for live preview.
 
-// reason: ParsedConfigView typed view consumed by v0.6+ live-preview
-// detail rendering + rules-diff visualization paths. v0.5.5 reconcile.rs
-// walks `doc` (DocumentMut) directly; `parsed` typed view stays for
-// future detail-rendering wiring.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use crate::config::{Config, GeneralSection, UserRule, MAX_CONFIG_BYTES};

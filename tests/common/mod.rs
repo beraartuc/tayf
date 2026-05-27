@@ -13,6 +13,8 @@
 // false-positive of `tests/common` being shared.
 #![allow(dead_code)]
 
+pub mod tui_harness;
+
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};

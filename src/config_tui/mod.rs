@@ -34,6 +34,7 @@ pub(crate) mod render;
 pub(crate) mod save;
 pub(crate) mod snapshot;
 pub(crate) mod status_cmd;
+pub(crate) mod style_ratatui;
 pub(crate) mod tabs;
 pub(crate) mod widgets;
 
