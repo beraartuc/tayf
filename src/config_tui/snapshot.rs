@@ -4,15 +4,16 @@
 //! to detect concurrent manual edits (D1 conflict modal trigger) and to
 //! reconstruct the typed `ParsedConfigView` overlay for live preview.
 
-// reason: downstream Phase C tasks (C1b/C1c/C2*) consume these items;
-// `expect` auto-fires a warning once the allow becomes unnecessary,
-// so the suppression is self-removing as the rest of Phase C lands.
-#![expect(dead_code, reason = "constructed and read by downstream Phase C tasks (C1b/C1c/C2*)")]
+// reason: ConfigSnapshot/ParsedConfigView fields + sha256 helper are
+// consumed by Phase C tasks (C1c save.rs, C2a app.rs); silence
+// dead-code lint until those tasks land. Remove this attribute once
+// downstream wiring lands.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{Config, GeneralSection, UserRule};
-use crate::error::Result;
+use crate::config::{Config, GeneralSection, UserRule, MAX_CONFIG_BYTES};
+use crate::error::{Error, Result};
 
 /// Frozen view of disk config at last successful read.
 #[derive(Debug)]
@@ -37,22 +38,43 @@ impl ConfigSnapshot {
     /// Read the config file at `path`. Returns the empty-snapshot
     /// shape when `path` is `None` (no user config file exists).
     pub(crate) fn read_from_disk(path: Option<&Path>) -> Result<Self> {
+        use std::io::Read;
         let Some(p) = path else {
             return Ok(Self::empty());
         };
-        let raw_bytes = std::fs::read(p).map_err(|e| crate::error::Error::Config {
+        let mut file = std::fs::File::open(p).map_err(|e| Error::Config {
             path: p.display().to_string(),
             line: 0,
             message: format!("cannot read config: {e}"),
         })?;
+        let mut raw_bytes = Vec::with_capacity(4096);
+        // `Read::take(limit + 1)` so we can distinguish "exactly at cap" from "over cap".
+        let _read = (&mut file)
+            .take((MAX_CONFIG_BYTES as u64) + 1)
+            .read_to_end(&mut raw_bytes)
+            .map_err(|e| Error::Config {
+                path: p.display().to_string(),
+                line: 0,
+                message: format!("cannot read config: {e}"),
+            })?;
+        if raw_bytes.len() > MAX_CONFIG_BYTES {
+            return Err(Error::Config {
+                path: p.display().to_string(),
+                line: 0,
+                message: format!(
+                    "config file too large: {actual} bytes (max {MAX_CONFIG_BYTES})",
+                    actual = raw_bytes.len()
+                ),
+            });
+        }
         let source_hash = sha256(&raw_bytes);
-        let raw_str = std::str::from_utf8(&raw_bytes).map_err(|e| crate::error::Error::Config {
+        let raw_str = std::str::from_utf8(&raw_bytes).map_err(|e| Error::Config {
             path: p.display().to_string(),
             line: 0,
             message: format!("config is not valid UTF-8: {e}"),
         })?;
         let doc: toml_edit::DocumentMut =
-            raw_str.parse().map_err(|e: toml_edit::TomlError| crate::error::Error::Config {
+            raw_str.parse().map_err(|e: toml_edit::TomlError| Error::Config {
                 path: p.display().to_string(),
                 line: 0,
                 message: format!("toml_edit parse: {e}"),
@@ -67,8 +89,9 @@ impl ConfigSnapshot {
         Ok(Self { source_path: Some(p.to_path_buf()), source_hash, raw_bytes, doc, parsed })
     }
 
-    /// Synthetic snapshot for the no-config-file case. `doc` is an
-    /// empty `DocumentMut`; SHA256 of empty bytes is the all-zeros-but-known hash.
+    /// Synthetic snapshot for the no-config-file case. `doc` is an empty
+    /// `DocumentMut`; `source_hash` is the well-known SHA-256 of an
+    /// empty input (`e3b0c442...`).
     pub(crate) fn empty() -> Self {
         let raw_bytes = Vec::new();
         let source_hash = sha256(&raw_bytes);
@@ -117,7 +140,7 @@ const SHA256_H0: [u32; 8] = [
 // reason: SHA-256 working variables are named `a..h` and `w` per the
 // FIPS 180-4 spec (§6.2.2). Renaming them away from the spec letters
 // would make the code harder to audit against the standard.
-#[allow(clippy::many_single_char_names, reason = "FIPS 180-4 spec letters")]
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = SHA256_H0;
     let mut padded = bytes.to_vec();
@@ -206,6 +229,22 @@ mod tests {
             acc
         });
         assert_eq!(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn sha256_known_two_block_answer() {
+        // FIPS 180-2 second test vector (56-byte input → 2 blocks): SHA-256
+        // of "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq" =
+        // 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+        let input = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        assert_eq!(input.len(), 56, "fixture must be exactly 56 bytes");
+        let h = sha256(input);
+        let hex: String = h.iter().fold(String::with_capacity(64), |mut acc, b| {
+            use std::fmt::Write;
+            write!(&mut acc, "{b:02x}").expect("writing to String is infallible");
+            acc
+        });
+        assert_eq!(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
     }
 
     #[test]
