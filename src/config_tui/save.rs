@@ -424,4 +424,168 @@ mod tests {
              documented behavior, v0.6+ may add per-key conflict UI"
         );
     }
+
+    #[test]
+    fn integration_commit_save_with_general_theme_edit_persists_to_disk() {
+        // Spec §7.2 I1.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\ntheme = \"dark\"\n").unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.general.theme = Some(Some("light".to_owned()));
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_779_667_200);
+        commit_save(&snap, &edits, now).expect("save");
+        // Disk content updated.
+        let disk_after = std::fs::read_to_string(&cfg_path).unwrap();
+        assert_eq!(disk_after, "[general]\ntheme = \"light\"\n");
+        // Backup contains pre-edit bytes.
+        let backup = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
+            .expect("backup exists");
+        let backup_bytes = std::fs::read(backup.path()).unwrap();
+        assert_eq!(backup_bytes, b"[general]\ntheme = \"dark\"\n");
+    }
+
+    #[test]
+    fn integration_commit_save_preserves_header_comments() {
+        // Spec §7.2 I2.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        let source = b"# Header comment\n# Two lines\n[general]\ntheme = \"dark\"\n";
+        std::fs::write(&cfg_path, source).unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.general.theme = Some(Some("light".to_owned()));
+        commit_save(&snap, &edits, SystemTime::now()).expect("save");
+        let disk_after = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(
+            disk_after.starts_with("# Header comment\n# Two lines\n"),
+            "header preserved: {disk_after:?}"
+        );
+        assert!(disk_after.contains("theme = \"light\""), "theme updated");
+    }
+
+    #[test]
+    fn integration_commit_save_preserves_rule_ordering() {
+        // Spec §7.2 I3.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        let source =
+            b"[[rules]]\nname = \"a\"\npattern = \"old_a\"\n\n[[rules]]\nname = \"b\"\npattern = \"keep_b\"\n";
+        std::fs::write(&cfg_path, source).unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.rules.insert(
+            RuleId::UserConfig("a".to_owned()),
+            RuleEdit {
+                pattern: Some("new_a".to_owned()),
+                styles: std::collections::HashMap::new(),
+            },
+        );
+        commit_save(&snap, &edits, SystemTime::now()).expect("save");
+        let disk_after = std::fs::read_to_string(&cfg_path).unwrap();
+        let a_pos = disk_after.find("name = \"a\"").expect("a present");
+        let b_pos = disk_after.find("name = \"b\"").expect("b present");
+        assert!(a_pos < b_pos, "a must come before b; got disk: {disk_after:?}");
+        assert!(disk_after.contains("new_a"), "a's pattern updated");
+        assert!(disk_after.contains("keep_b"), "b's pattern untouched");
+    }
+
+    #[test]
+    fn integration_commit_save_user_config_override_writes_stub_entry() {
+        // Spec §7.2 I4 — the `o` keystroke shape: RuleEdit::default() insert.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\ntheme = \"dark\"\n").unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.rules.insert(RuleId::UserConfig("uuid".to_owned()), RuleEdit::default());
+        commit_save(&snap, &edits, SystemTime::now()).expect("save");
+        let disk_after = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(disk_after.contains("[[rules]]"), "stub entry section added");
+        assert!(disk_after.contains("name = \"uuid\""), "uuid name written");
+        // No pattern, no style for the stub.
+    }
+
+    #[test]
+    fn integration_commit_save_reconcile_error_propagates_as_io_error_and_leaves_orphan_backup() {
+        // Spec §7.2 I5 (I6 augmented — orphan-backup contract pin).
+        use crate::config_tui::edit::RuleId;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        let source = b"[general]\ntheme = \"dark\"\n";
+        std::fs::write(&cfg_path, source).unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.deleted.insert(RuleId::Builtin("uuid"));
+        let err = commit_save(&snap, &edits, SystemTime::now()).expect_err("must error");
+        assert_eq!(
+            err.to_string(),
+            "reconcile failed: unsupported deletion target: Builtin(\"uuid\") \
+             (currently only `RuleId::UserConfig` deletion is supported; \
+             other variants are reserved for future work)",
+            "full error chain byte-pinned"
+        );
+        // Orphan-backup contract (§4.4 amendment): backup file exists post-fail.
+        let backup_entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
+            .collect();
+        assert_eq!(backup_entries.len(), 1, "exactly one orphan backup");
+        let backup_bytes = std::fs::read(backup_entries[0].path()).unwrap();
+        assert_eq!(backup_bytes, source as &[u8], "backup contains pre-edit bytes");
+        // Source on disk unchanged (commit failed before rename).
+        let disk_after = std::fs::read(&cfg_path).unwrap();
+        assert_eq!(disk_after, source as &[u8], "source unchanged on reconcile fail");
+    }
+
+    #[test]
+    fn integration_commit_save_post_save_snapshot_parses_edits() {
+        // Spec §7.2 I6.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\ntheme = \"dark\"\n").unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.general.theme = Some(Some("light".to_owned()));
+        let new_snap = commit_save(&snap, &edits, SystemTime::now()).expect("save");
+        assert_eq!(new_snap.parsed.theme.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn integration_duplicate_rule_name_on_disk_mutates_first_occurrence_only() {
+        // Spec §7.2 I7 + §13.2 I14 fold — silent first-match contract.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        let source =
+            b"[[rules]]\nname = \"x\"\npattern = \"A\"\n\n[[rules]]\nname = \"x\"\npattern = \"B\"\n";
+        std::fs::write(&cfg_path, source).unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = crate::config_tui::edit::PendingEdits::default();
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: Some("NEW".to_owned()), styles: std::collections::HashMap::new() },
+        );
+        commit_save(&snap, &edits, SystemTime::now()).expect("save");
+        let disk_after = std::fs::read_to_string(&cfg_path).unwrap();
+        let new_pos = disk_after.find("NEW").expect("NEW present");
+        let b_pos = disk_after.find("\"B\"").expect("B preserved");
+        assert!(new_pos < b_pos, "first occurrence mutated, second preserved: {disk_after:?}");
+        // Both x entries still have name = "x":
+        assert_eq!(disk_after.matches("name = \"x\"").count(), 2);
+    }
 }
