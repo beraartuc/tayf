@@ -1,4 +1,5 @@
 //! Profiles tab — embedded + disk list, active marker, Space-to-activate.
+//! Uniform Enter semantic (spec §12.3): Enter = focus detail; Space = activate.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
