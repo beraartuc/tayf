@@ -8,8 +8,8 @@
 //!
 //! Spec §5 — handler-by-handler walk. Spec §6 — [`ReconcileError`] variants.
 
-use crate::config_tui::edit::{GeneralEdits, PendingEdits};
-use toml_edit::{DocumentMut, Table};
+use crate::config_tui::edit::{GeneralEdits, PendingEdits, RuleEdit, RuleId};
+use toml_edit::{ArrayOfTables, DocumentMut, Table};
 
 // reason: UnsupportedDeletionTarget consumed by Task B5 (apply_deletion);
 // v0.5.5 Phase A2 skeleton, used by B1 (TypeMismatch path reachable via
@@ -95,6 +95,68 @@ fn ensure_general_table(doc: &mut DocumentMut) -> Result<&mut Table, ReconcileEr
     })
 }
 
+/// Return a mutable reference to the `[[rules]]` array-of-tables,
+/// creating it if absent.
+///
+/// Returns [`ReconcileError::TypeMismatch`] if `doc["rules"]` exists but
+/// is not an array-of-tables (e.g. user hand-wrote `[rules]` inline).
+fn ensure_rules_array(doc: &mut DocumentMut) -> Result<&mut ArrayOfTables, ReconcileError> {
+    if !doc.contains_key("rules") {
+        doc["rules"] = toml_edit::Item::ArrayOfTables(ArrayOfTables::new());
+        return Ok(doc["rules"].as_array_of_tables_mut().unwrap_or_else(|| {
+            unreachable!("rules just set to ArrayOfTables; toml_edit invariant violation if not")
+        }));
+    }
+    let item = &mut doc["rules"];
+    let actual_ty = item.type_name();
+    item.as_array_of_tables_mut().ok_or(ReconcileError::TypeMismatch {
+        path: "rules".into(),
+        expected: "array-of-tables",
+        actual: actual_ty,
+    })
+}
+
+/// Linear scan for `name = "X"` entry. N-bound: `MAX_CONFIG_BYTES` /
+/// min-entry-size ≈ 20k; expected N 5-50 real use. Spec §5.3.
+fn find_rule_index_by_name(rules: &ArrayOfTables, name: &str) -> Option<usize> {
+    rules.iter().position(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+}
+
+/// Apply a single [`RuleEdit`] to the named `[[rules]]` entry in `doc`.
+///
+/// If no entry with `name = <name>` exists, a new stub entry is appended.
+/// Pattern edit writes a TOML literal string to avoid backslash escaping.
+/// Styles handling defers to Task B3.
+fn apply_user_config_rule(
+    doc: &mut DocumentMut,
+    name: &str,
+    edit: &RuleEdit,
+) -> Result<(), ReconcileError> {
+    let rules = ensure_rules_array(doc)?;
+    let idx = find_rule_index_by_name(rules, name);
+    let rule_table = if let Some(i) = idx {
+        // get_mut returns &mut Table directly (ArrayOfTables invariant).
+        rules.get_mut(i).unwrap_or_else(|| {
+            unreachable!(
+                "find_rule_index_by_name returned valid idx {i}; toml_edit ArrayOfTables index invariant violation"
+            )
+        })
+    } else {
+        let mut t = Table::new();
+        t["name"] = toml_edit::value(name);
+        rules.push(t);
+        let last_idx = rules.len() - 1;
+        rules
+            .get_mut(last_idx)
+            .unwrap_or_else(|| unreachable!("just pushed; toml_edit invariant violation"))
+    };
+    if let Some(pat) = &edit.pattern {
+        rule_table["pattern"] = toml_edit::value(pat.as_str());
+    }
+    // Styles handling lands in Task B3.
+    Ok(())
+}
+
 /// Walk `edits` into `doc` (cloned internally) and serialize to TOML
 /// string. Spec §5 algorithm. **Implementation note:** `doc` is cloned
 /// internally (`DocumentMut::clone()` is O(n) tree-walk; acceptable for
@@ -106,6 +168,15 @@ pub(crate) fn apply_edits(
 ) -> Result<String, ReconcileError> {
     let mut working = doc.clone();
     apply_general(&mut working, &edits.general)?;
+    for (rule_id, rule_edit) in &edits.rules {
+        match rule_id {
+            RuleId::UserConfig(name) => apply_user_config_rule(&mut working, name, rule_edit)?,
+            RuleId::Builtin(_) | RuleId::Embedded { .. } | RuleId::DiskProfile { .. } => {
+                // v0.5.4 tabs only stage UserConfig; defensive no-op for other variants.
+                // Spec §5.1.
+            }
+        }
+    }
     Ok(working.to_string())
 }
 
@@ -156,6 +227,38 @@ mod tests {
         edits.general.profile = Some(Some("docker".to_owned()));
         let out = apply_edits(&doc, &edits).expect("ok");
         assert_eq!(out, "[general]\nprofile = \"docker\"\n");
+    }
+
+    #[test]
+    fn user_config_rule_pattern_update() {
+        // Spec §7.1 #5.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let source = "[[rules]]\nname = \"uuid\"\npattern = \"old\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::UserConfig("uuid".to_owned()),
+            RuleEdit {
+                pattern: Some(r"\bx\b".to_owned()),
+                styles: std::collections::HashMap::new(),
+            },
+        );
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains(r"pattern = '\bx\b'"), "literal-string form expected; got: {out:?}");
+        assert!(!out.contains("\"old\""), "old pattern must be gone: {out:?}");
+    }
+
+    #[test]
+    fn user_config_rule_append_when_absent() {
+        // Spec §7.1 #6.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(RuleId::UserConfig("uuid".to_owned()), RuleEdit::default());
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains("[[rules]]"), "must append [[rules]]: {out:?}");
+        assert!(out.contains("name = \"uuid\""), "must include name=uuid: {out:?}");
     }
 
     #[test]
