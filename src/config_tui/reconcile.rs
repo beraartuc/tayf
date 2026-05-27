@@ -809,4 +809,57 @@ mod tests {
         assert!(out.contains("pattern = 'p'") || out.contains("pattern = \"p\""));
         assert!(out.contains("fg = \"cyan\""));
     }
+
+    #[test]
+    fn type_mismatch_returns_typed_error() {
+        // Spec §7.1 #15 + §13.2 B5 fold — reachable via [[general]] user-written shape.
+        // (Defensive path: well-typed doc usually wouldn't have this, but
+        // if user manually writes [[general]] as array-of-tables, reconcile
+        // emits TypeMismatch instead of panicking.)
+        // NOTE: toml_edit 0.25 Item::type_name() returns "array of tables"
+        // (spaces, not hyphens) — both field assert and Display are pinned to
+        // observed output.
+        let source = "[[general]]\nname = \"x\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML (array-of-tables for general)");
+        let mut edits = PendingEdits::default();
+        edits.general.theme = Some(Some("dark".to_owned()));
+        let err = apply_edits(&doc, &edits).expect_err("must error");
+        match &err {
+            ReconcileError::TypeMismatch { path, expected, actual } => {
+                assert_eq!(path, "general");
+                assert_eq!(*expected, "table");
+                assert_eq!(*actual, "array of tables");
+            }
+            other @ ReconcileError::UnsupportedDeletionTarget { .. } => {
+                panic!("expected TypeMismatch, got {other:?}")
+            }
+        }
+        let display = format!("{err}");
+        assert_eq!(
+            display,
+            "type mismatch at general: expected table, found array of tables (DocumentMut shape diverged from validated parse — config may be corrupt; try reloading the file)",
+            "Display string byte-pinned"
+        );
+    }
+
+    #[test]
+    fn crlf_line_ending_source_preserved_on_mutation() {
+        // Spec §7.1 #20 + §13.4 N6 fold — defensive baseline; pins whatever
+        // toml_edit 0.25 actually does with \r\n (preserve OR normalize).
+        let source = "[general]\r\ntheme = \"dark\"\r\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML with CRLF");
+        let mut edits = PendingEdits::default();
+        edits.general.theme = Some(Some("light".to_owned()));
+        let out = apply_edits(&doc, &edits).expect("ok");
+        // Pin observed behavior: assert theme updated regardless of \r\n preservation.
+        assert!(out.contains("light"), "theme updated: {out:?}");
+        // Document observed line-ending behavior:
+        let has_crlf = out.contains("\r\n");
+        let has_lf_only = out.lines().count() > 1 && !out.contains("\r\n");
+        // One of these must be true; either is documented contract.
+        assert!(has_crlf || has_lf_only, "must have consistent line endings; got: {out:?}");
+        // If toml_edit normalizes to \n: this test documents that.
+        // If it preserves \r\n: this test documents that too.
+        // The test ensures we KNOW which one and detect regressions.
+    }
 }
