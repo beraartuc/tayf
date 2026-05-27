@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-05-28
+
+### Changed
+- Documentation-only cleanup. `src/profiles.rs` ARN test section comment now
+  reflects v0.5.6's ipv6 tighten implicitly resolving the previously-
+  documented `arn:aws:s3:::my-bucket` interior-collision case (branch 2's
+  new `[hex]{3,4}` prefix rejects the single-char `3:` shape). `src/pipeline.rs`
+  pre-filter comment now describes the priority-sort tie-break contract
+  instead of the obsolete "first-match-wins depends on pattern order"
+  phrasing.
+
+No code change; 636 lib tests unchanged.
+
 ## [0.5.6] - 2026-05-27
 
 ### Added

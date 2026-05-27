@@ -798,13 +798,13 @@ mod tests {
     // interior ipv4/uuid (0) on the envelope span. Tests below cover
     // collision-free IAM shapes plus positive envelope-wins cases.
     //
-    // Remaining known limitation: ARNs with the empty-account segment
-    // `arn:aws:s3:::my-bucket` contain a `3::` substring matching ipv6
-    // (built-in, priority 0). Because the ipv6 span starts inside the
-    // arn envelope, bidirectional overlap resolution rejects the later rule
-    // (arn) regardless of priority — the earlier-indexed ipv6 already
-    // accepted its span. This edge case is rare in real output; documented
-    // in assets/profiles/aws.toml as a known v0.5.3 carry-forward limitation.
+    // v0.5.6 ipv6 tighten implicitly resolved the documented `3::` interior
+    // case (`arn:aws:s3:::my-bucket`): branch 2 now requires `[hex]{3,4}` as
+    // the leading group, rejecting the single-char `3:` shape that the old
+    // pattern accepted. Residual edge cases remain for ARNs containing
+    // hex-shaped account IDs that look like compressed IPv6 (e.g. partition
+    // segments matching `[hex]{3,4}:...::`), but the common s3-empty-account
+    // shape is no longer a collision.
 
     #[test]
     fn aws_arn_matches_collision_free_shapes() {

@@ -68,9 +68,10 @@ pub(crate) fn apply_rules<W: Write>(
 
     // Pre-filter: ask RegexSet which rule indices CAN hit; skip the rest.
     // `SetMatches::iter()` yields indices in pattern-definition order
-    // (regex 1.12 stable contract). NO HashSet/BTreeSet here — first-match-
-    // wins overlap resolution depends on pattern order (spec §2.4 +
-    // cross-rule pattern-order regression guard).
+    // (regex 1.12 stable contract). NO HashSet/BTreeSet here — the
+    // priority sort step below depends on a deterministic input ordering
+    // for its stable tie-break (v0.5.5 pattern-order behavior is preserved
+    // when all priorities are equal, e.g. all built-ins at 0).
     scratch.set_match_scratch.extend(compiled.set.matches(line).iter());
 
     // v0.5.6 §4.3 — priority sort: iterate (priority DESC, rule_index ASC).
