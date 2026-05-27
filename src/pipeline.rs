@@ -638,6 +638,7 @@ mod rule_tests {
             group_styles: vec![vec![Some(red), Some(blue)]],
             uses_capture_styling: vec![true],
             respect_existing_colors: false,
+            priorities: vec![0],
         };
         let rules = ArcSwap::from_pointee(compiled);
         let mut scratch = PipelineScratch::default();
@@ -942,6 +943,7 @@ mod rule_tests {
             group_styles: vec![vec![], vec![]],
             uses_capture_styling: vec![false, false],
             respect_existing_colors: false,
+            priorities: vec![0, 0],
         };
         let rules = ArcSwap::from_pointee(compiled);
         let mut scratch = PipelineScratch::default();

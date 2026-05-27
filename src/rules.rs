@@ -88,9 +88,6 @@ pub(crate) struct BuiltinRule {
     /// Tie-breaking when two rules have equal priority: lower rule index
     /// (pattern-definition order) wins. Preserves v0.5.5 "first-match-wins
     /// by pattern order" for all priority-0 built-in pairs.
-    // reason: read by apply_rules sort step (Task 8); field exists now for
-    // structural completeness and spec §2.1.B1 wire-up.
-    #[allow(dead_code)]
     pub(crate) priority: i32,
 }
 
@@ -585,6 +582,16 @@ pub(crate) struct Compiled {
     /// snapshotted at line boundary via the enclosing `ArcSwap<Compiled>`
     /// (spec §4.4, Karar 11).
     pub(crate) respect_existing_colors: bool,
+    /// Per-rule priority parallel vec (NEW v0.5.6). Length matches
+    /// `individuals` / `styles` / `group_styles` / `uses_capture_styling`.
+    /// Populated at [`Compiled::build_from_loaded`] from each merged
+    /// [`BuiltinRule::priority`]. Consumed by [`crate::pipeline::apply_rules`]
+    /// sort step: iteration order is `(Reverse(priority), rule_index)`.
+    /// See spec §2.1.B / §4.3.
+    // reason: read by apply_rules sort step (Task 8); field populated now for
+    // structural completeness and spec §4.2 wire-up.
+    #[allow(dead_code)]
+    pub(crate) priorities: Vec<i32>,
 }
 
 impl Compiled {
@@ -610,6 +617,7 @@ impl Compiled {
             group_styles: Vec::new(),
             uses_capture_styling: Vec::new(),
             respect_existing_colors: true,
+            priorities: Vec::new(),
         }
     }
 
@@ -811,6 +819,7 @@ impl Compiled {
             group_styles: compiled_rules.group_styles,
             uses_capture_styling: compiled_rules.uses_capture_styling,
             respect_existing_colors,
+            priorities: compiled_rules.priorities,
         };
         // Bake depth into every style slot — both default and per-group.
         compiled.downgrade_for_depth(depth);
@@ -930,6 +939,7 @@ struct CompiledRules {
     styles: Vec<Style>,
     group_styles: Vec<Vec<Option<Style>>>,
     uses_capture_styling: Vec<bool>,
+    priorities: Vec<i32>,
 }
 
 /// Compile each merged rule, build the parallel style/regex/group-styles
@@ -959,6 +969,7 @@ fn compile_merged_rules(
     let mut styles: Vec<Style> = Vec::with_capacity(rules.len());
     let mut sources: Vec<String> = Vec::with_capacity(rules.len());
     let mut group_styles: Vec<Vec<Option<Style>>> = Vec::with_capacity(rules.len());
+    let mut priorities: Vec<i32> = Vec::with_capacity(rules.len());
     let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
     let mut profile_errors: Vec<crate::error::ProfileRuleError> = Vec::new();
 
@@ -981,6 +992,7 @@ fn compile_merged_rules(
         individuals.push(regex);
         styles.push(rule.style);
         group_styles.push(final_group_styles);
+        priorities.push(rule.priority);
     }
 
     if !theme_errors.is_empty() {
@@ -1009,7 +1021,7 @@ fn compile_merged_rules(
     let uses_capture_styling: Vec<bool> =
         group_styles.iter().map(|gs| gs.iter().any(Option::is_some)).collect();
 
-    Ok(CompiledRules { set, individuals, styles, group_styles, uses_capture_styling })
+    Ok(CompiledRules { set, individuals, styles, group_styles, uses_capture_styling, priorities })
 }
 
 /// Resolve the per-capture-group style overlay vector for a single rule,
@@ -3313,5 +3325,34 @@ fg = "red"
         for r in builtin_rules() {
             assert_eq!(r.priority, 0, "built-in '{}' must have priority 0", r.name);
         }
+    }
+
+    #[test]
+    fn compiled_priorities_parallel_vec_invariant() {
+        let compiled = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("default load");
+        assert_eq!(
+            compiled.priorities.len(),
+            compiled.individuals.len(),
+            "priorities vs individuals"
+        );
+        assert_eq!(compiled.priorities.len(), compiled.styles.len(), "priorities vs styles");
+        assert_eq!(
+            compiled.priorities.len(),
+            compiled.group_styles.len(),
+            "priorities vs group_styles"
+        );
+        assert_eq!(
+            compiled.priorities.len(),
+            compiled.uses_capture_styling.len(),
+            "priorities vs uses_capture_styling"
+        );
     }
 }
