@@ -11,6 +11,11 @@ pub(crate) struct Debouncer {
 }
 
 impl Debouncer {
+    // reason: called by v0.6+ inline regex-source editor per spec §9.1;
+    // v0.5.4 ships the Debouncer scaffold so `should_recompile` ticks
+    // cleanly, but no debounce-triggering edits land until the inline
+    // editor (currently a v0.6+ Toast::warn stub on the `e` key) wires.
+    #[allow(dead_code)]
     pub(crate) fn mark_edit(&mut self) {
         self.last_edit = Some(Instant::now());
         self.pending = true;

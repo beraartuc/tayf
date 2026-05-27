@@ -215,8 +215,8 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
 
 /// Esc precedence (§12.1):
 /// 1. close active edit field (incl. color-picker goto-input — UI/UX nit #5 fold),
-/// 2. close modal,
-/// 3. clear active search filter (C4c owns this),
+/// 2. close modal (drops matching side-channel: `SaveDiff` / `Search` / `SampleSet`),
+/// 3. clear active sticky search filter,
 /// 4. no-op.
 fn handle_esc(app: &mut App) {
     // Tier 1: color-picker goto-input clears first, modal stays open.
@@ -367,8 +367,10 @@ fn handle_sample_set_key(app: &mut App, k: KeyEvent) {
             app.sample_input.text = buf;
             app.modal = None;
             app.sample_set_state = None;
-            // Sample changed; recompile preview next tick.
-            app.preview.debouncer.mark_edit();
+            // No mark_edit: per spec §9.2 sample-input changes are
+            // a no-debounce interaction — render re-applies the
+            // existing preview.compiled to the new sample on the
+            // next frame without a recompile.
         }
         SampleSetOutcome::Cancel => {
             app.modal = None;
@@ -429,5 +431,69 @@ mod tests {
         dispatch_key(&mut app, mk(KeyCode::Esc));
         assert!(app.modal.is_none(), "Esc must close SaveDiff modal");
         assert!(app.save_diff.is_none(), "Esc must clear save_diff side-channel");
+    }
+
+    #[test]
+    fn slash_opens_search_modal_and_enter_commits_filter() {
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+
+        dispatch_key(&mut app, mk(KeyCode::Char('/')));
+        assert!(matches!(app.modal, Some(Modal::Search)));
+        assert!(app.search_state.is_some());
+
+        for c in ['f', 'o', 'o'] {
+            dispatch_key(&mut app, mk(KeyCode::Char(c)));
+        }
+        dispatch_key(&mut app, mk(KeyCode::Enter));
+        assert!(app.modal.is_none());
+        assert!(app.search_state.is_none());
+        assert_eq!(app.search_filter.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn esc_tier3_clears_search_filter_when_no_modal_open() {
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        app.search_filter = Some("foo".to_owned());
+
+        dispatch_key(&mut app, mk(KeyCode::Esc));
+        assert!(app.search_filter.is_none(), "tier-3 must clear sticky filter");
+    }
+
+    #[test]
+    fn s_opens_sample_set_modal_with_buffer_prefilled() {
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        let original = app.sample_input.text.clone();
+
+        dispatch_key(&mut app, mk(KeyCode::Char('s')));
+        assert!(matches!(app.modal, Some(Modal::SampleSet)));
+        let state = app.sample_set_state.as_ref().expect("state set");
+        assert_eq!(state.buf, original, "buffer must be pre-filled with current sample");
+    }
+
+    #[test]
+    fn sample_set_commit_writes_text_without_marking_debouncer() {
+        // Spec §9.2: sample-input change is a no-debounce interaction.
+        // Render re-applies preview.compiled to the new sample on the next
+        // frame; a debouncer.mark_edit() here would over-trigger a recompile.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        dispatch_key(&mut app, mk(KeyCode::Char('s')));
+        // Clear the pre-filled buffer.
+        let state = app.sample_set_state.as_mut().expect("state set");
+        state.buf.clear();
+        for c in ['l', 'o', 'g'] {
+            dispatch_key(&mut app, mk(KeyCode::Char(c)));
+        }
+        dispatch_key(&mut app, mk(KeyCode::Enter));
+        assert!(app.modal.is_none());
+        assert!(app.sample_set_state.is_none());
+        assert_eq!(app.sample_input.text, "log");
+        assert!(
+            !app.preview.debouncer.should_recompile(),
+            "spec §9.2 forbids debouncer trigger on sample-input change"
+        );
     }
 }
