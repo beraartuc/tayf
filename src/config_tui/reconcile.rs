@@ -337,6 +337,28 @@ fn apply_user_config_rule(
     Ok(())
 }
 
+/// Append a brand-new `[[rules]]` entry to `doc` from a [`NewRule`].
+///
+/// Always writes `style` as an inline table (v0.5.5 convention per
+/// `assets/profiles/*.toml`). If `style` has no fields set, the key is
+/// omitted entirely. Spec §5.5.
+fn apply_new_rule(
+    doc: &mut DocumentMut,
+    rule: &crate::config_tui::edit::NewRule,
+) -> Result<(), ReconcileError> {
+    let rules = ensure_rules_array(doc)?;
+    let mut t = Table::new();
+    t["name"] = toml_edit::value(rule.name.as_str());
+    t["pattern"] = toml_edit::value(rule.pattern.as_str());
+    let mut style_inline = InlineTable::new();
+    write_style_table(StyleTargetMut::Inline(&mut style_inline), &rule.style)?;
+    if !style_inline.is_empty() {
+        t["style"] = Item::Value(Value::InlineTable(style_inline));
+    }
+    rules.push(t);
+    Ok(())
+}
+
 /// Walk `edits` into `doc` (cloned internally) and serialize to TOML
 /// string. Spec §5 algorithm. **Implementation note:** `doc` is cloned
 /// internally (`DocumentMut::clone()` is O(n) tree-walk; acceptable for
@@ -356,6 +378,9 @@ pub(crate) fn apply_edits(
                 // Spec §5.1.
             }
         }
+    }
+    for new_rule in &edits.added {
+        apply_new_rule(&mut working, new_rule)?;
     }
     Ok(working.to_string())
 }
@@ -671,5 +696,25 @@ mod tests {
         assert!(out.contains("[rules.style]"), "block form preserved: {out:?}");
         assert!(out.contains("fg = \"blue\""), "fg updated: {out:?}");
         assert!(!out.contains("style = { "), "must NOT flip to inline form: {out:?}");
+    }
+
+    #[test]
+    fn added_vec_appends_new_rule() {
+        // Spec §7.1 #12.
+        use crate::config_tui::edit::{NewRule, NewStyle};
+        use crate::style::Color;
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.added.push(NewRule {
+            name: "x".to_owned(),
+            pattern: "p".to_owned(),
+            style: NewStyle { fg: Some(Some(Color::Cyan)), ..NewStyle::default() },
+        });
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains("[[rules]]"), "must append [[rules]]: {out:?}");
+        assert!(out.contains("name = \"x\""));
+        assert!(out.contains("pattern = 'p'") || out.contains("pattern = \"p\""));
+        assert!(out.contains("fg = \"cyan\""));
     }
 }
