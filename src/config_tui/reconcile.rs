@@ -41,7 +41,11 @@ pub(crate) enum ReconcileError {
 ///
 /// Creates the `[general]` table if it does not yet exist.
 fn apply_general(doc: &mut DocumentMut, ge: &GeneralEdits) -> Result<(), ReconcileError> {
-    // N1 NIT fold: no early-return; both arms (None / Some) below are no-ops if no edit.
+    // Both fields None = no general edits; skip to avoid ensure_general_table
+    // side effect of creating an empty [general] section when one didn't exist.
+    if ge.theme.is_none() && ge.profile.is_none() {
+        return Ok(());
+    }
     let general = ensure_general_table(doc)?;
     match &ge.theme {
         None => {}
@@ -140,8 +144,18 @@ mod tests {
         let mut edits = PendingEdits::default();
         edits.general.theme = Some(Some("dark".to_owned()));
         let out = apply_edits(&doc, &edits).expect("ok");
-        assert!(out.contains("[general]"), "must create [general] section: {out:?}");
-        assert!(out.contains("theme = \"dark\""), "must set theme: {out:?}");
+        assert_eq!(out, "[general]\ntheme = \"dark\"\n");
+    }
+
+    #[test]
+    fn general_profile_set_updates_value() {
+        // Spec §7.1 — defensive profile-arm coverage (parallel to test #2).
+        let source = "[general]\nprofile = \"aws\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.general.profile = Some(Some("docker".to_owned()));
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert_eq!(out, "[general]\nprofile = \"docker\"\n");
     }
 
     #[test]
