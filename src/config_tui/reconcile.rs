@@ -530,6 +530,12 @@ mod tests {
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("matchname"), "named key expected: {out:?}");
         assert!(out.contains("fg = \"blue\""));
+        assert!(
+            out.contains("styles.matchname")
+                || out.contains("[rules.styles")
+                || out.contains("\nstyles ="),
+            "matchname must be nested under styles. sub-table, not at rule root: {out:?}"
+        );
     }
 
     #[test]
@@ -575,6 +581,7 @@ mod tests {
         assert!(out.contains("italic = true"), "italic expected: {out:?}");
         assert!(out.contains("underline = false"), "underline expected: {out:?}");
         assert!(out.contains("dim = false"), "dim expected: {out:?}");
+        assert!(out.contains("fg = \"red\""), "fg must survive (not staged for change): {out:?}");
     }
 
     #[test]
