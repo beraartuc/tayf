@@ -65,8 +65,10 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             return;
         }
         // C4-owned modals: dispatch into the widget's key handler.
-        // reason: arms differ semantically (placeholder vs already-dispatched)
-        // even though both currently no-op; future C4b/C4c work distinguishes them.
+        // reason: FullPreview/Search/SampleSet placeholder, Confirm/Quit
+        // defensive fallback, and Error key-absorption all currently
+        // share an empty body but document semantically distinct intent;
+        // C4c will give Search + SampleSet real bodies.
         #[allow(clippy::match_same_arms)]
         match modal {
             Modal::ColorPicker(_) => {
@@ -86,8 +88,9 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                     }
                 }
             }
-            Modal::SaveDiff | Modal::FullPreview | Modal::Search | Modal::SampleSet => {
-                // SaveDiff body lands in C4b; Search + SampleSet in C4c.
+            Modal::SaveDiff => handle_save_diff_key(app, k),
+            Modal::FullPreview | Modal::Search | Modal::SampleSet => {
+                // Search + SampleSet bodies land in C4c.
             }
             Modal::Confirm { .. } | Modal::QuitWithUnsavedEdits => {
                 // Reached only on unhandled keys for these modals — their
@@ -122,6 +125,21 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             // Shift+P — full-preview overlay (C4 wires real impl).
             app.modal = Some(Modal::FullPreview);
         }
+        (KeyCode::Char('s'), m) if m == KeyModifiers::CONTROL => {
+            if app.modal.is_none() {
+                app.save_diff =
+                    Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
+                app.modal = Some(Modal::SaveDiff);
+            }
+        }
+        (KeyCode::Char('w'), m) if m == KeyModifiers::CONTROL => {
+            // Ctrl+W alt-binding (🔵 #1 fold — XON/XOFF inferno).
+            if app.modal.is_none() {
+                app.save_diff =
+                    Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
+                app.modal = Some(Modal::SaveDiff);
+            }
+        }
         (KeyCode::Char('p'), m) if m.is_empty() => {
             app.mini_preview_visible = !app.mini_preview_visible;
         }
@@ -129,6 +147,49 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         _ => {
             crate::config_tui::tabs::dispatch_key(app, k);
         }
+    }
+}
+
+/// `SaveDiff` modal key dispatch + outcome handling.
+fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::widgets::save_diff::{dispatch_key as sd_dispatch, SaveDiffOutcome};
+    match sd_dispatch(app, k) {
+        SaveDiffOutcome::Commit => match crate::config_tui::save::commit_save(
+            &app.snapshot,
+            &app.edits,
+            std::time::SystemTime::now(),
+        ) {
+            Ok(new_snap) => {
+                app.snapshot = new_snap;
+                app.edits.clear();
+                app.modal = None;
+                app.save_diff = None;
+                app.toast = Some(crate::config_tui::app::Toast::ok(
+                    "Saved. Hot-reload will pick this up shortly.",
+                ));
+            }
+            Err(e) => {
+                app.modal = Some(Modal::Error(format!("Save failed: {e}")));
+                app.save_diff = None;
+            }
+        },
+        SaveDiffOutcome::DiscardAndReload(_disk_now) => {
+            if let Ok(snap) = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(
+                app.snapshot.source_path.as_deref(),
+            ) {
+                app.snapshot = snap;
+            }
+            app.edits.clear();
+            app.modal = None;
+            app.save_diff = None;
+            app.toast =
+                Some(crate::config_tui::app::Toast::ok("Reloaded from disk; TUI edits discarded."));
+        }
+        SaveDiffOutcome::CloseModal => {
+            app.modal = None;
+            app.save_diff = None;
+        }
+        SaveDiffOutcome::StayOpen => {}
     }
 }
 
@@ -171,14 +232,12 @@ fn handle_quit_confirm_key(app: &mut App, k: KeyEvent) {
             app.modal = None;
         }
         KeyCode::Char('s') => {
-            // C2a stub: close modal + toast "save not wired yet".
-            // C4 replaces this with SaveDiff modal open inline.
-            app.modal = None;
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "save flow lands in C4; discarding instead",
-            ));
-            app.edits.clear();
-            app.should_quit = true;
+            // Save-and-quit: open SaveDiff inline; commit will set
+            // should_quit on success via a separate flag (deferred to v0.6+
+            // because event-loop reentrancy from here is non-trivial). For
+            // v0.5.4 we open SaveDiff and let user commit-then-quit manually.
+            app.save_diff = Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
+            app.modal = Some(Modal::SaveDiff);
         }
         KeyCode::Char('d') => {
             app.edits.clear();

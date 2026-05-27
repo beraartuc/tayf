@@ -195,6 +195,7 @@ pub(crate) struct App {
     pub(crate) sample_input: SampleInput,
     pub(crate) toast: Option<Toast>,
     pub(crate) mini_preview_visible: bool,
+    pub(crate) save_diff: Option<crate::config_tui::widgets::save_diff::SaveDiffState>,
     pub(crate) should_quit: bool,
 }
 
@@ -217,6 +218,7 @@ impl App {
             sample_input: SampleInput::default(),
             toast: None,
             mini_preview_visible: true,
+            save_diff: None,
             should_quit: false,
         }
     }

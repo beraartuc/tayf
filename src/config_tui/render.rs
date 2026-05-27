@@ -88,12 +88,9 @@ fn render_main_pane(frame: &mut Frame, area: Rect, app: &App) {
     crate::config_tui::tabs::render(frame, area, app);
 }
 
-/// 5-row mini-preview placeholder. C4 wires real Compiled-applied preview.
-fn render_mini_preview_placeholder(frame: &mut Frame, area: Rect, _app: &App) {
-    let header = "─── live preview ─── [s] sample [P] hide [Shift+P] full ──";
-    let block = Block::default().borders(Borders::TOP).title(header);
-    let p = Paragraph::new("(C4 wires real preview)").block(block);
-    frame.render_widget(p, area);
+/// 5-row mini-preview — delegates to `widgets::preview::render_mini`.
+fn render_mini_preview_placeholder(frame: &mut Frame, area: Rect, app: &App) {
+    crate::config_tui::widgets::preview::render_mini(frame, area, app);
 }
 
 /// Status bar: bottom 1-row line with dirty marker, narrow-term hint, compile

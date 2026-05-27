@@ -18,18 +18,10 @@ pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
         return;
     };
     let area = centered_rect(80, 24, full);
-    // reason: FullPreview and SaveDiff placeholders share a no-op body
-    // until C4b lands their real render fns; arms stay separate for the
-    // forward-pointer comments.
-    #[allow(clippy::match_same_arms)]
     match modal {
         Modal::ColorPicker(state) => color_picker::render(frame, area, state),
-        Modal::FullPreview => {
-            // C4b wires the real full-preview overlay.
-        }
-        Modal::SaveDiff => {
-            // C4b wires the SaveDiff body.
-        }
+        Modal::FullPreview => preview::render_full_overlay(frame, full, app),
+        Modal::SaveDiff => save_diff::render(frame, area, app),
         Modal::QuitWithUnsavedEdits => render_quit_confirm(frame, area),
         Modal::Confirm { msg, .. } => render_confirm(frame, area, msg),
         Modal::Error(msg) => render_error(frame, area, msg),
