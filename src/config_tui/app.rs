@@ -164,7 +164,7 @@ pub(crate) struct Catalog {
 pub(crate) struct PreviewState {
     pub(crate) compiled: Option<Arc<crate::rules::Compiled>>,
     pub(crate) compile_error: Option<String>,
-    pub(crate) debounce_pending: bool,
+    pub(crate) debouncer: crate::config_tui::debounce::Debouncer,
 }
 
 /// Session sample input shown in the live-preview strip.
@@ -196,6 +196,9 @@ pub(crate) struct App {
     pub(crate) toast: Option<Toast>,
     pub(crate) mini_preview_visible: bool,
     pub(crate) save_diff: Option<crate::config_tui::widgets::save_diff::SaveDiffState>,
+    pub(crate) search_filter: Option<String>,
+    pub(crate) search_state: Option<crate::config_tui::widgets::search::SearchState>,
+    pub(crate) sample_set_state: Option<crate::config_tui::widgets::sample_set::SampleSetState>,
     pub(crate) should_quit: bool,
 }
 
@@ -219,6 +222,9 @@ impl App {
             toast: None,
             mini_preview_visible: true,
             save_diff: None,
+            search_filter: None,
+            search_state: None,
+            sample_set_state: None,
             should_quit: false,
         }
     }

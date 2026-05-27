@@ -100,6 +100,9 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, width: u16, previ
     if app.edits.is_dirty() {
         bits.push("[unsaved]".to_owned());
     }
+    if let Some(filter) = &app.search_filter {
+        bits.push(format!("filter: \"{filter}\""));
+    }
     // Narrow-term auto-hide marker (§7.4 + UX #1 fold).
     if !preview_visible && app.mini_preview_visible {
         bits.push("[preview hidden — press P to force show]".to_owned());

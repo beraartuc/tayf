@@ -10,7 +10,9 @@ use crate::config_tui::app::{App, Modal};
 
 pub(crate) mod color_picker;
 pub(crate) mod preview;
+pub(crate) mod sample_set;
 pub(crate) mod save_diff;
+pub(crate) mod search;
 
 /// Render the active modal as an overlay over the centered area.
 pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
@@ -25,8 +27,15 @@ pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
         Modal::QuitWithUnsavedEdits => render_quit_confirm(frame, area),
         Modal::Confirm { msg, .. } => render_confirm(frame, area, msg),
         Modal::Error(msg) => render_error(frame, area, msg),
-        Modal::Search | Modal::SampleSet => {
-            // C4c wires Search + SampleSet bodies.
+        Modal::Search => {
+            if let Some(state) = app.search_state.as_ref() {
+                search::render(frame, area, state);
+            }
+        }
+        Modal::SampleSet => {
+            if let Some(state) = app.sample_set_state.as_ref() {
+                sample_set::render(frame, area, state);
+            }
         }
     }
 }

@@ -41,6 +41,10 @@ pub(crate) fn run_event_loop(
 }
 
 /// Top-level key dispatch. Routes per spec §7.2 precedence rules.
+// reason: tiered key precedence (Ctrl+C → Esc → modal-absorbs → global keys)
+// is a flat decision tree that does not split cleanly without obscuring intent;
+// modal arms are extracted to dedicated helpers, leaving only routing here.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
     // 1. Ctrl+C is one of two keys that bypass modal-absorbs (§7.2).
     if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
@@ -65,10 +69,9 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             return;
         }
         // C4-owned modals: dispatch into the widget's key handler.
-        // reason: FullPreview/Search/SampleSet placeholder, Confirm/Quit
-        // defensive fallback, and Error key-absorption all currently
-        // share an empty body but document semantically distinct intent;
-        // C4c will give Search + SampleSet real bodies.
+        // reason: FullPreview placeholder, Confirm/Quit defensive fallback,
+        // and Error key-absorption all currently share an empty body but
+        // document semantically distinct intent.
         #[allow(clippy::match_same_arms)]
         match modal {
             Modal::ColorPicker(_) => {
@@ -89,8 +92,10 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 }
             }
             Modal::SaveDiff => handle_save_diff_key(app, k),
-            Modal::FullPreview | Modal::Search | Modal::SampleSet => {
-                // Search + SampleSet bodies land in C4c.
+            Modal::Search => handle_search_key(app, k),
+            Modal::SampleSet => handle_sample_set_key(app, k),
+            Modal::FullPreview => {
+                // Shift+P overlay; only Esc dismisses (handled above).
             }
             Modal::Confirm { .. } | Modal::QuitWithUnsavedEdits => {
                 // Reached only on unhandled keys for these modals — their
@@ -140,10 +145,25 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 app.modal = Some(Modal::SaveDiff);
             }
         }
+        (KeyCode::Char('/'), m) if m.is_empty() => {
+            if app.modal.is_none() {
+                app.search_state = Some(crate::config_tui::widgets::search::SearchState::default());
+                app.modal = Some(Modal::Search);
+            }
+        }
+        (KeyCode::Char('s'), m) if m.is_empty() => {
+            if app.modal.is_none() {
+                app.sample_set_state =
+                    Some(crate::config_tui::widgets::sample_set::SampleSetState {
+                        buf: app.sample_input.text.clone(),
+                    });
+                app.modal = Some(Modal::SampleSet);
+            }
+        }
         (KeyCode::Char('p'), m) if m.is_empty() => {
             app.mini_preview_visible = !app.mini_preview_visible;
         }
-        // C4c wires the rest (s sample, / search, Shift+D init).
+        // C4c wires the rest (Shift+D init).
         _ => {
             crate::config_tui::tabs::dispatch_key(app, k);
         }
@@ -205,16 +225,23 @@ fn handle_esc(app: &mut App) {
             return;
         }
     }
-    // Tier 2: close modal. Drop the SaveDiff side-channel alongside so
-    // the `save_diff.is_some() ↔ modal == Some(Modal::SaveDiff)` invariant
-    // that render + dispatch rely on stays intact.
+    // Tier 2: close modal. Drop side-channels alongside so the
+    // `side_channel.is_some() ↔ modal == Some(MatchingVariant)`
+    // invariants that render + dispatch rely on stay intact.
     if app.modal.is_some() {
-        if matches!(app.modal, Some(Modal::SaveDiff)) {
-            app.save_diff = None;
+        match app.modal {
+            Some(Modal::SaveDiff) => app.save_diff = None,
+            Some(Modal::Search) => app.search_state = None,
+            Some(Modal::SampleSet) => app.sample_set_state = None,
+            _ => {}
         }
         app.modal = None;
+        return;
     }
-    // Tier 3 (search-clear) lands in C4c.
+    // Tier 3: clear sticky search filter when no modal open.
+    if app.search_filter.is_some() {
+        app.search_filter = None;
+    }
 }
 
 /// Trigger quit flow per §12.1.1.
@@ -286,15 +313,68 @@ fn apply_confirm(app: &mut App, action: &ConfirmAction) {
     )));
 }
 
-/// Debounce tick — C4 wires real recompile.
-pub(crate) fn check_debounce(_app: &mut App) {
-    // C4: if app.preview.debounce_pending && elapsed > 200ms { recompile }
+/// Debounce tick — fires `recompile_preview` once per quiescent window.
+pub(crate) fn check_debounce(app: &mut App) {
+    if app.preview.debouncer.should_recompile() {
+        recompile_preview(app);
+    }
+}
+
+/// Recompile the live-preview rule set. v0.5.4 stub — true Compiled
+/// rebuild lands in v0.6+ when the span-emitting preview pipeline is
+/// ready. For now this just clears any stale compile-error indicator.
+fn recompile_preview(app: &mut App) {
+    app.preview.compile_error = None;
 }
 
 /// Toast expiration tick.
 pub(crate) fn check_toast(app: &mut App) {
     if app.toast.as_ref().is_some_and(crate::config_tui::app::Toast::expired) {
         app.toast = None;
+    }
+}
+
+/// `Search` modal key dispatch + outcome handling.
+fn handle_search_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::widgets::search::{dispatch_key as sd, SearchOutcome};
+    let Some(state) = app.search_state.as_mut() else {
+        app.modal = None;
+        return;
+    };
+    match sd(state, k) {
+        SearchOutcome::Commit(buf) => {
+            app.search_filter = if buf.is_empty() { None } else { Some(buf) };
+            app.modal = None;
+            app.search_state = None;
+        }
+        SearchOutcome::Cancel => {
+            app.modal = None;
+            app.search_state = None;
+        }
+        SearchOutcome::StayOpen => {}
+    }
+}
+
+/// `SampleSet` modal key dispatch + outcome handling.
+fn handle_sample_set_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::widgets::sample_set::{dispatch_key as sd, SampleSetOutcome};
+    let Some(state) = app.sample_set_state.as_mut() else {
+        app.modal = None;
+        return;
+    };
+    match sd(state, k) {
+        SampleSetOutcome::Commit(buf) => {
+            app.sample_input.text = buf;
+            app.modal = None;
+            app.sample_set_state = None;
+            // Sample changed; recompile preview next tick.
+            app.preview.debouncer.mark_edit();
+        }
+        SampleSetOutcome::Cancel => {
+            app.modal = None;
+            app.sample_set_state = None;
+        }
+        SampleSetOutcome::StayOpen => {}
     }
 }
 
