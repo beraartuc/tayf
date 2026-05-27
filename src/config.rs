@@ -573,6 +573,7 @@ pub(crate) fn apply_user_rules_with_source(
                 style,
                 group_styles: Vec::new(),
                 styles_override: ur.styles.clone(),
+                priority: 0,
                 // New custom rule from theme TOML is currently unreachable —
                 // `themes::validate_theme_rules` rejects names not in
                 // `BUILTIN_NAMES` before this point. We still propagate

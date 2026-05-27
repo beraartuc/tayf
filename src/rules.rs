@@ -69,6 +69,29 @@ pub(crate) struct BuiltinRule {
     /// `styles_override` originated from the theme and was never
     /// overwritten by user config".
     pub(crate) source: RuleSource,
+    /// Overlap-resolution priority.
+    ///
+    /// Rules with higher `priority` iterate first in [`apply_rules`]; their
+    /// accepted spans block overlapping matches from lower-priority rules.
+    /// `overlaps_accepted` is **bidirectional** — a higher-priority rule
+    /// that has accepted span S blocks any lower-priority candidate whose
+    /// span overlaps S in either direction (nested inside S or enveloping
+    /// S). This is the load-bearing property that lets envelope rules
+    /// suppress interior built-ins.
+    ///
+    /// Tier convention (spec §2.1.B):
+    /// - `0`   — built-in defaults; user-config rules without explicit `priority`.
+    /// - `100` — profile interior rules (`instance_id`, `region`, `container_id`, `pod_name`).
+    /// - `200` — profile envelope rules (`arn`, `image_tag`).
+    /// - Any i32 — user-config opt-in (`#[serde(default)] priority: Option<i32>`).
+    ///
+    /// Tie-breaking when two rules have equal priority: lower rule index
+    /// (pattern-definition order) wins. Preserves v0.5.5 "first-match-wins
+    /// by pattern order" for all priority-0 built-in pairs.
+    // reason: read by apply_rules sort step (Task 8); field exists now for
+    // structural completeness and spec §2.1.B1 wire-up.
+    #[allow(dead_code)]
+    pub(crate) priority: i32,
 }
 
 /// Provenance of a rule during [`Compiled::load_with_theme`] build. Determines
@@ -368,6 +391,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
                 Some(Style { fg: Some(Color::BrightGreen), ..Style::DEFAULT }),  // perm_other
             ],
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -382,6 +406,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
                 Some(Style { fg: Some(Color::Magenta),     ..Style::DEFAULT }),  // 5: tz
             ],
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -390,6 +415,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightMagenta), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
@@ -412,6 +438,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
                 Some(Style { fg: Some(Color::BrightBlue), underline: true, ..Style::DEFAULT }), // 3: host+path
             ],
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -420,6 +447,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightGreen), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -428,6 +456,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Yellow), bold: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -436,6 +465,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightYellow), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -444,6 +474,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Cyan), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -452,6 +483,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightRed), bold: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -460,6 +492,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::BrightCyan), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         BuiltinRule {
@@ -468,6 +501,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Blue), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
         // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
@@ -487,6 +521,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             style: Style { fg: Some(Color::Green), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
+            priority: 0,
             source: RuleSource::Builtin,
         },
     ]
@@ -717,6 +752,9 @@ impl Compiled {
                     style,
                     group_styles: Vec::new(),
                     styles_override: ar.styles.clone(),
+                    // Temporary interior-tier default (spec §2.1.B); Task 6
+                    // makes this data-driven via ProfileRule.priority.
+                    priority: 100,
                     source: RuleSource::EmbeddedProfile,
                 });
             }
@@ -2610,6 +2648,7 @@ fg = "red"
             style: crate::style::Style::DEFAULT,
             group_styles: vec![None; captures_len.saturating_sub(1)],
             styles_override: Some(overrides),
+            priority: 0,
             source: RuleSource::UserConfig,
         };
         let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
@@ -2706,6 +2745,7 @@ fg = "red"
             style: crate::style::Style::DEFAULT,
             group_styles: vec![None; captures_len.saturating_sub(1)],
             styles_override: Some(overrides),
+            priority: 0,
             source: RuleSource::UserConfig,
         };
         let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
@@ -2830,6 +2870,7 @@ fg = "red"
             style: crate::style::Style::DEFAULT,
             group_styles: vec![None; captures_len.saturating_sub(1)],
             styles_override: Some(overrides.clone()),
+            priority: 0,
             source: crate::rules::RuleSource::Theme,
         };
 
@@ -2910,6 +2951,7 @@ fg = "red"
             style: crate::style::Style::DEFAULT,
             group_styles: Vec::new(),
             styles_override: Some(overrides),
+            priority: 0,
             source: RuleSource::EmbeddedProfile,
         };
         compile_merged_rules(
@@ -3088,6 +3130,7 @@ fg = "red"
             style: crate::style::Style::DEFAULT,
             group_styles: Vec::new(),
             styles_override: Some(overrides),
+            priority: 0,
             source: RuleSource::EmbeddedProfile,
         };
         let err = compile_merged_rules(
@@ -3263,5 +3306,12 @@ fg = "red"
     #[test]
     fn ipv6_matches_trailing_compression() {
         assert!(matches("ipv6", "trail 1234:5678:: here"));
+    }
+
+    #[test]
+    fn priority_default_is_zero_for_all_builtins() {
+        for r in builtin_rules() {
+            assert_eq!(r.priority, 0, "built-in '{}' must have priority 0", r.name);
+        }
     }
 }
