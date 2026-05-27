@@ -4,6 +4,87 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-05-27
+
+### Added
+- **Per-rule overlap-resolution priority (`priority: i32`).** Tier convention:
+  - `0` — built-in rules; user-config rules without explicit `priority`.
+  - `100` — profile interior rules (instance_id, region, container_id, pod_name).
+  - `200` — profile envelope rules (arn, image_tag).
+  - Any i32 — user-config opt-in (`priority = N`, negative legal).
+
+  Higher-priority rules accept their match span before lower-priority rules,
+  with overlap detection bidirectional (interior or envelope overlap both
+  block). Resolves AWS profile interior-collision issues where envelope
+  rules (`arn`, `image_tag`) used to lose to interior built-ins (`uuid`,
+  `ipv4`, `region`, `fqdn`).
+- `UserRule::priority: Option<i32>` schema field (additive, backward-
+  compatible). Themes cannot override priority (rejected with typed
+  `ThemeRuleError::StraySchemaField`).
+- `ProfileRule::priority: Option<i32>` schema field; envelope rules in
+  `assets/profiles/aws.toml` (arn) and `assets/profiles/docker.toml`
+  (image_tag) ship `priority = 200`.
+- ipv6 pattern: dedicated `::1` loopback branch promoted to first; bare
+  `::[hex]{1,4}` tightened to require additional hex groups. Negative
+  regression for Rust module paths (`foo::bar::baz`, `std::io::Read`,
+  `serde::de::Deserialize`).
+- Test coverage for IPv4 invalid octets (256.0.0.0, leading-zero), MAC
+  7-pair shape, log_level delimiter contexts ([ERROR], INFO:, WARN -,
+  (CRITICAL)), μs Greek-letter duration, URL ssh:// / ftp:// / SCP scheme
+  coverage.
+- `FILENAME_EXTENSIONS` doc-comment with canonical 1-to-1 single-letter
+  ext attribution (`a` archive, `c` C source, `h` C header, `m`
+  Objective-C, `o` object, `r` R, `v` Verilog).
+
+### Changed
+- **AWS ARN now wins envelope styling over interior IPv4, UUID, region
+  matches.** Profile pin tests `aws_arn_yields_to_interior_region_pattern_v0_5_3_limitation`
+  and `docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation`
+  renamed to `aws_arn_wins_over_interior_region_pattern` and
+  `docker_image_tag_wins_over_registry_host_fqdn` with flipped assertions.
+- **Docker `container_id` now wins over the built-in `uuid` rule** when
+  a UUID contains a 12-hex container_id-shaped substring. Inside the
+  docker profile, container_id (priority 100) iterates before uuid
+  (priority 0); accepts its 12-hex span; uuid envelope sees overlap →
+  suppressed. User-visible: a logged UUID with a 12-hex segment renders
+  as container_id color (cyan) inside `--profile docker`, not uuid color
+  (bright magenta). Outside the docker profile, uuid behavior is unchanged.
+- `src/pipeline.rs` doc-comment block above `apply_rules` updated for the
+  priority contract; "first-match-wins by pattern order" replaced with
+  "highest-priority match wins; ties broken by pattern-definition order;
+  overlap detection bidirectional".
+
+### Removed
+- `http_status` built-in rule. The pattern `(?:^|[\s/:])([1-5]\d{2})\b`
+  matched any 3-digit number 100-599 prefixed by whitespace/`/`/`:`,
+  producing false positives on VLAN IDs, port numbers, line numbers,
+  AWS account-ID prefixes (`:111:...`), and unrelated 3-digit literals.
+
+  **Migration recipe (preserves v0.5.5 behavior exactly):**
+  ```toml
+  [[rules]]
+  name = "http_status"
+  pattern = '(?:^|[\s/:])([1-5]\d{2})\b'
+  style = { fg = "magenta", bold = true }
+  ```
+
+  **Improved migration (leading punct neutral, group-1 only):**
+  ```toml
+  [[rules]]
+  name = "http_status"
+  pattern = '(?:^|[\s/:])([1-5]\d{2})\b'
+  style = {}
+  styles = { "1" = { fg = "magenta", bold = true } }
+  ```
+
+  v0.6+ may ship an opt-in `http` profile bundling HTTP-domain rules.
+
+### Fixed
+- ipv6 third branch matched bare `::xxxx` Rust path syntax
+  (`foo::bar::baz` → `::ba`); now requires additional hex groups.
+- ipv4 negative regression coverage gap (256.0.0.0, 1.01.30.4, etc.).
+- mac negative regression coverage gap (7-pair shape, IPv6-tie pin).
+
 ## [0.5.5] - 2026-05-27
 
 ### Added
