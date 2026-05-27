@@ -4,6 +4,123 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - TBD
+
+### Added
+
+- `tayf config` interactive TUI for browsing and visually staging
+  edits to pattern / theme / profile config (ratatui 0.30 + crossterm
+  0.29). Four tabs (Patterns / Themes / Profiles / Status), per-tab
+  focus + dispatch, modal overlay layer (Confirm / Error / QuitWithUnsavedEdits
+  + ColorPicker / SaveDiff / Search / SampleSet / FullPreview),
+  200 ms debounced live preview (sample-input is no-debounce per
+  spec §9.2), Y hybrid color picker (ANSI 16 / 256-palette / truecolor
+  hex), SaveDiff modal with clean / conflict-pending / conflict-merged /
+  conflict-discard-confirm FSM, atomic write with backup rotation
+  (last 5), narrow-terminal degradation (< 60×16 hard block, 60-79
+  short tab labels, 80×18-23 mini-preview auto-hides), RAII terminal
+  restore with `Once`-gated panic-hook chain. ~3000 LOC across 19
+  modules in `src/config_tui/`.
+- `tayf config dump [--kind patterns|themes|profiles]` non-interactive
+  catalog dump to stdout as TOML. Round-trips through `toml::de`;
+  `--kind` selector restricts output to one section.
+- `tayf config status` non-interactive resolved-config view: config
+  path, active theme, active profile, bg-detect mode + reload event
+  log tail (last 100 events from `<cfg_dir>/runtime/reload.log`).
+  Byte-pinned line shapes per memory `feedback_test_assertion_specificity`.
+- `<cfg_dir>/runtime/reload.log` line-append event log written by the
+  existing `ReloadOrchestrator` on every reload outcome (additive
+  plumbing; precedence chain invariant unchanged per memory
+  `feedback_reload_precedence_snapshot`). POSIX `O_APPEND` atomicity
+  pinned (`concurrent_appends_do_not_interleave_within_line` test);
+  per-append size-threshold warning fires once per band, not per append.
+
+### Changed (breaking)
+
+- **CLI argument struct layout.** Existing fields on `Args` (e.g.
+  `args.shell`, `args.theme`, `args.profile`, `args.config`,
+  `args.login`, `args.no_color`, `args.bypass`, `args.no_hot_reload`)
+  moved to `args.run.*` via a flattened `RunArgs` sub-struct, enabling
+  the new `Option<Cmd>` subcommand at the root. CLI invocation forms
+  remain byte-identical: `tayf --shell /bin/fish` works exactly as
+  before. Migration for any `tayf` library users:
+
+  ```rust
+  // was: args.shell, args.theme, ...
+  //  now: args.run.shell, args.run.theme, ...
+  ```
+
+### Fixed
+
+- `src/profiles.rs:113-118` — drop stale doc-comment forward-pointer
+  ("a unit test added in Task 6 will pin") that was orphaned when
+  v0.5.3 shipped the actual test
+  (`embedded_profile_count_matches_shipped_library`).
+- `tests/integration_profiles_library.rs::docker_profile_renders_…`
+  rename + tighten — prior loose `has_some_sgr_around` was satisfied
+  by both correct image_tag styling AND the documented v0.5.3
+  fqdn-vs-image_tag collision; renamed to `..._renders_container_id_and_partial_image_tag`
+  with magenta-FG-35 SGR assertion specifically.
+
+### Dependencies
+
+- **New direct deps:**
+  - `ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color", "layout-cache", "macros", "all-widgets"] }` — TUI framework. MIT, ratatui-org Council governance, weekly active commits.
+  - `toml_edit = "0.25"` — round-trip TOML (preserves comments + ordering + formatting). MIT/Apache-2.0. Anchors winnow 1.x, aligning with existing transitive surface.
+- **Transitive surface:** ~25 new crates (kasuari, mio, signal-hook-mio,
+  parking_lot, bitflags, derive_more, etc.). `cargo audit` clean.
+  `cargo deny check` clean. `cargo geiger` baseline recorded.
+- **Stripped release binary delta:** ~+340 KB (measured 2026-05-26).
+
+### Invariants
+
+- Hot path (`apply_rules` + Pipeline + IO loop + PTY) byte-identical
+  to v0.5.3; no bench-CI baseline regen needed. DOKUNULMAZ list per
+  spec §5.4 confirmed zero-touch by final cross-cutting review.
+- `tests/integration_smoke.rs` byte-identical pass.
+- Public API: `Args` field-path migration is the only break (above);
+  `Cmd`, `ConfigArgs`, `ConfigAction`, `DumpArgs`, `DumpKind`, `RunArgs`
+  are additive.
+- Lib test count: 525 → 554 (+29 across C-phase + D3 in-source +
+  carryover absorption).
+
+### Known limitations (deferred to v0.5.5+)
+
+Per memory `feedback_consume_prior_review`, every Session 4 cross-cutting
+review finding and the F1 reviewer-flagged scope gap is explicit. See
+spec §2.2 for the full list:
+
+- **`build_new_content` toml_edit reconciliation** — v0.5.4 ships the
+  full save scaffolding (PendingEdits aggregator, DocumentMut parse,
+  SaveDiff modal, atomic write, backup rotation, RuleId merge-collision
+  semantic) but `src/config_tui/save.rs::build_new_content` is a
+  pass-through returning `snapshot.raw_bytes` unchanged. Tabs stage
+  edits faithfully into `app.edits`; the reconciliation that walks
+  `PendingEdits` into `DocumentMut` lands in v0.5.5+. Save is currently
+  byte-preserving (atomic write of input bytes + backup rotation).
+- **Shift+D first-run init flow** — `ConfirmAction::InitFromDump`
+  declared but unwired.
+- **`V` alias for Shift+P** full-preview overlay.
+- **Help modal** (`Modal::Help` + `?` keystroke) — Toast::warn
+  placeholder in v0.5.4.
+- **Search filter applying to tab lists + filtered top/bottom
+  navigation** — capture/display landed; list-side filtering unwired.
+- **Save-diff `↑` / `↓` scroll** — long-diff vertical scrolling
+  unwired.
+- **`apply_confirm` `DiscardEditsAndReload` + `InitFromDump`** —
+  Toast::warn placeholders (DeleteUserRule + ResetUserOverride
+  arms wired in `9b2f24d`).
+- **Span-emitting preview pipeline** (§5.4 DOKUNULMAZ blocker on
+  `apply_rules`) — mini-preview ships uncolorized.
+- **`Modal::ColorPicker` side-channel unification** — borrow-checker-driven
+  split between inline-state ColorPicker and side-channel SaveDiff /
+  Search / SampleSet; v0.6+ refactor candidate.
+- **List-side regex source field debouncer wiring** — inline editor is
+  Toast::warn stub; debouncer hook lands with the editor.
+- **`sigwinch_propagates_to_wrapped_tui` integration test** — shipped
+  `#[ignore]`'d (manual smoke per §10.5); v0.6+ adds debug Toast
+  scrape path.
+
 ## [0.5.3] - 2026-05-26
 
 ### Added
