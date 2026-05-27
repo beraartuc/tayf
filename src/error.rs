@@ -94,6 +94,14 @@ pub enum ThemeRuleErrorKind {
         /// The named form of the key (e.g., `"scheme"`).
         named: String,
     },
+    /// A theme rule sets a field that is forbidden in theme TOML — currently
+    /// `priority`. Themes are style-only overlays; rule behaviour (priority,
+    /// pattern, enabled) belongs in user config. `field` is the field name
+    /// as it appears in TOML. v0.5.6 — see spec §2.1.B5 / §8.2.
+    StraySchemaField {
+        /// The forbidden TOML field name (e.g., `"priority"`).
+        field: &'static str,
+    },
 }
 
 impl std::fmt::Display for ThemeRuleErrorKind {
@@ -175,6 +183,12 @@ impl std::fmt::Display for ThemeRuleErrorKind {
                     sanitize_for_display(positional),
                     sanitize_for_display(named),
                     idx_display
+                )
+            }
+            Self::StraySchemaField { field } => {
+                write!(
+                    f,
+                    "cannot override `{field}`; that field is restricted to user-config overlays (themes are style-only)"
                 )
             }
         }

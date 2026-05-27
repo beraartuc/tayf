@@ -394,6 +394,16 @@ pub(crate) fn validate_theme_rules(
             });
             continue;
         }
+        // §2.1.B5 / §8.2 — themes are style-only overlays; `priority` is a
+        // behavioural field that belongs in user config. Reject before any
+        // further style gate so the error is unambiguous.
+        if r.priority.is_some() {
+            errors.push(crate::error::ThemeRuleError {
+                rule_name: r.name.clone(),
+                kind: crate::error::ThemeRuleErrorKind::StraySchemaField { field: "priority" },
+            });
+            continue;
+        }
         if r.pattern.is_some() {
             errors.push(crate::error::ThemeRuleError {
                 rule_name: r.name.clone(),
@@ -1152,5 +1162,31 @@ styles = { "1" = { fg = "red" }, "10" = { fg = "blue" } }
         let err = load_with("huge", || Some(dir.path().to_path_buf()), || None)
             .expect_err("oversized theme must error");
         assert!(err.to_string().contains("too large"), "got: {err}");
+    }
+
+    // §9.4.1 — theme rules MUST reject `priority` field (spec §2.1.B5 / §7.2.1 / §8.2).
+    // validate_theme_rules must produce StraySchemaField when priority is present.
+    // The kind's Display is pinned via assert_eq! (memory: feedback_test_assertion_specificity).
+    #[test]
+    fn theme_rule_with_priority_field_errors() {
+        let src = r#"
+[[rules]]
+name = "ipv6"
+priority = 100
+"#;
+        let cfg: crate::config::Config = crate::config::parse("<test>", src).unwrap();
+        let err = validate_theme_rules("dark", "<embedded:theme/dark>", &cfg)
+            .expect_err("priority field in theme rule must error");
+        let crate::error::Error::ThemeValidation { errors, .. } = err else {
+            panic!("expected ThemeValidation");
+        };
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].rule_name, "ipv6");
+        let kind_msg = errors[0].kind.to_string();
+        assert_eq!(
+            kind_msg,
+            "cannot override `priority`; that field is restricted to user-config overlays (themes are style-only)",
+            "exact Display wording per spec §8.2"
+        );
     }
 }
