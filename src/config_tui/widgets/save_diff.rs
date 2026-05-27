@@ -121,6 +121,10 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
 
 /// Tiny line-based diff (-/+ prefix). v0.5.4 inline impl — full
 /// patience/Myers diff is overkill for the modal's display purpose.
+///
+/// Known limitation: the `HashSet` collapses duplicate lines, so removing
+/// one copy of a repeated line (`a\na\nb\n` → `a\nb\n`) shows as "(no
+/// changes)". v0.6+ may upgrade if the display becomes confusing.
 fn build_diff(old: &[u8], new: &[u8]) -> String {
     let old_str = String::from_utf8_lossy(old);
     let new_str = String::from_utf8_lossy(new);

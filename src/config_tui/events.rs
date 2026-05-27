@@ -143,7 +143,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         (KeyCode::Char('p'), m) if m.is_empty() => {
             app.mini_preview_visible = !app.mini_preview_visible;
         }
-        // C3 / C4 wire the rest (Ctrl+S save, s sample, / search, Shift+D init).
+        // C4c wires the rest (s sample, / search, Shift+D init).
         _ => {
             crate::config_tui::tabs::dispatch_key(app, k);
         }
@@ -205,8 +205,13 @@ fn handle_esc(app: &mut App) {
             return;
         }
     }
-    // Tier 2: close modal.
+    // Tier 2: close modal. Drop the SaveDiff side-channel alongside so
+    // the `save_diff.is_some() ↔ modal == Some(Modal::SaveDiff)` invariant
+    // that render + dispatch rely on stays intact.
     if app.modal.is_some() {
+        if matches!(app.modal, Some(Modal::SaveDiff)) {
+            app.save_diff = None;
+        }
         app.modal = None;
     }
     // Tier 3 (search-clear) lands in C4c.
@@ -327,5 +332,22 @@ mod tests {
 
         dispatch_key(&mut app, mk(KeyCode::Esc));
         assert!(app.modal.is_none(), "second Esc must close the modal");
+    }
+
+    #[test]
+    fn esc_on_save_diff_modal_clears_side_channel_alongside_modal() {
+        // Invariant: app.save_diff.is_some() ↔ app.modal == Some(Modal::SaveDiff).
+        // Without the matches! guard in handle_esc, app.save_diff would leak
+        // past Esc dismissal and the next Ctrl+S would see stale state.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        app.save_diff = Some(crate::config_tui::widgets::save_diff::SaveDiffState::Clean {
+            tui_diff: "(stub)".to_owned(),
+        });
+        app.modal = Some(Modal::SaveDiff);
+
+        dispatch_key(&mut app, mk(KeyCode::Esc));
+        assert!(app.modal.is_none(), "Esc must close SaveDiff modal");
+        assert!(app.save_diff.is_none(), "Esc must clear save_diff side-channel");
     }
 }
