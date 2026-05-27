@@ -132,14 +132,16 @@ fn k8s_profile_renders_pod_name_on_kubectl_output() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn docker_profile_renders_container_id_and_image_tag() {
-    let xdg = tempfile::tempdir().expect("tmpdir");
-    // Use bare `:latest` image (no registry-host prefix) to avoid the
-    // documented fqdn-vs-image_tag collision pinned by
+fn docker_profile_renders_container_id_and_partial_image_tag() {
+    // v0.5.4 E1 retighten: prior test asserted has_some_sgr_around on
+    // `nginx:latest` which was satisfied by either correct image_tag
+    // styling OR the fqdn-wins limitation pinned by
     // `docker_image_tag_registry_host_yields_to_fqdn_v0_5_3_limitation`.
-    // Bare images have no `.tld` segment, so fqdn doesn't fire and
-    // image_tag's `:latest` branch matches the whole `nginx:latest`
-    // literal as one contiguous SGR span — verifiable via substring.
+    // Rename clarifies "partial" (per-segment styling on bare image
+    // tag without registry-host prefix) and tightens the assertion
+    // to require magenta SGR around the `:` separator specifically,
+    // distinguishing the image_tag rule from a generic-token rule.
+    let xdg = tempfile::tempdir().expect("tmpdir");
     let input = "Container abc123def456 image=nginx:latest started";
     let bytes = run_with_profile(xdg.path(), input, "docker");
     assert!(
@@ -147,9 +149,20 @@ fn docker_profile_renders_container_id_and_image_tag() {
         "expected styling around container_id; got: {:?}",
         String::from_utf8_lossy(&bytes)
     );
+    // Tightened: require magenta (FG 35) immediately before
+    // `nginx:latest`, not just any SGR anywhere in the output.
+    // We search for the exact byte sequence `\x1b[35mnginx:latest`
+    // to distinguish the image_tag rule (magenta) from a generic-token
+    // rule.  `body.find` could match the un-styled echo of the command,
+    // so we scan `bytes` directly for the 4-byte CSI+35m prefix.
+    let magenta_prefix = b"\x1b[35m";
+    let needle = b"nginx:latest";
+    let found = bytes
+        .windows(magenta_prefix.len() + needle.len())
+        .any(|w| w.starts_with(magenta_prefix) && w.ends_with(needle));
     assert!(
-        has_some_sgr_around(&bytes, "nginx:latest"),
-        "expected styling around image_tag; got: {:?}",
+        found,
+        "expected magenta (FG 35) SGR immediately before nginx:latest; full: {:?}",
         String::from_utf8_lossy(&bytes)
     );
 }

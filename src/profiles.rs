@@ -110,8 +110,8 @@ pub(crate) fn synthetic_path(name: &str) -> String {
 /// `include_str!`. Discovery order in `load_with` is: disk first
 /// (user customization wins) → embedded fallback → `NotFound`. To
 /// add a profile, drop a TOML file under `assets/profiles/` and add
-/// an entry here; a unit test added in Task 6 (`network` profile)
-/// will pin the table count + name set.
+/// an entry here; the table count + name set is pinned by the
+/// `embedded_profile_count_matches_shipped_library` unit test below.
 const EMBEDDED_PROFILES: &[(&str, &str)] = &[
     ("aws", include_str!("../assets/profiles/aws.toml")),
     ("k8s", include_str!("../assets/profiles/k8s.toml")),
