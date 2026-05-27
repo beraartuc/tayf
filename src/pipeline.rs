@@ -33,18 +33,24 @@ use crate::rules::Compiled;
 use crate::style::Style;
 
 /// Apply the compiled rule set to a single line. Writes the original bytes,
-/// with SGR wrappers inserted around the first non-overlapping match of each
-/// rule (in rule definition order).
+/// with SGR wrappers inserted around accepted matches.
 ///
-/// "First match wins" — overlapping matches from later rules are dropped.
+/// **Acceptance contract (v0.5.6):**
+/// Rules iterate in `(Reverse(priority), rule_index)` order — highest
+/// priority first, ties broken by pattern-definition (lower index) order.
+/// Each match is accepted unless its span overlaps an already-accepted span
+/// (bidirectional check: [`overlaps_accepted`] rejects both nested and
+/// enveloping overlaps). This lets profile envelope rules (priority 200)
+/// claim envelope spans before interior built-ins (priority 0) can take
+/// substrings within them. See [`Compiled::priorities`] tier convention.
+///
 /// Overlap detection uses `accepted_spans` (sorted by start) + binary search:
 /// O(log N) per candidate match, was O(runs²) in v0.3.4.
 ///
 /// Selective dispatch per rule: if `uses_capture_styling[i]` is set, the rule
 /// goes through `captures_iter` + `emit_capture_runs` (one match expands to
 /// 1..=N styled runs, inner groups overriding outer); otherwise `find_iter`
-/// pushes a single run per match — byte-identical to v0.3.4 on this path.
-/// Conflict resolution as configurable priority lands in v0.5.
+/// pushes a single run per match.
 pub(crate) fn apply_rules<W: Write>(
     line: &[u8],
     compiled_handle: &ArcSwap<Compiled>,
@@ -66,6 +72,18 @@ pub(crate) fn apply_rules<W: Write>(
     // wins overlap resolution depends on pattern order (spec §2.4 +
     // cross-rule pattern-order regression guard).
     scratch.set_match_scratch.extend(compiled.set.matches(line).iter());
+
+    // v0.5.6 §4.3 — priority sort: iterate (priority DESC, rule_index ASC).
+    // MUST be `sort_by` (stable) — preserves pattern-definition order
+    // tie-break for priority 0 == priority 0 case. `sort_unstable_by`
+    // would silently regress `apply_rules_preserves_pattern_definition_order_*`.
+    {
+        use std::cmp::Reverse;
+        let priorities = &compiled.priorities;
+        scratch.set_match_scratch.sort_by(|&a, &b| {
+            Reverse(priorities[a]).cmp(&Reverse(priorities[b])).then_with(|| a.cmp(&b))
+        });
+    }
 
     for &i in &scratch.set_match_scratch {
         let re = &compiled.individuals[i];
@@ -926,6 +944,41 @@ mod rule_tests {
     }
 
     #[test]
+    fn apply_rules_priority_higher_wins_envelope_over_interior() {
+        // v0.5.6 §2.1.B6 / §4.3 — priority DESC sort lets a higher-index,
+        // higher-priority envelope rule claim the span before a lower-index,
+        // lower-priority interior rule. Pattern order is intentionally swapped
+        // (interior at index 0, envelope at index 1) so the sort step is
+        // load-bearing: without it, iteration order = [0, 1] → interior
+        // accepts first, envelope rejected by overlap. With it, the priority
+        // DESC sort reorders to [1, 0] → envelope accepts, interior rejected.
+        use crate::style::{Color, Style};
+        use regex::bytes::{Regex, RegexSet};
+        let interior_pat = r"\d+";
+        let envelope_pat = r"a\d+b";
+        let compiled = Compiled {
+            set: RegexSet::new([interior_pat, envelope_pat]).unwrap(),
+            individuals: vec![Regex::new(interior_pat).unwrap(), Regex::new(envelope_pat).unwrap()],
+            styles: vec![
+                Style { fg: Some(Color::Green), ..Style::DEFAULT }, // rule 0 = interior
+                Style { fg: Some(Color::Red), ..Style::DEFAULT },   // rule 1 = envelope
+            ],
+            group_styles: vec![vec![], vec![]],
+            uses_capture_styling: vec![false, false],
+            respect_existing_colors: true,
+            priorities: vec![0, 200], // interior 0, envelope 200
+        };
+        let handle = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        apply_rules(b"a123b\n", &handle, &mut scratch, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // Envelope (rule 1, Red SGR 31) accepts a123b; interior overlap → REJECT.
+        assert!(s.contains("\x1b[31m"), "expected Red SGR (rule 1, envelope, priority 200): {s:?}");
+        assert!(!s.contains("\x1b[32m"), "Green SGR (rule 0, interior) should not appear: {s:?}");
+    }
+
+    #[test]
     fn apply_rules_preserves_pattern_definition_order_for_overlapping_matches() {
         // Two synthetic rules where rule 0 and rule 1 both match overlapping
         // substrings on the same line. First-match-wins must give rule 0 the
@@ -954,6 +1007,114 @@ mod rule_tests {
         // be suppressed by the overlap check — no SGR 34 in output.
         assert!(s.contains("\x1b[31m"), "rule 0 (red) must fire on '12345': {s:?}");
         assert!(!s.contains("\x1b[34m"), "rule 1 (blue) must be suppressed by overlap: {s:?}");
+    }
+
+    #[test]
+    fn apply_rules_priority_sort_is_stable_under_equal_priorities() {
+        // K=3 priority-0 rules; pin that sort preserves rule_index ASC tie-break.
+        // All three patterns are non-overlapping so all should fire — the test
+        // primarily guards stability: the sort_by call must use a stable sort,
+        // not sort_unstable_by, so byte-identical v0.5.5 behavior is preserved
+        // for the priority-0 == priority-0 case.
+        use regex::bytes::{Regex, RegexSet};
+        let pats = [r"foo", r"bar", r"baz"];
+        let compiled = Compiled {
+            set: RegexSet::new(pats).unwrap(),
+            individuals: pats.iter().map(|p| Regex::new(p).unwrap()).collect(),
+            styles: vec![Style::DEFAULT; 3],
+            group_styles: vec![vec![]; 3],
+            uses_capture_styling: vec![false; 3],
+            respect_existing_colors: true,
+            priorities: vec![0, 0, 0],
+        };
+        let handle = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        apply_rules(b"baz bar foo\n", &handle, &mut scratch, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("foo") && s.contains("bar") && s.contains("baz"));
+    }
+
+    #[test]
+    fn apply_rules_priority_equal_falls_back_to_rule_index_order() {
+        // Two overlapping priority-0 rules; lower-index wins (v0.5.5 invariant).
+        use crate::style::{Color, Style};
+        use regex::bytes::{Regex, RegexSet};
+        let compiled = Compiled {
+            set: RegexSet::new([r"\d{3,5}", r"\d{2}"]).unwrap(),
+            individuals: vec![Regex::new(r"\d{3,5}").unwrap(), Regex::new(r"\d{2}").unwrap()],
+            styles: vec![
+                Style { fg: Some(Color::Red), ..Style::DEFAULT }, // rule 0 — longer match
+                Style { fg: Some(Color::Green), ..Style::DEFAULT }, // rule 1 — shorter
+            ],
+            group_styles: vec![vec![], vec![]],
+            uses_capture_styling: vec![false, false],
+            respect_existing_colors: true,
+            priorities: vec![0, 0],
+        };
+        let handle = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        apply_rules(b"12345\n", &handle, &mut scratch, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            s.contains("\x1b[31m"),
+            "rule 0 (Red, lower index, longer match) wins overlap: {s:?}"
+        );
+    }
+
+    #[test]
+    fn apply_rules_priority_negative_yields_to_default() {
+        // Rule 0 (Red, neg priority) matches outer "abc"; rule 1 (Green, prio 0)
+        // matches interior "a". Sort: Reverse(0) > Reverse(-100) → rule 1 first.
+        // Rule 1 accepts "a"; rule 0 then overlap-rejected on "abc".
+        use crate::style::{Color, Style};
+        use regex::bytes::{Regex, RegexSet};
+        let compiled = Compiled {
+            set: RegexSet::new([r"abc", r"a"]).unwrap(),
+            individuals: vec![Regex::new(r"abc").unwrap(), Regex::new(r"a").unwrap()],
+            styles: vec![
+                Style { fg: Some(Color::Red), ..Style::DEFAULT },
+                Style { fg: Some(Color::Green), ..Style::DEFAULT },
+            ],
+            group_styles: vec![vec![], vec![]],
+            uses_capture_styling: vec![false, false],
+            respect_existing_colors: true,
+            priorities: vec![-100, 0],
+        };
+        let handle = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        apply_rules(b"abc\n", &handle, &mut scratch, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            s.contains("\x1b[32m"),
+            "rule 1 (Green, default priority) wins envelope acceptance: {s:?}"
+        );
+        assert!(!s.contains("\x1b[31m"), "rule 0 (Red, neg priority) yields: {s:?}");
+    }
+
+    #[test]
+    fn apply_rules_priority_extreme_values_do_not_overflow() {
+        // i32::MAX and i32::MIN — Reverse wrapper must not overflow during cmp.
+        // Two non-overlapping patterns; sort iterates rule 0 (i32::MAX) first,
+        // then rule 1 (i32::MIN). No panic = pass; observable color order
+        // doesn't matter, only that the sort cmp doesn't UB-overflow.
+        use regex::bytes::{Regex, RegexSet};
+        let compiled = Compiled {
+            set: RegexSet::new([r"foo", r"bar"]).unwrap(),
+            individuals: vec![Regex::new(r"foo").unwrap(), Regex::new(r"bar").unwrap()],
+            styles: vec![Style::DEFAULT; 2],
+            group_styles: vec![vec![]; 2],
+            uses_capture_styling: vec![false; 2],
+            respect_existing_colors: true,
+            priorities: vec![i32::MAX, i32::MIN],
+        };
+        let handle = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        // Should not panic; sort should not overflow.
+        apply_rules(b"foo bar\n", &handle, &mut scratch, &mut out).unwrap();
     }
 }
 

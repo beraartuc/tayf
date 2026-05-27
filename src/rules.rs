@@ -588,9 +588,6 @@ pub(crate) struct Compiled {
     /// [`BuiltinRule::priority`]. Consumed by [`crate::pipeline::apply_rules`]
     /// sort step: iteration order is `(Reverse(priority), rule_index)`.
     /// See spec §2.1.B / §4.3.
-    // reason: read by apply_rules sort step (Task 8); field populated now for
-    // structural completeness and spec §4.2 wire-up.
-    #[allow(dead_code)]
     pub(crate) priorities: Vec<i32>,
 }
 
