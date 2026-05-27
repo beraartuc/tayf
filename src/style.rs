@@ -97,6 +97,40 @@ impl Color {
 }
 
 impl Color {
+    /// Encode self as a canonical TOML configuration string. Roundtrip
+    /// property with [`Color::parse_str`] is pinned by test
+    /// `color_to_toml_str_roundtrips_for_every_variant`. Variant-preserving:
+    /// `Color::Indexed(0)` → `"color(0)"`, `Color::Black` → `"black"`
+    /// (distinct variants, distinct SGR sequences, distinct canonical forms).
+    ///
+    /// Spec §6.2.
+    // reason: called by reconcile.rs (Task A2, v0.5.5 Phase A); not yet linked at A1.
+    #[allow(dead_code)]
+    pub(crate) fn to_toml_str(self) -> String {
+        match self {
+            Color::Black => "black".into(),
+            Color::Red => "red".into(),
+            Color::Green => "green".into(),
+            Color::Yellow => "yellow".into(),
+            Color::Blue => "blue".into(),
+            Color::Magenta => "magenta".into(),
+            Color::Cyan => "cyan".into(),
+            Color::White => "white".into(),
+            Color::BrightBlack => "bright_black".into(),
+            Color::BrightRed => "bright_red".into(),
+            Color::BrightGreen => "bright_green".into(),
+            Color::BrightYellow => "bright_yellow".into(),
+            Color::BrightBlue => "bright_blue".into(),
+            Color::BrightMagenta => "bright_magenta".into(),
+            Color::BrightCyan => "bright_cyan".into(),
+            Color::BrightWhite => "bright_white".into(),
+            Color::Indexed(n) => format!("color({n})"),
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+}
+
+impl Color {
     /// Parse a color from a TOML configuration string.
     ///
     /// Accepts:
@@ -783,5 +817,45 @@ mod tests {
         let d = s.downgrade(ColorDepth::Basic16);
         assert_eq!(d.fg, Some(Color::Red));
         assert_eq!(d.bg, Some(Color::Black));
+    }
+
+    #[test]
+    fn color_to_toml_str_roundtrips_for_every_variant() {
+        // v0.5.5 spec §6.2 — Color::to_toml_str is the inverse of parse_str.
+        // Sentinels: 16 ANSI + 5 Indexed (incl. 15/16 boundary) + 3 Rgb = 24.
+        let cases: &[Color] = &[
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::White,
+            Color::BrightBlack,
+            Color::BrightRed,
+            Color::BrightGreen,
+            Color::BrightYellow,
+            Color::BrightBlue,
+            Color::BrightMagenta,
+            Color::BrightCyan,
+            Color::BrightWhite,
+            Color::Indexed(0),
+            Color::Indexed(15),
+            Color::Indexed(16),
+            Color::Indexed(178),
+            Color::Indexed(255),
+            Color::Rgb(0, 0, 0),
+            Color::Rgb(255, 136, 0),
+            Color::Rgb(255, 255, 255),
+        ];
+        for c in cases {
+            let s = c.to_toml_str();
+            let back = Color::parse_str(&s).expect("roundtrip parse");
+            assert_eq!(
+                *c, back,
+                "Color::to_toml_str roundtrip broke for {c:?} → {s:?} (parsed back as {back:?})"
+            );
+        }
     }
 }
