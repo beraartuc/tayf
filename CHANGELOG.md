@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-05-27
+
+### Added
+- `tayf config` TUI now persists staged edits to disk (`build_new_content`
+  toml_edit reconciliation). Theme, profile, and built-in override (`o`
+  keystroke) selections are now serialized through `toml_edit::DocumentMut`,
+  preserving comments, ordering, and formatting.
+- New `Color::to_toml_str` canonical encoder (inverse of `parse_str`),
+  variant-preserving and `parse_str`-roundtrip-stable.
+- `SaveDiffState::ReconcileError` variant for inline error rendering in
+  the SaveDiff modal (no more silent failures or transient toasts).
+
+### Changed
+- `build_new_content` is now a thin facade over `reconcile::apply_edits`;
+  reconcile errors propagate as `io::Error::other("reconcile failed: ...")`
+  through `commit_save`, surfaced inline in the SaveDiff modal preview.
+- Module-level `#[allow(dead_code)]` reason annotations in
+  `src/config_tui/{edit,snapshot,save}.rs` refreshed to point at
+  v0.6+ forward work after reconciliation consumed previously-deferred
+  variants.
+
+### Fixed
+- v0.5.4 cross-cutting review §1/§12 named single largest gap: TUI staged
+  edits previously dropped at save time (pass-through `build_new_content`).
+  v0.5.5 closes this gap; the user-visible "save" promise is now fulfilled.
+
+### Notes
+- Architectural collision fix (`aws.arn` ↔ `ipv6`, `docker.image_tag`
+  ↔ `fqdn`) remains carved out to v0.5.6 (Approach A scope brainstorm
+  decision 2026-05-27).
+- ColorPicker → selected-rule binding remains v0.6+ (`c` keystroke still
+  toasts "binding to selected rule lands in v0.6+"); reconcile.rs walk
+  is ready for the wire when it lands.
+
 ## [0.5.4] - 2026-05-27
 
 ### Added
