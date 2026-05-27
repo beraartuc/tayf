@@ -395,7 +395,7 @@ mod tests {
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
             .count();
-        assert!(count <= MAX_BACKUPS, "expected <= {MAX_BACKUPS}; got {count}");
+        assert_eq!(count, MAX_BACKUPS, "rotation must keep exactly {MAX_BACKUPS}; got {count}");
     }
 
     #[test]

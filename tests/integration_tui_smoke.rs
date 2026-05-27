@@ -56,8 +56,8 @@ fn status_no_config_renders_byte_pinned_lines() {
     assert!(body.contains("config: (no config file)\n"), "got:\n{body}");
     assert!(body.contains("theme: (unresolved: no config + no --theme)\n"), "got:\n{body}");
     assert!(body.contains("profile: (unresolved: no config + no --profile)\n"), "got:\n{body}");
-    assert!(body.contains("bg detect:"), "got:\n{body}");
-    assert!(body.contains("hot reload:"), "got:\n{body}");
+    assert!(body.contains("bg detect: (probed at runtime)\n"), "got:\n{body}");
+    assert!(body.contains("hot reload: no config dir resolved\n"), "got:\n{body}");
 }
 
 #[test]
