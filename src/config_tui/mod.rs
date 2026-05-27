@@ -8,10 +8,8 @@
 //! - [`tabs`] — per-tab dispatch (patterns / themes / profiles / status).
 //! - [`widgets`] — color_picker, save_diff, preview overlays.
 //! - [`edit`] — PendingEdits aggregator + RuleEdit / StyleKey.
-//! - [`save`] — atomic write + backup rotation. (toml_edit reconciliation
-//!   of `PendingEdits` into `DocumentMut` deferred to v0.5.5+ per spec §2.2
-//!   final carryover entry; v0.5.4 `build_new_content` returns
-//!   `snapshot.raw_bytes` unchanged.)
+//! - [`save`] — atomic write + backup rotation (top-level entry into [`reconcile`] for the toml_edit walk).
+//! - [`reconcile`] — PendingEdits → DocumentMut walk + serialize.
 //! - [`snapshot`] — ConfigSnapshot: disk read + SHA256 + DocumentMut.
 //! - [`debounce`] — 200 ms debouncer for live preview recompile.
 //! - [`dump_cmd`] — `tayf config dump` impl (no ratatui).
@@ -31,6 +29,7 @@ pub(crate) mod debounce;
 pub(crate) mod dump_cmd;
 pub(crate) mod edit;
 pub(crate) mod events;
+pub(crate) mod reconcile;
 pub(crate) mod render;
 pub(crate) mod save;
 pub(crate) mod snapshot;
