@@ -1,6 +1,6 @@
 # tayf — light-background preset theme.
 #
-# Adjusts the 13 built-in styles for terminals with a light background,
+# Adjusts the 12 built-in styles for terminals with a light background,
 # where the bright_* color family renders washed out and white/bright_yellow
 # are effectively invisible. Most rules keep distinct (fg, attrs) tuples;
 # the one intentional overlap is `ipv4` and `log_level`, both styled

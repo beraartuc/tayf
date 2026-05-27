@@ -1,4 +1,4 @@
-# Kubernetes profile — append_rule adds pod_name shape on top of all 13
+# Kubernetes profile — append_rule adds pod_name shape on top of all 12
 # built-ins. Activate with `tayf --profile k8s`.
 
 [[append_rules]]

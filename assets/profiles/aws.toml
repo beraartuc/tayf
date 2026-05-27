@@ -1,4 +1,4 @@
-# AWS profile — append_rules add 3 AWS-specific shapes on top of all 13
+# AWS profile — append_rules add 3 AWS-specific shapes on top of all 12
 # built-ins. Activate with `tayf --profile aws` or
 # `[general] profile = "aws"` in ~/.config/tayf/config.toml.
 

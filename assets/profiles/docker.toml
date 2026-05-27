@@ -1,5 +1,5 @@
 # Docker profile — append_rules add container_id and image_tag shapes
-# on top of all 13 built-ins. Activate with `tayf --profile docker`.
+# on top of all 12 built-ins. Activate with `tayf --profile docker`.
 
 [[append_rules]]
 name = "container_id"

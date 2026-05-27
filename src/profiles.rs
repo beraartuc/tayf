@@ -389,7 +389,7 @@ mod tests {
 
     // v0.5.3 — per-pattern test helpers (§7.2).
 
-    /// Compile the named embedded profile against the 13 built-ins (no
+    /// Compile the named embedded profile against the 12 built-ins (no
     /// theme, no user config, truecolor depth) and wrap the result in an
     /// `ArcSwap<Compiled>` — the handle shape `pipeline::apply_rules`
     /// expects. `Compiled` itself is not `Clone`, so once you build it
