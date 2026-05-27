@@ -8,7 +8,10 @@
 //! - [`tabs`] — per-tab dispatch (patterns / themes / profiles / status).
 //! - [`widgets`] — color_picker, save_diff, preview overlays.
 //! - [`edit`] — PendingEdits aggregator + RuleEdit / StyleKey.
-//! - [`save`] — toml_edit roundtrip + atomic write + backup rotation.
+//! - [`save`] — atomic write + backup rotation. (toml_edit reconciliation
+//!   of `PendingEdits` into `DocumentMut` deferred to v0.5.5+ per spec §2.2
+//!   final carryover entry; v0.5.4 `build_new_content` returns
+//!   `snapshot.raw_bytes` unchanged.)
 //! - [`snapshot`] — ConfigSnapshot: disk read + SHA256 + DocumentMut.
 //! - [`debounce`] — 200 ms debouncer for live preview recompile.
 //! - [`dump_cmd`] — `tayf config dump` impl (no ratatui).
