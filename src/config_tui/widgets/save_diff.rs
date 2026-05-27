@@ -6,7 +6,8 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config_tui::app::App;
@@ -19,10 +20,26 @@ use crate::config_tui::app::App;
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum SaveDiffState {
-    Clean { tui_diff: String },
-    ConflictPending { tui_diff: String, manual_diff: String, disk_now: Vec<u8> },
-    ConflictMergedPreview { merged_diff: String, disk_now: Vec<u8> },
-    ConflictDiscardConfirm { disk_now: Vec<u8> },
+    Clean {
+        tui_diff: String,
+    },
+    ConflictPending {
+        tui_diff: String,
+        manual_diff: String,
+        disk_now: Vec<u8>,
+    },
+    ConflictMergedPreview {
+        merged_diff: String,
+        disk_now: Vec<u8>,
+    },
+    ConflictDiscardConfirm {
+        disk_now: Vec<u8>,
+    },
+    /// v0.5.5: reconcile.rs walk failed; render error message inline in modal.
+    /// Spec §13.2 B2 + I13 fold. Esc dismisses; commit refuses while in this state.
+    ReconcileError {
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -52,6 +69,18 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
             "(destructive — default = N)".to_owned(),
         ),
         None => ("Save".to_owned(), "(no save state)".to_owned()),
+        Some(SaveDiffState::ReconcileError { message }) => {
+            let block =
+                Block::default().borders(Borders::ALL).title("Reconcile error — fix and retry");
+            frame.render_widget(
+                Paragraph::new(message.as_str())
+                    .style(Style::default().fg(Color::Red))
+                    .wrap(Wrap { trim: false })
+                    .block(block),
+                area,
+            );
+            return;
+        }
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     frame.render_widget(Paragraph::new(body).block(block), area);
@@ -109,7 +138,10 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
     };
     let disk_now = std::fs::read(cfg_path).unwrap_or_default();
     let disk_hash = crate::config_tui::snapshot::sha256(&disk_now);
-    let new_content = crate::config_tui::save::build_new_content(&app.snapshot, &app.edits);
+    let new_content = match crate::config_tui::save::build_new_content(&app.snapshot, &app.edits) {
+        Ok(s) => s,
+        Err(e) => return SaveDiffState::ReconcileError { message: format!("{e}") },
+    };
     let tui_diff = build_diff(&app.snapshot.raw_bytes, new_content.as_bytes());
     if disk_hash == app.snapshot.source_hash {
         SaveDiffState::Clean { tui_diff }

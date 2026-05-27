@@ -174,7 +174,17 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
 
 /// `SaveDiff` modal key dispatch + outcome handling.
 fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
-    use crate::config_tui::widgets::save_diff::{dispatch_key as sd_dispatch, SaveDiffOutcome};
+    use crate::config_tui::widgets::save_diff::{
+        dispatch_key as sd_dispatch, SaveDiffOutcome, SaveDiffState,
+    };
+    // Guard: commit is refused while modal is in ReconcileError state.
+    // User must Esc to dismiss and retry edits. (Spec §13.2 B2/I13 fold.)
+    if matches!(&app.save_diff, Some(SaveDiffState::ReconcileError { .. })) {
+        // Allow Esc/n to dismiss via the normal dispatch path; block 'y' silently.
+        if let ratatui::crossterm::event::KeyCode::Char('y') = k.code {
+            return;
+        }
+    }
     match sd_dispatch(app, k) {
         SaveDiffOutcome::Commit => match crate::config_tui::save::commit_save(
             &app.snapshot,

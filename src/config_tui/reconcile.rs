@@ -36,9 +36,10 @@ pub(crate) enum ReconcileError {
 /// internally (`DocumentMut::clone()` is O(n) tree-walk; acceptable for
 /// save-on-Ctrl+S frequency, not a hot path). Caller's snapshot.doc is
 /// not mutated.
-// reason: dead_code until save.rs calls apply_edits in Phase B; unnecessary_wraps
-// because Phase B handlers return ReconcileError variants (B1 + B5 consumers).
-#[allow(dead_code, clippy::unnecessary_wraps)]
+// reason: unnecessary_wraps — Phase A3 facade now calls this, but the
+// body is still the pass-through skeleton; ReconcileError variants are
+// only produced in Phase B handlers (B1 + B5 consumers).
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn apply_edits(
     doc: &DocumentMut,
     _edits: &PendingEdits,

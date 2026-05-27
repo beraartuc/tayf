@@ -155,19 +155,15 @@ pub(crate) fn rotate_backups_to(
     Ok(())
 }
 
-/// Build the candidate new content from snapshot + edits. v0.5.4 stub
-/// for C1c — full `toml_edit` reconciliation lands in C3 when edits
-/// from each tab flow in. C1c emits the snapshot's raw bytes as a
-/// pass-through (no-op save round-trip) so the atomic-write
-/// machinery can be tested standalone.
+/// Build the candidate new content from snapshot + edits. v0.5.5: thin
+/// facade into [`crate::config_tui::reconcile::apply_edits`] — the
+/// [`crate::config_tui::edit::PendingEdits`] → [`toml_edit::DocumentMut`] walk lives in
+/// `reconcile.rs`. This module stays focused on atomic-write + backup-rotation semantics.
 pub(crate) fn build_new_content(
     snapshot: &crate::config_tui::snapshot::ConfigSnapshot,
-    _edits: &crate::config_tui::edit::PendingEdits,
-) -> String {
-    // C1c: pass-through. C3 will replace this body with the
-    // toml_edit DocumentMut mutation pipeline (preserve comments +
-    // ordering + formatting).
-    String::from_utf8_lossy(&snapshot.raw_bytes).into_owned()
+    edits: &crate::config_tui::edit::PendingEdits,
+) -> Result<String, crate::config_tui::reconcile::ReconcileError> {
+    crate::config_tui::reconcile::apply_edits(&snapshot.doc, edits)
 }
 
 /// Commit the staged edits to disk atomically.
@@ -223,7 +219,8 @@ pub(crate) fn commit_save(
     }
 
     // Step 4: build new content.
-    let new_content = build_new_content(snapshot, edits);
+    let new_content = build_new_content(snapshot, edits)
+        .map_err(|e| std::io::Error::other(format!("reconcile failed: {e}")))?;
 
     // Step 5: tmpfile in parent dir with preserved mode (I-2 fold),
     // write, sync_all (I-1 fold).
