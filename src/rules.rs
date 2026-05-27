@@ -872,6 +872,41 @@ impl Compiled {
     }
 }
 
+/// Build a [`Compiled`] from an in-memory [`crate::config::Config`] + optional
+/// theme name + optional profile name. Additive entry-point: wraps
+/// [`Compiled::load_with_theme`] by resolving theme/profile-by-name and
+/// defaulting `depth` to `ColorDepth::Truecolor` (TUI preview hint).
+///
+/// Used by Config TUI live-preview (`compile_pending`) to recompile from
+/// `PendingEdits` + `ConfigSnapshot` deltas without touching disk.
+///
+/// All validation, merge ordering, and error-routing semantics are
+/// identical to [`Compiled::load_with_theme`].
+///
+/// # Errors
+/// Returns the same error set as [`Compiled::load_with_theme`]; additionally,
+/// any error from [`crate::profiles::load`] (Phase-1 validation, `NotFound`,
+/// IO) when `profile_name` is `Some` is propagated.
+#[allow(dead_code)] // reason: Group 4 (Config TUI compile_pending) consumes this entry-point.
+pub(crate) fn compile_from_config(
+    config: &crate::config::Config,
+    theme_name: Option<&str>,
+    profile_name: Option<&str>,
+) -> Result<Compiled> {
+    let loaded_profile = match profile_name {
+        Some(name) => Some(crate::profiles::load(name)?),
+        None => None,
+    };
+    Compiled::load_with_theme(
+        Some(config),
+        None, // config_path: in-memory synth, no on-disk path
+        theme_name,
+        loaded_profile.as_ref().map(|lp| &lp.profile),
+        None, // profile_path: embedded only
+        crate::terminfo::ColorDepth::Truecolor,
+    )
+}
+
 /// Derive a user-facing profile name from a profile source-path label.
 ///
 /// `<embedded:profile/{name}>` → `{name}`. A disk path ending in
@@ -3452,5 +3487,24 @@ fg = "red"
             compiled.uses_capture_styling.len(),
             "priorities vs uses_capture_styling"
         );
+    }
+
+    #[test]
+    fn compile_from_config_with_empty_config_compiles_builtins_only() {
+        use crate::config::{Config, GeneralSection};
+
+        let config = Config { general: GeneralSection::default(), rules: Vec::new() };
+        let compiled = compile_from_config(&config, None, None).expect("compile");
+        assert!(compiled.individuals.len() >= 12, "at least 12 builtins compiled");
+        assert!(compiled.priorities.iter().all(|&p| p == 0), "all builtins priority 0");
+    }
+
+    #[test]
+    fn compile_from_config_with_invalid_theme_name_errs() {
+        use crate::config::{Config, GeneralSection};
+
+        let config = Config { general: GeneralSection::default(), rules: Vec::new() };
+        let result = compile_from_config(&config, Some("nonexistent_theme"), None);
+        assert!(result.is_err(), "unknown theme name surfaces as Error");
     }
 }
