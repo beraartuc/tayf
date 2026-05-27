@@ -432,7 +432,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         },
         BuiltinRule {
             name: "ipv6".into(),
-            pattern: r"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}|::[0-9A-Fa-f]{1,4}|::1".into(),
+            pattern: r"::1|\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|\b[0-9A-Fa-f]{3,4}:(?:[0-9A-Fa-f]{1,4}:){0,5}:[0-9A-Fa-f]{0,4}|::[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){2,}".into(),
             style: Style { fg: Some(Color::BrightYellow), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
@@ -3211,5 +3211,57 @@ fg = "red"
                 r.source,
             );
         }
+    }
+
+    // --- ipv6 FP audit C-2: Rust module path negative regression (TDD red → green) ---
+
+    #[test]
+    fn ipv6_does_not_match_rust_module_path() {
+        assert!(!matches("ipv6", "mod foo::bar::baz {}"));
+    }
+
+    #[test]
+    fn ipv6_does_not_match_std_io_read() {
+        assert!(!matches("ipv6", "use std::io::Read;"));
+    }
+
+    #[test]
+    fn ipv6_does_not_match_serde_de_deserialize() {
+        assert!(!matches("ipv6", "serde::de::Deserialize"));
+    }
+
+    #[test]
+    fn ipv6_does_not_match_bare_double_colon_two_hex() {
+        assert!(!matches("ipv6", "see ::ba elsewhere"));
+    }
+
+    #[test]
+    fn ipv6_matches_loopback_double_colon_one() {
+        assert!(matches("ipv6", "loopback ::1 here"));
+    }
+
+    #[test]
+    fn ipv6_matches_link_local() {
+        assert!(matches("ipv6", "fe80::1 link-local"));
+    }
+
+    #[test]
+    fn ipv6_matches_compressed_short() {
+        assert!(matches("ipv6", "2001:db8::1 doc-net"));
+    }
+
+    #[test]
+    fn ipv6_matches_compressed_multi_group() {
+        assert!(matches("ipv6", "addr 2001:db8::ff00:42:8329 end"));
+    }
+
+    #[test]
+    fn ipv6_matches_full_form() {
+        assert!(matches("ipv6", "full 1:2:3:4:5:6:7:8 end"));
+    }
+
+    #[test]
+    fn ipv6_matches_trailing_compression() {
+        assert!(matches("ipv6", "trail 1234:5678:: here"));
     }
 }
