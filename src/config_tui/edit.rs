@@ -3,10 +3,12 @@
 //! Accumulates in-TUI mutations not yet on disk. `is_dirty()` is
 //! consulted by the quit-confirm modal and the save button.
 
-// reason: NewStyle / NewRule + several aggregator helpers are reachable
-// only via v0.5.5+ "new pattern" / "edit regex source" modal paths that
-// are spec'd in §9.6 but unwired in v0.5.4 (n / e keys land a Toast::warn
-// instead). Module-level allow until those wires land.
+// reason: RuleId::{Builtin, Embedded, DiskProfile} variants + StyleKey
+// variants are matched/destructured by reconcile.rs but never constructed
+// by TUI state machine; construction wires land in v0.6+ when non-UserConfig
+// tabs are interactive. PendingEdits::clear() is used only by the v0.6+
+// Shift+M discard-and-reload path (SaveDiff modal m key not yet wired).
+// Module-level allow until those TUI wires land.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};

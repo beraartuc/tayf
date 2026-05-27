@@ -12,8 +12,8 @@
 //!   8. snapshot reparse
 
 // reason: helpers like `ts_for_backup_filename` and `civil_from_days`
-// are only reachable on the v0.5.5+ first-run-init dump path (the
-// timestamp filename helper is for the dump-backup case). Module-level
+// are only reachable on the v0.6+ first-run-init Shift+D dump-backup
+// path (timestamp filename helper waits for that wire-up). Module-level
 // allow until that path lands.
 #![allow(dead_code)]
 
@@ -513,7 +513,17 @@ mod tests {
         let disk_after = std::fs::read_to_string(&cfg_path).unwrap();
         assert!(disk_after.contains("[[rules]]"), "stub entry section added");
         assert!(disk_after.contains("name = \"uuid\""), "uuid name written");
-        // No pattern, no style for the stub.
+        // Stub has only name; no pattern, no style appended.
+        let rules_section_start = disk_after.find("[[rules]]").expect("rules section present");
+        let rules_section = &disk_after[rules_section_start..];
+        assert!(
+            !rules_section.contains("pattern"),
+            "stub must NOT have pattern key: {rules_section:?}"
+        );
+        assert!(
+            !rules_section.contains("style"),
+            "stub must NOT have style key: {rules_section:?}"
+        );
     }
 
     #[test]
@@ -587,5 +597,9 @@ mod tests {
         assert!(new_pos < b_pos, "first occurrence mutated, second preserved: {disk_after:?}");
         // Both x entries still have name = "x":
         assert_eq!(disk_after.matches("name = \"x\"").count(), 2);
+        assert!(
+            !disk_after.contains("pattern = \"A\""),
+            "first entry's old pattern A must be gone: {disk_after:?}"
+        );
     }
 }

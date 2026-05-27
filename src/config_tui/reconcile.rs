@@ -8,7 +8,9 @@
 //!
 //! Spec §5 — handler-by-handler walk. Spec §6 — [`ReconcileError`] variants.
 
-use crate::config_tui::edit::{GeneralEdits, NewStyle, PendingEdits, RuleEdit, RuleId, StyleKey};
+use crate::config_tui::edit::{
+    GeneralEdits, NewRule, NewStyle, PendingEdits, RuleEdit, RuleId, StyleKey,
+};
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 #[derive(Debug, thiserror::Error)]
@@ -100,7 +102,10 @@ fn ensure_rules_array(doc: &mut DocumentMut) -> Result<&mut ArrayOfTables, Recon
     if !doc.contains_key("rules") {
         doc["rules"] = toml_edit::Item::ArrayOfTables(ArrayOfTables::new());
         return Ok(doc["rules"].as_array_of_tables_mut().unwrap_or_else(|| {
-            unreachable!("rules just set to ArrayOfTables; toml_edit invariant violation if not")
+            unreachable!(
+                "doc[\"rules\"] was just set to Item::ArrayOfTables; toml_edit invariant violation \
+                 if as_array_of_tables_mut returns None for a key just inserted"
+            )
         }));
     }
     let item = &mut doc["rules"];
@@ -121,7 +126,7 @@ fn find_rule_index_by_name(rules: &ArrayOfTables, name: &str) -> Option<usize> {
 /// Borrow handle into either inline `style = { ... }` or block `[rules.style]`
 /// table form. Both expose key-mutation API; `set_or_insert` dispatches.
 /// Spec §5.4 + §13.2 B4/I2 fold.
-pub(crate) enum StyleTargetMut<'a> {
+pub(super) enum StyleTargetMut<'a> {
     Inline(&'a mut InlineTable),
     Table(&'a mut Table),
 }
@@ -287,7 +292,9 @@ fn ensure_subtable<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table
 /// Apply a single [`RuleEdit`] to the named `[[rules]]` entry in `doc`.
 ///
 /// If no entry with `name = <name>` exists, a new stub entry is appended.
-/// Pattern edit writes a TOML literal string to avoid backslash escaping.
+/// Pattern edit uses `toml_edit::value()` (`as_default` repr): `toml_edit` picks
+/// literal-string form (`'...'`) for backslash-containing values to avoid
+/// escape doubling, and basic-string form (`"..."`) otherwise.
 /// Style handler dispatches via [`StyleTargetMut`] (inline vs block form
 /// preserved; new slots always created inline). Spec §5.3 + §5.4.
 fn apply_user_config_rule(
@@ -311,7 +318,11 @@ fn apply_user_config_rule(
         let last_idx = rules.len() - 1;
         rules
             .get_mut(last_idx)
-            .unwrap_or_else(|| unreachable!("just pushed; toml_edit invariant violation"))
+            .unwrap_or_else(|| {
+                unreachable!(
+                    "entry was just pushed at last_idx; toml_edit ArrayOfTables index invariant violation"
+                )
+            })
     };
     if let Some(pat) = &edit.pattern {
         rule_table["pattern"] = toml_edit::value(pat.as_str());
@@ -338,10 +349,7 @@ fn apply_user_config_rule(
 /// Always writes `style` as an inline table (v0.5.5 convention per
 /// `assets/profiles/*.toml`). If `style` has no fields set, the key is
 /// omitted entirely. Spec §5.5.
-fn apply_new_rule(
-    doc: &mut DocumentMut,
-    rule: &crate::config_tui::edit::NewRule,
-) -> Result<(), ReconcileError> {
+fn apply_new_rule(doc: &mut DocumentMut, rule: &NewRule) -> Result<(), ReconcileError> {
     let rules = ensure_rules_array(doc)?;
     let mut t = Table::new();
     t["name"] = toml_edit::value(rule.name.as_str());
@@ -806,6 +814,9 @@ mod tests {
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("[[rules]]"), "must append [[rules]]: {out:?}");
         assert!(out.contains("name = \"x\""));
+        // Both literal-string ('p') and basic-string ("p") are valid toml_edit outputs;
+        // accept either since toml_edit selects literal-string only for backslash-containing
+        // values (plain "p" has no backslash, so basic-string is chosen in practice).
         assert!(out.contains("pattern = 'p'") || out.contains("pattern = \"p\""));
         assert!(out.contains("fg = \"cyan\""));
     }
@@ -844,22 +855,17 @@ mod tests {
 
     #[test]
     fn crlf_line_ending_source_preserved_on_mutation() {
-        // Spec §7.1 #20 + §13.4 N6 fold — defensive baseline; pins whatever
-        // toml_edit 0.25 actually does with \r\n (preserve OR normalize).
+        // Spec §7.1 #20 + §13.4 N6 fold — pins observed toml_edit 0.25 behavior:
+        // CRLF is normalized to LF during DocumentMut::parse(), so the output
+        // always has \n line endings regardless of the source's \r\n.
         let source = "[general]\r\ntheme = \"dark\"\r\n";
         let doc: DocumentMut = source.parse().expect("valid TOML with CRLF");
         let mut edits = PendingEdits::default();
         edits.general.theme = Some(Some("light".to_owned()));
         let out = apply_edits(&doc, &edits).expect("ok");
-        // Pin observed behavior: assert theme updated regardless of \r\n preservation.
         assert!(out.contains("light"), "theme updated: {out:?}");
-        // Document observed line-ending behavior:
-        let has_crlf = out.contains("\r\n");
-        let has_lf_only = out.lines().count() > 1 && !out.contains("\r\n");
-        // One of these must be true; either is documented contract.
-        assert!(has_crlf || has_lf_only, "must have consistent line endings; got: {out:?}");
-        // If toml_edit normalizes to \n: this test documents that.
-        // If it preserves \r\n: this test documents that too.
-        // The test ensures we KNOW which one and detect regressions.
+        // Pin observed: toml_edit 0.25 normalizes \r\n → \n on parse, so output
+        // has only \n separators regardless of source. Documented contract.
+        assert!(!out.contains("\r\n"), "toml_edit 0.25 normalizes CRLF to LF: {out:?}");
     }
 }

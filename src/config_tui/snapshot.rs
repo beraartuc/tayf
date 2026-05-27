@@ -4,11 +4,10 @@
 //! to detect concurrent manual edits (D1 conflict modal trigger) and to
 //! reconstruct the typed `ParsedConfigView` overlay for live preview.
 
-// reason: `ParsedConfigView::general` and `rules` are populated for
-// v0.5.5+ "edit detail view" + "rules diff visualization" paths
-// (currently the live preview only consults `compiled`, which lives
-// on PreviewState — see app.rs). Module-level allow until those
-// detail views are wired.
+// reason: ParsedConfigView typed view consumed by v0.6+ live-preview
+// detail rendering + rules-diff visualization paths. v0.5.5 reconcile.rs
+// walks `doc` (DocumentMut) directly; `parsed` typed view stays for
+// future detail-rendering wiring.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
