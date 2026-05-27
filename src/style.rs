@@ -104,8 +104,6 @@ impl Color {
     /// (distinct variants, distinct SGR sequences, distinct canonical forms).
     ///
     /// Spec §6.2.
-    // reason: called by reconcile.rs (Task A2, v0.5.5 Phase A); not yet linked at A1.
-    #[allow(dead_code)]
     pub(crate) fn to_toml_str(self) -> String {
         match self {
             Color::Black => "black".into(),
