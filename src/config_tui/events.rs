@@ -119,12 +119,12 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         }
         (KeyCode::Char('?'), m) if m.is_empty() => {
             app.toast = Some(crate::config_tui::app::Toast::warn(
-                "help overlay lands in v0.5.5+ (Modal::Help wiring deferred)",
+                "help overlay lands in v0.6+ (Modal::Help wiring deferred)",
             ));
         }
         (KeyCode::F(1), _) => {
             app.toast = Some(crate::config_tui::app::Toast::warn(
-                "help overlay lands in v0.5.5+ (Modal::Help wiring deferred)",
+                "help overlay lands in v0.6+ (Modal::Help wiring deferred)",
             ));
         }
         (KeyCode::Char('P'), m) if m == KeyModifiers::SHIFT => {

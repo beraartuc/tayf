@@ -128,6 +128,21 @@ pub(crate) enum RuleSource {
 /// File extensions colored by the `filename` built-in rule. See spec §3.8 for
 /// rationale and the curated catalog. To add an extension, add it here, run
 /// the rules tests, and add a smoke case below.
+///
+/// **Single-letter extensions:** the following single-letter extensions are
+/// intentional canonical 1-to-1 attributions (FP audit D-6 / spec §11.1):
+///
+/// - `a` — static library archive
+/// - `c` — C source
+/// - `h` — C header
+/// - `m` — Objective-C source
+/// - `o` — object file
+/// - `r` — R script
+/// - `v` — Verilog source
+///
+/// Tradeoff: prose ending in these single-letter extensions (e.g., `a.b.c`)
+/// matches as filename. Frequency low in real terminal output. v0.6+ may
+/// tighten with "path-separator prefix required" semantics.
 const FILENAME_EXTENSIONS: &[&str] = &[
     // Archives & compression — longest variants first so e.g. .tar.gz wins
     // over .gz when the alternation is sorted longest-first below.
@@ -1393,6 +1408,26 @@ mod tests {
     }
 
     #[test]
+    fn ipv4_does_not_match_leading_zero_octet() {
+        assert!(!matches("ipv4", "1.01.30.4"));
+    }
+
+    #[test]
+    fn ipv4_does_not_match_out_of_range_256() {
+        assert!(!matches("ipv4", "256.0.0.0"));
+    }
+
+    #[test]
+    fn ipv4_does_not_match_out_of_range_999() {
+        assert!(!matches("ipv4", "999.0.0.0"));
+    }
+
+    #[test]
+    fn ipv4_does_not_match_identifier_prefix() {
+        assert!(!matches("ipv4", "v10.20.30.40"));
+    }
+
+    #[test]
     fn ipv6_matches() {
         assert!(matches("ipv6", "fe80::1"));
         assert!(matches("ipv6", "2001:0db8:85a3:0000:0000:8a2e:0370:7334"));
@@ -1410,12 +1445,44 @@ mod tests {
     }
 
     #[test]
+    fn mac_seven_pair_yields_substring_match_documented_limitation() {
+        // KNOWN LIMITATION: a 7-pair colon-separated hex string (`aa:...:77`)
+        // produces a substring match on the first 6 pairs. The `\b` after the
+        // 6th pair fires because `:` is not a word character (even though more
+        // hex pairs follow). Full 7-pair rejection would require a negative
+        // lookahead, which the Rust regex crate does not support.
+        // This test pins the actual behavior so a future change (e.g., using
+        // the fancy-regex crate) does not silently regress.
+        assert_eq!(match_string("mac", "11:22:33:44:55:66:77"), Some("11:22:33:44:55:66".into()));
+    }
+
+    #[test]
     fn log_level_matches() {
         assert!(matches("log_level", "[ERROR] failed to connect"));
         assert!(matches("log_level", "WARN something"));
         assert!(matches("log_level", "INFO startup"));
         assert!(matches("log_level", "FATAL crash"));
         assert!(!matches("log_level", "errorlike"));
+    }
+
+    #[test]
+    fn log_level_matches_in_bracket_delimiter() {
+        assert!(matches("log_level", "[ERROR] something failed"));
+    }
+
+    #[test]
+    fn log_level_matches_with_colon_suffix() {
+        assert!(matches("log_level", "INFO: starting up"));
+    }
+
+    #[test]
+    fn log_level_matches_with_dash_suffix() {
+        assert!(matches("log_level", "WARN - slow query"));
+    }
+
+    #[test]
+    fn log_level_matches_in_paren_delimiter() {
+        assert!(matches("log_level", "(CRITICAL) database unreachable"));
     }
 
     #[test]
@@ -1455,6 +1522,14 @@ mod tests {
         assert_eq!(all_matches("duration", "took 50ns"), vec!["50ns".to_string()]);
         assert_eq!(all_matches("duration", "took 100 μs"), vec!["100 μs".to_string()]);
         assert_eq!(all_matches("duration", "took 2.5 us"), vec!["2.5 us".to_string()]);
+    }
+
+    #[test]
+    fn duration_matches_microseconds_greek_mu() {
+        // μ (U+03BC GREEK SMALL LETTER MU, UTF-8: 0xCE 0xBC).
+        assert!(matches("duration", "took 8.5μs"));
+        assert!(matches("duration", "100μs"));
+        assert!(matches("duration", "0.5μs"));
     }
 
     #[test]
@@ -2027,6 +2102,21 @@ mod tests {
             match_string("url", "git@bitbucket.org:team/repo.git"),
             Some("git@bitbucket.org:team/repo.git".into())
         );
+    }
+
+    #[test]
+    fn url_matches_ssh_scheme() {
+        assert!(matches("url", "ref ssh://user@host.example.com"));
+    }
+
+    #[test]
+    fn url_matches_ftp_scheme() {
+        assert!(matches("url", "see ftp://example.com"));
+    }
+
+    #[test]
+    fn url_matches_scp_form() {
+        assert!(matches("url", "clone git@github.com:user/repo"));
     }
 
     #[test]
