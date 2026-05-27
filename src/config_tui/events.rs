@@ -89,8 +89,12 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             Modal::SaveDiff | Modal::FullPreview | Modal::Search | Modal::SampleSet => {
                 // SaveDiff body lands in C4b; Search + SampleSet in C4c.
             }
-            Modal::Confirm { .. } | Modal::Error(_) | Modal::QuitWithUnsavedEdits => {
-                // Handled above by their dedicated arms.
+            Modal::Confirm { .. } | Modal::QuitWithUnsavedEdits => {
+                // Reached only on unhandled keys for these modals — their
+                // dedicated dispatchers above return before this branch fires.
+            }
+            Modal::Error(_) => {
+                // Error modal absorbs all keys; only Esc (handled above) dismisses.
             }
         }
         return;
@@ -129,15 +133,22 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
 }
 
 /// Esc precedence (§12.1):
-/// 1. close active edit field (C4 owns this — placeholder),
+/// 1. close active edit field (incl. color-picker goto-input — UI/UX nit #5 fold),
 /// 2. close modal,
-/// 3. clear active search filter (C3 owns this),
+/// 3. clear active search filter (C4c owns this),
 /// 4. no-op.
 fn handle_esc(app: &mut App) {
+    // Tier 1: color-picker goto-input clears first, modal stays open.
+    if let Some(Modal::ColorPicker(state)) = app.modal.as_mut() {
+        if state.goto_buf.take().is_some() {
+            return;
+        }
+    }
+    // Tier 2: close modal.
     if app.modal.is_some() {
         app.modal = None;
     }
-    // C3/C4 hook search-clear + edit-field-close in front of modal close.
+    // Tier 3 (search-clear) lands in C4c.
 }
 
 /// Trigger quit flow per §12.1.1.
@@ -220,5 +231,42 @@ pub(crate) fn check_debounce(_app: &mut App) {
 pub(crate) fn check_toast(app: &mut App) {
     if app.toast.as_ref().is_some_and(crate::config_tui::app::Toast::expired) {
         app.toast = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_tui::snapshot::ConfigSnapshot;
+    use crate::config_tui::widgets::color_picker::{ColorPickerState, PickerSection};
+    use ratatui::crossterm::event::KeyModifiers;
+
+    fn mk(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    #[test]
+    fn esc_in_color_picker_clears_goto_buf_first_then_closes_modal() {
+        // Integration path: dispatch_key → handle_esc → tier-1 (goto clear) /
+        // tier-2 (modal close). Without the tier-1 branch, the modal would
+        // close on the first Esc and the goto-input buffer would be lost.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        app.modal = Some(Modal::ColorPicker(ColorPickerState {
+            section: PickerSection::Palette256,
+            goto_buf: Some(String::from("13")),
+            ..Default::default()
+        }));
+
+        dispatch_key(&mut app, mk(KeyCode::Esc));
+        match &app.modal {
+            Some(Modal::ColorPicker(s)) => {
+                assert!(s.goto_buf.is_none(), "first Esc must clear goto_buf");
+            }
+            other => panic!("modal must remain open after first Esc; got {other:?}"),
+        }
+
+        dispatch_key(&mut app, mk(KeyCode::Esc));
+        assert!(app.modal.is_none(), "second Esc must close the modal");
     }
 }
