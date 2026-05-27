@@ -79,6 +79,14 @@ pub(crate) struct ProfileRule {
     /// Optional capture-group style map. Keys validated at Phase 2.
     #[serde(default)]
     pub(crate) styles: Option<BTreeMap<String, crate::config::UserStyle>>,
+    /// Overlap-resolution priority override (NEW v0.5.6).
+    ///
+    /// Defaults to `100` (profile interior tier) when omitted. Profile
+    /// envelope rules (arn, `image_tag`) should set this to `200` to win
+    /// envelope-acceptance over interior built-ins (ipv4, uuid, region,
+    /// fqdn) under bidirectional `overlaps_accepted`. See spec §2.1.B / §4.4.
+    #[serde(default)]
+    pub(crate) priority: Option<i32>,
 }
 
 /// Result of [`load`]. Carries the parsed profile + a label for the
@@ -454,6 +462,7 @@ mod tests {
             pattern: r"\b[a-z]+\b".to_owned(),
             style: None,
             styles: None,
+            priority: None,
         }
     }
 
@@ -1055,5 +1064,93 @@ unexpected_field = "this must fail"
 "#;
         let result: std::result::Result<Profile, _> = toml::from_str(toml);
         assert!(result.is_err(), "deny_unknown_fields must reject typo `unexpected_field`");
+    }
+
+    // v0.5.6 — cross-profile priority tier tests (spec §2.1.B4 / §7.2 site #3).
+    // Built-in count post-v0.5.6: 12. Appended rules start at index 12.
+
+    fn load_embedded(name: &str) -> LoadedProfile {
+        let xdg = tempfile::tempdir().expect("tmpdir");
+        load_with(name, || Some(xdg.path().to_path_buf()), || None)
+            .expect("embedded profile must load")
+    }
+
+    fn compile_loaded(lp: &LoadedProfile) -> crate::rules::Compiled {
+        crate::rules::Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            Some(&lp.profile),
+            Some(lp.path_label.as_str()),
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile")
+    }
+
+    #[test]
+    fn aws_arn_appended_priority_200() {
+        let lp = load_embedded("aws");
+        let compiled = compile_loaded(&lp);
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        let pos = names.iter().position(|n| *n == "arn").expect("arn in aws profile");
+        assert_eq!(compiled.priorities[12 + pos], 200, "aws.arn must ship priority 200");
+    }
+
+    #[test]
+    fn aws_instance_id_appended_priority_100() {
+        let lp = load_embedded("aws");
+        let compiled = compile_loaded(&lp);
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        let pos =
+            names.iter().position(|n| *n == "instance_id").expect("instance_id in aws profile");
+        assert_eq!(
+            compiled.priorities[12 + pos],
+            100,
+            "aws.instance_id must default to priority 100"
+        );
+    }
+
+    #[test]
+    fn aws_region_appended_priority_100() {
+        let lp = load_embedded("aws");
+        let compiled = compile_loaded(&lp);
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        let pos = names.iter().position(|n| *n == "region").expect("region in aws profile");
+        assert_eq!(compiled.priorities[12 + pos], 100, "aws.region must default to priority 100");
+    }
+
+    #[test]
+    fn docker_image_tag_appended_priority_200() {
+        let lp = load_embedded("docker");
+        let compiled = compile_loaded(&lp);
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        let pos =
+            names.iter().position(|n| *n == "image_tag").expect("image_tag in docker profile");
+        assert_eq!(compiled.priorities[12 + pos], 200, "docker.image_tag must ship priority 200");
+    }
+
+    #[test]
+    fn docker_container_id_appended_priority_100() {
+        let lp = load_embedded("docker");
+        let compiled = compile_loaded(&lp);
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        let pos = names
+            .iter()
+            .position(|n| *n == "container_id")
+            .expect("container_id in docker profile");
+        assert_eq!(
+            compiled.priorities[12 + pos],
+            100,
+            "docker.container_id must default to priority 100"
+        );
+    }
+
+    #[test]
+    fn k8s_pod_name_appended_priority_100() {
+        let lp = load_embedded("k8s");
+        let compiled = compile_loaded(&lp);
+        let names: Vec<&str> = lp.profile.append_rules.iter().map(|r| r.name.as_str()).collect();
+        let pos = names.iter().position(|n| *n == "pod_name").expect("pod_name in k8s profile");
+        assert_eq!(compiled.priorities[12 + pos], 100, "k8s.pod_name must default to priority 100");
     }
 }

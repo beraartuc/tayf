@@ -760,9 +760,9 @@ impl Compiled {
                     style,
                     group_styles: Vec::new(),
                     styles_override: ar.styles.clone(),
-                    // Temporary interior-tier default (spec §2.1.B); Task 6
-                    // makes this data-driven via ProfileRule.priority.
-                    priority: 100,
+                    // Data-driven via ProfileRule.priority (spec §2.1.B4 / Task 6).
+                    // Defaults to 100 (interior tier) when omitted in TOML.
+                    priority: ar.priority.unwrap_or(100),
                     source: RuleSource::EmbeddedProfile,
                 });
             }

@@ -24,12 +24,8 @@ name = "arn"
 # Audit verdict: RESHAPE — right-anchor with last-char word-char subset
 # to prevent trailing punctuation (`.`, `:`, `-`) from being eaten.
 #
-# v0.5.3 KNOWN LIMITATION: when an ARN contains an interior substring
-# that a built-in pattern matches (ipv6's `3::` etc., ipv4 octet shape,
-# or this profile's own region/instance_id rules), the pipeline's
-# rule-index-priority overlap resolution gives the interior pattern
-# the span and rejects this envelope match. The interior shape still
-# highlights; the ARN envelope does not. v0.5.4 may revisit either the
-# rule-priority semantics or the built-in ipv6 pattern bar.
+# v0.5.6: arn priority 200 wins envelope over interior built-in matches
+# (ipv4, uuid, region) via priority-DESC sort + bidirectional overlap.
 pattern = '\barn:aws(?:-us-gov|-cn)?:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9_/.:+@*-]*[a-zA-Z0-9_/+@*-]\b'
 style = { fg = "magenta" }
+priority = 200

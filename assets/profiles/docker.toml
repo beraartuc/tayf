@@ -27,3 +27,4 @@ name = "image_tag"
 #   - module:line (`src/main.rs:42` — covered by `filename` built-in)
 pattern = '(?:\b[a-z0-9-]+(?:\.[a-z0-9-]+)+/[a-z0-9._/-]+:[a-z0-9._-]+\b|\b[a-z][a-z0-9_-]*(?:/[a-z0-9_-]+)*:latest\b)'
 style = { fg = "magenta" }
+priority = 200
