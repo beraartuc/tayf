@@ -103,9 +103,9 @@ pub(crate) enum Modal {
         buffer: String,
         error: Option<String>,
     },
-    // reason: v0.6 Group 8 wires `?` / F1 → `Modal::Help`; declared here so
-    // events.rs dispatch + widgets/mod.rs render stay exhaustive.
-    #[allow(dead_code)]
+    /// Read-only keybinding cheat-sheet overlay (spec §12.4 D4). Opened
+    /// by `?` or F1; any key dismisses + key is discarded (vim/less
+    /// convention). Content lives in `events::HELP_MODAL_CONTENT`.
     Help,
 }
 

@@ -12,6 +12,40 @@ use ratatui::Terminal;
 
 use crate::config_tui::app::{App, ConfirmAction, Modal, Tab};
 
+/// Canonical keybinding cheat-sheet rendered by `Modal::Help` (spec §12.4 D4).
+/// Cross-checked against `dispatch_key` arms below — when a new keybinding
+/// is added or moved, this string MUST be updated in the same commit.
+pub(crate) const HELP_MODAL_CONTENT: &str = "\
+tayf Config TUI — Keybindings
+─────────────────────────────────────
+Navigation
+  Tab / Shift+Tab  Cycle tabs forward / backward
+  1..4             Jump to tab by index
+  j / k            Move selection down / up
+  g / G            First / last entry
+  h / l            Toggle list-pane / detail focus
+  Space            Activate / toggle entry
+
+Editing (Patterns tab)
+  n                New pattern modal
+  e                Edit pattern regex source
+  c                Open color picker for selected rule
+  o                Override builtin rule
+  r                Reset user override
+
+Display
+  s                Set sample input
+  p                Toggle live preview strip
+  Shift+P          Full preview overlay
+  / (forward-slash) Search filter
+
+Persistence
+  Ctrl+S / Ctrl+W  Save
+  ? / F1           This help
+  Esc              Dismiss modal / cancel edit
+  Ctrl+C / q       Quit
+";
+
 /// Drive the TUI event loop until `app.should_quit`.
 pub(crate) fn run_event_loop(
     mut app: App,
@@ -131,14 +165,14 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         (KeyCode::Char('?'), m) if m.is_empty() => {
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "help overlay lands in v0.6+ (Modal::Help wiring deferred)",
-            ));
+            if app.modal.is_none() {
+                app.modal = Some(Modal::Help);
+            }
         }
         (KeyCode::F(1), _) => {
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "help overlay lands in v0.6+ (Modal::Help wiring deferred)",
-            ));
+            if app.modal.is_none() {
+                app.modal = Some(Modal::Help);
+            }
         }
         (KeyCode::Char('P'), m) if m == KeyModifiers::SHIFT => {
             if app.modal.is_none() {
@@ -757,8 +791,14 @@ fn handle_edit_regex_key(app: &mut App, k: KeyEvent) {
     app.preview.debouncer.mark_edit();
 }
 
-/// `Modal::Help` key dispatch — Group 8 will wire the help overlay. Stub
-/// closes the modal so the dispatch arm stays exhaustive.
+/// `Modal::Help` key dispatch (spec §12.4 D4).
+///
+/// vim/less convention: ANY key dismisses the Help overlay and the key
+/// is DISCARDED (it does NOT fall through to the underlying global / tab
+/// dispatchers). This guarantees that hitting a benign key to dismiss
+/// Help never triggers a surprise action (e.g. `q` would otherwise
+/// initiate the quit flow). Ctrl+C and Esc bypass this path because
+/// they're handled by `dispatch_key` before the modal branch.
 fn handle_help_key(app: &mut App, _k: KeyEvent) {
     app.modal = None;
 }
@@ -1025,5 +1065,85 @@ mod tests {
         assert_eq!(app.edits.added[0].pattern, r"\bX\b");
         assert_eq!(app.edits.added[0].style.fg, Some(Some(crate::style::Color::Cyan)));
         assert!(app.modal.is_none(), "commit must close the modal");
+    }
+
+    #[test]
+    fn question_mark_opens_help_modal_when_no_modal_is_open() {
+        // D4 dispatch: `?` from the global key arm constructs Modal::Help.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        assert!(app.modal.is_none(), "precondition: no modal at boot");
+
+        dispatch_key(&mut app, mk(KeyCode::Char('?')));
+
+        assert!(
+            matches!(app.modal, Some(Modal::Help)),
+            "'?' must open Modal::Help when no modal is open",
+        );
+    }
+
+    #[test]
+    fn f1_opens_help_modal_as_alt_binding() {
+        // D4 alt-binding parity: F1 is equivalent to `?` for opening Help.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+
+        dispatch_key(&mut app, mk(KeyCode::F(1)));
+
+        assert!(
+            matches!(app.modal, Some(Modal::Help)),
+            "F1 must open Modal::Help when no modal is open",
+        );
+    }
+
+    #[test]
+    fn help_modal_dismisses_and_discards_any_key_per_vim_less_convention() {
+        // D4 dismiss: Any key from Help dispatches to handle_help_key,
+        // which closes the modal AND does NOT fall through to global
+        // dispatch — so a `q` press while Help is open must NOT initiate
+        // the quit flow (which would open Modal::QuitWithUnsavedEdits if
+        // edits were dirty, or set should_quit otherwise).
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        app.modal = Some(Modal::Help);
+
+        dispatch_key(&mut app, mk(KeyCode::Char('q')));
+
+        assert!(app.modal.is_none(), "any key dismisses Help");
+        assert!(!app.should_quit, "'q' must NOT initiate the quit flow");
+    }
+
+    #[test]
+    fn question_mark_is_no_op_when_a_different_modal_is_open() {
+        // Spec §7.2: modals absorb all keys (except Ctrl+C / Esc). With
+        // SaveDiff open, `?` must route through the modal branch and
+        // hit handle_save_diff_key (a no-op for `?`), NOT the global
+        // dispatch arm that would replace the modal with Help.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        app.save_diff = Some(crate::config_tui::widgets::save_diff::SaveDiffState::Clean {
+            tui_diff: "(stub)".to_owned(),
+        });
+        app.modal = Some(Modal::SaveDiff);
+
+        dispatch_key(&mut app, mk(KeyCode::Char('?')));
+
+        assert!(
+            matches!(app.modal, Some(Modal::SaveDiff)),
+            "'?' under SaveDiff must NOT replace it with Help",
+        );
+    }
+
+    #[test]
+    fn help_modal_content_lists_canonical_keybindings_present_in_dispatch() {
+        // Drift guard: if a keybinding is added/moved in dispatch_key,
+        // HELP_MODAL_CONTENT must be updated in the same commit. These
+        // pins catch the most-likely silent-drift cases.
+        assert!(HELP_MODAL_CONTENT.contains("Tab / Shift+Tab"), "tab cycle listed");
+        assert!(HELP_MODAL_CONTENT.contains("Ctrl+S / Ctrl+W"), "save bindings listed");
+        assert!(HELP_MODAL_CONTENT.contains("? / F1"), "help bindings listed");
+        assert!(HELP_MODAL_CONTENT.contains("Ctrl+C / q"), "quit bindings listed");
+        assert!(HELP_MODAL_CONTENT.contains("Shift+P"), "full preview overlay listed");
+        assert!(HELP_MODAL_CONTENT.contains("Esc"), "esc listed");
     }
 }

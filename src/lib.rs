@@ -382,6 +382,44 @@ pub mod __test_api {
     ) -> Result<(), B::Error> {
         terminal.draw(|f| crate::config_tui::render::frame(f, &app.0)).map(|_| ())
     }
+
+    // Integration tests need to send keystrokes + observe modal and
+    // selection state. The internal `Modal` enum stays `pub(crate)` —
+    // tests interact through predicate helpers (`is_*_modal_open`)
+    // rather than re-exporting the full variant set.
+    pub use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    /// Dispatch a single key event into the App's event loop. Mirrors
+    /// what the production `run_event_loop` does for each `KeyPress`.
+    pub fn send_key(app: &mut AppHandle, key: KeyEvent) {
+        crate::config_tui::events::dispatch_key(&mut app.0, key);
+    }
+
+    /// True iff any modal overlay is currently open.
+    #[must_use]
+    pub fn has_modal_open(app: &AppHandle) -> bool {
+        app.0.modal.is_some()
+    }
+
+    /// True iff the Help overlay is currently open.
+    #[must_use]
+    pub fn is_help_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::Help))
+    }
+
+    /// True iff the quit-confirm modal is currently open.
+    #[must_use]
+    pub fn is_quit_confirm_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::QuitWithUnsavedEdits))
+    }
+
+    /// Read the App's current Patterns-tab selected index. Used by
+    /// integration tests that assert a keystroke was discarded (selection
+    /// unchanged) versus consumed (selection moved).
+    #[must_use]
+    pub fn current_selected_idx(app: &AppHandle) -> usize {
+        app.0.focus.patterns.selected_idx
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

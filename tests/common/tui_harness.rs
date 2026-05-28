@@ -15,8 +15,19 @@ use tayf::__test_api::{boot_app_with_sample, draw_app, AppHandle};
 
 /// Boot an App with the given sample text on an empty snapshot.
 pub fn boot_tui_with_sample(sample: &str) -> (AppHandle, Terminal<TestBackend>) {
+    boot_tui_with_sample_sized(sample, 80, 24)
+}
+
+/// Boot an App with a caller-specified TestBackend size. Useful for modal
+/// overlays whose 80% × 24% centered rect renders too few rows under the
+/// default 80×24 to surface multi-line content (e.g. Help modal).
+pub fn boot_tui_with_sample_sized(
+    sample: &str,
+    cols: u16,
+    rows: u16,
+) -> (AppHandle, Terminal<TestBackend>) {
     let app = boot_app_with_sample(sample);
-    let backend = TestBackend::new(80, 24);
+    let backend = TestBackend::new(cols, rows);
     let terminal = Terminal::new(backend).expect("TestBackend init");
     (app, terminal)
 }
