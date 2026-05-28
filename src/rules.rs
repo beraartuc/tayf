@@ -887,7 +887,6 @@ impl Compiled {
 /// Returns the same error set as [`Compiled::load_with_theme`]; additionally,
 /// any error from [`crate::profiles::load`] (Phase-1 validation, `NotFound`,
 /// IO) when `profile_name` is `Some` is propagated.
-#[allow(dead_code)] // reason: Group 4 (Config TUI compile_pending) consumes this entry-point.
 pub(crate) fn compile_from_config(
     config: &crate::config::Config,
     theme_name: Option<&str>,

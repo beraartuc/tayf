@@ -25,6 +25,7 @@
 //! - [`status`] — resolved config state to stdout.
 
 pub(crate) mod app;
+pub(crate) mod compile_pending;
 pub(crate) mod debounce;
 pub(crate) mod dump_cmd;
 pub(crate) mod edit;
