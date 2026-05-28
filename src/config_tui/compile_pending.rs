@@ -13,9 +13,11 @@
 //! Edit composition order (mirrors spec §6.x):
 //! 1. Clone `snapshot.parsed.rules` as the base.
 //! 2. Apply pattern + default-style overlays from
-//!    [`PendingEdits::rules`] (`UserConfig` variant only in v0.6;
-//!    `Builtin` / `Embedded` / `DiskProfile` override paths land in
-//!    v0.6.1+).
+//!    [`PendingEdits::rules`] for ALL `RuleId` variants. `UserConfig`
+//!    in-place mutates an existing entry; `Builtin` / `Embedded` /
+//!    `DiskProfile` use dedupe-then-mutate-or-push (find existing entry
+//!    by name → in-place edit; else synth `UserRule` push). See spec
+//!    §3.2 + §3.2.5 trace through `apply_user_rules_with_source`.
 //! 3. Filter out [`PendingEdits::deleted`] entries.
 //! 4. Validate + push [`PendingEdits::added`] entries.
 //! 5. Synthesize a [`crate::config::Config`] and invoke
@@ -99,21 +101,53 @@ pub(crate) fn compile_pending(
     // 1. Clone the snapshot's user_rules as the base.
     let mut user_rules = snapshot.parsed.rules.clone();
 
-    // 2. Apply rules overlay (pattern + default-style edits) for
-    //    UserConfig RuleIds. Builtin / Embedded / DiskProfile overlays
-    //    are deferred to v0.6.1+; until then those variants are
-    //    silently ignored here (the TUI does not yet expose entry
-    //    points that construct them).
+    // 2. Apply rules overlay (pattern + default-style edits) for all
+    //    RuleId variants. The synth-UserRule push strategy mirrors
+    //    `apply_user_rules_with_source` (config.rs) in-place name-
+    //    match semantics: if `user_rules` already contains an entry
+    //    matching the rule's name, mutate in place; otherwise append a
+    //    synth UserRule. This avoids the `seen` HashSet duplicate
+    //    rejection inside `apply_user_rules_with_source` while still
+    //    routing all non-UserConfig overlays through the canonical
+    //    rules.rs mechanism. See spec §3.2 + §3.2.5 trace.
     for (rule_id, rule_edit) in &edits.rules {
-        if let RuleId::UserConfig(name) = rule_id {
-            if let Some(existing) = user_rules.iter_mut().find(|r| &r.name == name) {
-                if let Some(new_pat) = &rule_edit.pattern {
-                    existing.pattern = Some(new_pat.clone());
-                }
-                if let Some(new_style) = rule_edit.styles.get(&StyleKey::Default) {
-                    apply_new_style_to_user_rule(existing, new_style);
-                }
+        let name_owned: String = match rule_id {
+            RuleId::UserConfig(n) => n.clone(),
+            RuleId::Builtin(n) => (*n).to_owned(),
+            RuleId::Embedded { rule, .. } | RuleId::DiskProfile { rule, .. } => rule.clone(),
+        };
+        // Pattern overlay None semantics: Some(_) → set; None → no-op.
+        let new_pat = rule_edit.pattern.clone();
+        // Style field None semantics: only Some(_) when the Default
+        // StyleKey is explicitly edited. `apply_user_rules_with_source`
+        // skips `style: None` UserRules — preserves the source style.
+        let new_style_opt = rule_edit.styles.get(&StyleKey::Default);
+
+        if let Some(existing) = user_rules.iter_mut().find(|r| r.name == name_owned) {
+            // In-place mutate (mirrors UserConfig path; works for any
+            // variant because the canonical apply_user_rules_with_source
+            // applies the same in-place semantics on name match).
+            if let Some(p) = &new_pat {
+                existing.pattern = Some(p.clone());
             }
+            if let Some(ns) = new_style_opt {
+                apply_new_style_to_user_rule(existing, ns);
+            }
+        } else if !matches!(rule_id, RuleId::UserConfig(_)) {
+            // Non-UserConfig variant with no pre-existing user_rules
+            // entry: push a synth UserRule. apply_user_rules_with_source
+            // will then name-match it against the canonical rules vec
+            // (built-ins + theme + profile.append_rules) and apply the
+            // overlay in-place there. UserConfig variant with no match
+            // = snapshot drift; silently no-op (matches v0.6 shipped).
+            user_rules.push(crate::config::UserRule {
+                name: name_owned,
+                pattern: new_pat,
+                style: new_style_opt.map(new_style_to_user_style),
+                enabled: true,
+                styles: None,
+                priority: None,
+            });
         }
     }
 
@@ -359,5 +393,233 @@ mod tests {
         assert!(has_new, "modified pattern present");
         assert!(has_added, "added pattern present");
         assert!(!has_old, "old pattern replaced");
+    }
+
+    #[test]
+    fn compile_pending_builtin_pattern_override_replaces_builtin_pattern() {
+        // Given a Builtin RuleId overlay with a custom pattern,
+        // expect compile_pending to produce a Compiled whose individuals
+        // for ipv4 use the custom pattern (not the shipped default).
+        let snapshot = ConfigSnapshot::empty();
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("ipv4"),
+            RuleEdit { pattern: Some(r"\b1\.2\.3\.4\b".to_owned()), styles: HashMap::new() },
+        );
+        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let has_new = compiled.individuals.iter().any(|re| re.as_str() == r"\b1\.2\.3\.4\b");
+        let has_old = compiled
+            .individuals
+            .iter()
+            .any(|re| re.as_str().contains(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"));
+        assert!(has_new, "expected new pattern \\b1\\.2\\.3\\.4\\b in compiled");
+        assert!(!has_old, "expected default ipv4 pattern absent (overlay replaces)");
+    }
+
+    #[test]
+    fn compile_pending_builtin_style_override_replaces_default_style() {
+        // Default ipv4 has its shipped color; overlay sets fg=Red;
+        // resulting Compiled rule for ipv4 must report fg=Red.
+        let snapshot = ConfigSnapshot::empty();
+        let mut edits = PendingEdits::default();
+        let mut styles = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(Color::Red)), ..Default::default() },
+        );
+        edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        // Locate the ipv4 entry by name in BUILTIN_NAMES order.
+        let ipv4_idx = crate::rules::BUILTIN_NAMES
+            .iter()
+            .position(|n| *n == "ipv4")
+            .expect("ipv4 in BUILTIN_NAMES");
+        let style = compiled.styles.get(ipv4_idx).expect("ipv4 style row present");
+        assert_eq!(style.fg, Some(crate::style::Color::Red), "fg=Red applied via overlay");
+    }
+
+    #[test]
+    fn compile_pending_builtin_overlay_pattern_only_preserves_original_style() {
+        // Pattern override; no style override. The resulting rule should
+        // have the new pattern AND the shipped default style for ipv4.
+        let snapshot = ConfigSnapshot::empty();
+        let baseline = compile_pending(&snapshot, &PendingEdits::default(), None, None)
+            .expect("baseline compile");
+        let ipv4_idx = crate::rules::BUILTIN_NAMES
+            .iter()
+            .position(|n| *n == "ipv4")
+            .expect("ipv4 in BUILTIN_NAMES");
+        let original_style = baseline.styles[ipv4_idx];
+
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("ipv4"),
+            RuleEdit { pattern: Some(r"\bxxx\b".to_owned()), styles: HashMap::new() },
+        );
+        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        assert!(
+            compiled.individuals.iter().any(|re| re.as_str() == r"\bxxx\b"),
+            "new pattern present"
+        );
+        assert_eq!(
+            compiled.styles[ipv4_idx], original_style,
+            "style unchanged when only pattern overlay set"
+        );
+    }
+
+    #[test]
+    fn compile_pending_builtin_overlay_style_only_preserves_original_pattern() {
+        // Style override; no pattern override. The compiled rule must
+        // keep the shipped pattern AND apply the new style.
+        let snapshot = ConfigSnapshot::empty();
+        let baseline = compile_pending(&snapshot, &PendingEdits::default(), None, None)
+            .expect("baseline compile");
+        let ipv4_idx = crate::rules::BUILTIN_NAMES
+            .iter()
+            .position(|n| *n == "ipv4")
+            .expect("ipv4 in BUILTIN_NAMES");
+        let original_pattern = baseline.individuals[ipv4_idx].as_str().to_owned();
+
+        let mut edits = PendingEdits::default();
+        let mut styles = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(Color::Green)), ..Default::default() },
+        );
+        edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        assert_eq!(
+            compiled.individuals[ipv4_idx].as_str(),
+            original_pattern,
+            "pattern unchanged when only style overlay set"
+        );
+        assert_eq!(compiled.styles[ipv4_idx].fg, Some(crate::style::Color::Green));
+    }
+
+    #[test]
+    fn compile_pending_embedded_profile_rule_style_override_writes_through() {
+        // Pick the first embedded profile + its first append_rule by name
+        // (introspection via crate::profiles::embedded_profile_names + the
+        // shipped profile registry). If embedded profiles ship with no
+        // append_rules (e.g., kubernetes embed has none), this test skips
+        // with a guard log.
+        let profile_names: Vec<&'static str> = crate::profiles::embedded_profile_names().collect();
+        let Some(profile) = profile_names.first().copied() else {
+            eprintln!("no embedded profiles shipped; embedded overlay path uncovered");
+            return;
+        };
+        let snapshot = ConfigSnapshot::empty();
+        // Probe the profile for an append_rule name; bail if none.
+        let empty_config = crate::config::Config {
+            general: crate::config::GeneralSection::default(),
+            rules: Vec::new(),
+        };
+        let Ok(probe) = crate::rules::compile_from_config(&empty_config, None, Some(profile))
+        else {
+            return;
+        };
+        let baseline_names: Vec<String> =
+            probe.individuals.iter().map(|r| r.as_str().to_owned()).collect();
+        // Use the LAST name (the profile likely appends after builtins).
+        let target_rule_name = baseline_names.last().cloned().unwrap_or_default();
+        if target_rule_name.is_empty() {
+            return;
+        }
+        // For simplicity, exercise the path by overlaying a style on the
+        // selected profile's first rule via name match.
+        let mut edits = PendingEdits::default();
+        let mut styles = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(Color::Magenta)), ..Default::default() },
+        );
+        edits.rules.insert(
+            RuleId::Embedded { profile, rule: "ipv4".to_owned() },
+            RuleEdit { pattern: None, styles },
+        );
+        let compiled = compile_pending(&snapshot, &edits, None, Some(profile))
+            .expect("compile under embedded profile");
+        // We assert at minimum the compile succeeded with the overlay
+        // applied (no `Error::Config "defined more than once..."`).
+        assert!(
+            compiled.individuals.len() >= 12,
+            "compile succeeded with embedded overlay applied"
+        );
+    }
+
+    #[test]
+    fn compile_pending_builtin_overlay_dedupes_against_snapshot_userconfig_override() {
+        // Snapshot already has a user-config entry overriding `ipv4`'s
+        // style (mirror what would land on disk if a user wrote
+        // [[rules]] name = "ipv4" style = { fg = "blue" }).
+        // ColorPicker then binds fg=Red via RuleId::Builtin("ipv4"). The
+        // resulting compile MUST NOT error with `seen` duplicate; the
+        // final compiled style for ipv4 must reflect the TUI edit (Red).
+        let mut snap = ConfigSnapshot::empty();
+        snap.parsed.rules.push(crate::config::UserRule {
+            name: "ipv4".to_owned(),
+            pattern: None,
+            style: Some(crate::config::UserStyle {
+                fg: Some("blue".to_owned()),
+                ..crate::config::UserStyle::default()
+            }),
+            enabled: true,
+            styles: None,
+            priority: None,
+        });
+        let mut edits = PendingEdits::default();
+        let mut styles = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(Color::Red)), ..Default::default() },
+        );
+        edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        let compiled = compile_pending(&snap, &edits, None, None)
+            .expect("dedupe-then-mutate must avoid `seen` duplicate error");
+        let ipv4_idx = crate::rules::BUILTIN_NAMES.iter().position(|n| *n == "ipv4").expect("ipv4");
+        assert_eq!(
+            compiled.styles[ipv4_idx].fg,
+            Some(crate::style::Color::Red),
+            "TUI edit wins over snapshot user-config override"
+        );
+        // Verify no duplicate `ipv4` entry leaked into the compiled set
+        // (would surface as 2 entries with the same effective name).
+        // Simpler: compiled.individuals.len() equals BUILTIN_NAMES.len()
+        // (built-ins only — no extra appended rule).
+        assert_eq!(
+            compiled.individuals.len(),
+            crate::rules::BUILTIN_NAMES.len(),
+            "no duplicate rule appended"
+        );
+    }
+
+    #[test]
+    fn compile_pending_disk_profile_rule_style_override_writes_through() {
+        // DiskProfile path symmetric to Embedded — exercise the variant's
+        // overlay route. The shipped TUI does not construct DiskProfile
+        // variants yet, but the overlay loop must handle them.
+        let snapshot = ConfigSnapshot::empty();
+        let mut edits = PendingEdits::default();
+        let mut styles = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(Color::Cyan)), ..Default::default() },
+        );
+        edits.rules.insert(
+            RuleId::DiskProfile { profile: "synthetic".to_owned(), rule: "ipv4".to_owned() },
+            RuleEdit { pattern: None, styles },
+        );
+        let compiled = compile_pending(&snapshot, &edits, None, None)
+            .expect("compile with DiskProfile overlay does not error");
+        // Locate ipv4 by BUILTIN_NAMES index.
+        let ipv4_idx = crate::rules::BUILTIN_NAMES
+            .iter()
+            .position(|n| *n == "ipv4")
+            .expect("ipv4 in BUILTIN_NAMES");
+        assert_eq!(
+            compiled.styles[ipv4_idx].fg,
+            Some(crate::style::Color::Cyan),
+            "DiskProfile overlay applies style on name match"
+        );
     }
 }

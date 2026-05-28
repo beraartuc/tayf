@@ -470,15 +470,9 @@ pub(crate) fn apply_pending_and_recompile(app: &mut App) {
 /// Bind the picked color to the rule currently focused under the
 /// Patterns tab, then drive a recompile + toast.
 ///
-/// v0.6 limitation: `ColorPicker` writes to
-/// `edits.rules[RuleId::Builtin | RuleId::UserConfig][StyleKey::Default].fg`,
-/// but `compile_pending`'s overlay path applies edits only to
-/// `RuleId::UserConfig` entries. Builtin color edits are PERSISTED in
-/// `PendingEdits` (and will surface in `SaveDiff`) but do NOT update the
-/// live preview compile path until v0.6.1+ wires the `styles_override`
-/// route for builtin rules. The success toast below reflects that the
-/// edit was recorded; the preview color stays the builtin default until
-/// that route lands.
+/// `Builtin` / `Embedded` / `DiskProfile` rules apply via synth-`UserRule`
+/// overlay in `compile_pending` (dedupe-then-mutate-or-push). See
+/// spec §3.2 of the v0.6.1 design.
 fn bind_color_to_selected_rule(app: &mut App, color: crate::style::Color) {
     let Some(rule_id) = resolve_selected_rule_id(app) else {
         app.toast = Some(crate::config_tui::app::Toast::warn(
