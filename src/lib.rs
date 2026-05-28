@@ -635,6 +635,51 @@ pub mod __test_api {
         crate::config_tui::events::check_debounce(&mut app.0);
         was_pending && !app.0.preview.debouncer.is_pending()
     }
+
+    // -----------------------------------------------------------------------
+    // G2: save-quit flag helpers (spec §3.8).
+    // -----------------------------------------------------------------------
+
+    /// Stage a dirty edit so `app.edits.is_dirty()` is true, which causes
+    /// the `q` keystroke to open `Modal::QuitWithUnsavedEdits`. Delegates
+    /// to `stage_builtin_fg_edit` with the first builtin rule name.
+    pub fn make_pending_edit(app: &mut AppHandle) {
+        stage_builtin_fg_edit(app, crate::rules::BUILTIN_NAMES[0]);
+    }
+
+    /// Dispatch the `q` key (no modifiers) — opens `QuitWithUnsavedEdits`
+    /// when edits are dirty, or sets `should_quit` directly. G2 §3.8.
+    pub fn send_q(app: &mut AppHandle) {
+        send_key(app, KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()));
+    }
+
+    /// Dispatch a bare character keystroke (no modifiers). G2 §3.8.
+    pub fn send_char(app: &mut AppHandle, c: char) {
+        send_key(app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+
+    /// Dispatch the Esc key (no modifiers). G2 §3.8.
+    pub fn send_esc(app: &mut AppHandle) {
+        send_key(app, KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    }
+
+    /// Read `app.pending_save_and_quit`. G2 §3.8.
+    #[must_use]
+    pub fn pending_save_and_quit(app: &AppHandle) -> bool {
+        app.0.pending_save_and_quit
+    }
+
+    /// Read `app.should_quit`. G2 §3.8.
+    #[must_use]
+    pub fn should_quit(app: &AppHandle) -> bool {
+        app.0.should_quit
+    }
+
+    /// True iff a `Modal::SaveDiff` overlay is currently open. G2 §3.8.
+    #[must_use]
+    pub fn is_save_diff_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::SaveDiff))
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

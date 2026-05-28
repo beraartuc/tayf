@@ -276,6 +276,11 @@ pub(crate) struct App {
     pub(crate) search_state: Option<crate::config_tui::widgets::search::SearchState>,
     pub(crate) sample_set_state: Option<crate::config_tui::widgets::sample_set::SampleSetState>,
     pub(crate) should_quit: bool,
+    /// Set when user invokes save-and-quit via the `QuitWithUnsavedEdits`
+    /// modal's `s` option. **Invariant**: MUST be cleared on every
+    /// `SaveDiff` exit path that does NOT set `should_quit`. Enforced by
+    /// `test_pending_save_and_quit_resets_on_every_non_commit_exit`.
+    pub(crate) pending_save_and_quit: bool,
 }
 
 impl App {
@@ -318,6 +323,7 @@ impl App {
             search_state: None,
             sample_set_state: None,
             should_quit: false,
+            pending_save_and_quit: false,
         };
         app.preview.recompile(&app.sample_input.text);
         app

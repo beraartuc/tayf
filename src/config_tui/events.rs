@@ -42,6 +42,7 @@ Display
 
 Persistence
   Ctrl+S / Ctrl+W  Save
+  s (in quit modal)  Save then quit
   Ctrl+R           Reload from disk (discards edits)
   Shift+D          Initialize default config (if file missing)
   ? / F1           This help
@@ -311,8 +312,15 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
                 app.toast = Some(crate::config_tui::app::Toast::ok(
                     "Saved. Hot-reload will pick this up shortly.",
                 ));
+                // G2 §3.8: save-and-quit — set should_quit when the flag is set.
+                if app.pending_save_and_quit {
+                    app.should_quit = true;
+                }
             }
             Err(e) => {
+                // Save failed: clear pending flag so a subsequent manual quit
+                // does not carry forward a stale save-and-quit intent.
+                app.pending_save_and_quit = false;
                 app.modal = Some(Modal::Error(format!("Save failed: {e}")));
                 app.save_diff = None;
                 app.save_diff_scroll = 0;
@@ -326,12 +334,14 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
             }
             app.edits.clear();
             app.modal = None;
+            app.pending_save_and_quit = false;
             app.save_diff = None;
             app.save_diff_scroll = 0;
             app.toast =
                 Some(crate::config_tui::app::Toast::ok("Reloaded from disk; TUI edits discarded."));
         }
         SaveDiffOutcome::CloseModal => {
+            app.pending_save_and_quit = false;
             app.modal = None;
             app.save_diff = None;
             app.save_diff_scroll = 0;
@@ -381,6 +391,7 @@ fn handle_esc(app: &mut App) {
     if app.modal.is_some() {
         match app.modal {
             Some(Modal::SaveDiff) => {
+                app.pending_save_and_quit = false;
                 app.save_diff = None;
                 app.save_diff_scroll = 0;
             }
@@ -414,7 +425,7 @@ fn handle_quit_request(app: &mut App) {
 
 /// §12.1.1 quit-confirm key set:
 /// - n / Esc / Enter → cancel (default = safe)
-/// - s → save then quit (C4 wires `SaveDiff` inline; C2a stub closes modal + sets toast)
+/// - s → save then quit (opens `SaveDiff`; commit success sets `should_quit`)
 /// - d → discard and quit (immediate)
 fn handle_quit_confirm_key(app: &mut App, k: KeyEvent) {
     match k.code {
@@ -422,10 +433,9 @@ fn handle_quit_confirm_key(app: &mut App, k: KeyEvent) {
             app.modal = None;
         }
         KeyCode::Char('s') => {
-            // Save-and-quit: open SaveDiff inline; commit will set
-            // should_quit on success via a separate flag (deferred to v0.7+
-            // because event-loop reentrancy from here is non-trivial). For
-            // v0.5.4 we open SaveDiff and let user commit-then-quit manually.
+            // Save-and-quit: set flag so the commit-success path triggers quit,
+            // then open the SaveDiff modal via the same path as Ctrl+S. Spec §3.8.
+            app.pending_save_and_quit = true;
             app.save_diff = Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
             app.modal = Some(Modal::SaveDiff);
         }
