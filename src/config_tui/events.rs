@@ -134,7 +134,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             handle_quit_confirm_key(app, k);
             return;
         }
-        // Confirm modals (DeleteUserRule / ResetUserOverride / DiscardEditsAndReload / InitFromDump).
+        // Confirm modals (DeleteRule / ResetOverride / DiscardEditsAndReload / InitFromDump).
         if matches!(modal, Modal::Confirm { .. }) {
             handle_confirm_modal_key(app, k);
             return;
@@ -479,10 +479,8 @@ fn handle_confirm_modal_key(app: &mut App, k: KeyEvent) {
     let action = match &app.modal {
         Some(Modal::Confirm { action, .. }) => match action {
             ConfirmAction::DiscardEditsAndReload => Some(ConfirmAction::DiscardEditsAndReload),
-            ConfirmAction::DeleteUserRule(n) => Some(ConfirmAction::DeleteUserRule(n.clone())),
-            ConfirmAction::ResetUserOverride(n) => {
-                Some(ConfirmAction::ResetUserOverride(n.clone()))
-            }
+            ConfirmAction::DeleteRule(rid) => Some(ConfirmAction::DeleteRule(rid.clone())),
+            ConfirmAction::ResetOverride(rid) => Some(ConfirmAction::ResetOverride(rid.clone())),
             ConfirmAction::InitFromDump => Some(ConfirmAction::InitFromDump),
         },
         _ => None,
@@ -505,31 +503,29 @@ fn handle_confirm_modal_key(app: &mut App, k: KeyEvent) {
 /// §12.1.1 / §9.6 (`DiscardEditsAndReload` / `InitFromDump` are v0.5.5+).
 fn apply_confirm(app: &mut App, action: &ConfirmAction) {
     match action {
-        ConfirmAction::DeleteUserRule(name) => {
-            let removed = app
-                .edits
-                .rules
-                .remove(&crate::config_tui::edit::RuleId::UserConfig(name.clone()))
-                .is_some();
-            let msg = if removed {
-                format!("Removed staged override of '{name}' (built-in restored)")
-            } else {
-                format!("No staged override of '{name}' to remove; built-in remains active")
-            };
-            app.toast = Some(crate::config_tui::app::Toast::ok(msg));
+        ConfirmAction::DeleteRule(rule_id) => {
+            // Insert the RuleId into the deleted set so compile_pending
+            // injects an `enabled = false` UserRule for any variant.
+            // Spec v0.6.2 §3.3.
+            let rule_id = rule_id.clone();
+            let name = rule_id_display_name(&rule_id);
+            app.edits.deleted.insert(rule_id);
+            app.preview.debouncer.mark_edit();
+            app.toast = Some(crate::config_tui::app::Toast::ok(format!(
+                "Deleted '{name}' — save to persist"
+            )));
         }
-        ConfirmAction::ResetUserOverride(name) => {
-            let removed = app
-                .edits
-                .rules
-                .remove(&crate::config_tui::edit::RuleId::UserConfig(name.clone()))
-                .is_some();
-            let msg = if removed {
-                format!("Reset '{name}' to built-in (override discarded)")
-            } else {
-                format!("No staged override of '{name}' to reset")
-            };
-            app.toast = Some(crate::config_tui::app::Toast::ok(msg));
+        ConfirmAction::ResetOverride(rule_id) => {
+            // Clear all three edit maps (rules + deleted) for this
+            // RuleId. Spec v0.6.2 §3.3.
+            let rule_id = rule_id.clone();
+            let name = rule_id_display_name(&rule_id);
+            app.edits.rules.remove(&rule_id);
+            app.edits.deleted.remove(&rule_id);
+            app.preview.debouncer.mark_edit();
+            app.toast = Some(crate::config_tui::app::Toast::ok(format!(
+                "Reset '{name}' — all staged overrides cleared"
+            )));
         }
         ConfirmAction::DiscardEditsAndReload => match reload_snapshot_inline(app) {
             Ok(()) => {
@@ -599,6 +595,17 @@ pub(crate) fn apply_pending_and_recompile(app: &mut App) {
 /// Mirrors `SaveDiffOutcome::DiscardAndReload` semantics from
 /// `handle_save_diff_key`: all precedence-chain inputs (theme / profile /
 /// CLI flags) flow through `ConfigSnapshot::read_from_disk` — reload does
+/// Extract a human-readable rule name from a [`RuleId`] for use in toast
+/// messages. Returns just the rule name component (not the profile prefix).
+fn rule_id_display_name(rule_id: &crate::config_tui::edit::RuleId) -> String {
+    match rule_id {
+        crate::config_tui::edit::RuleId::Builtin(n) => (*n).to_owned(),
+        crate::config_tui::edit::RuleId::UserConfig(n) => n.clone(),
+        crate::config_tui::edit::RuleId::Embedded { rule, .. }
+        | crate::config_tui::edit::RuleId::DiskProfile { rule, .. } => rule.clone(),
+    }
+}
+
 /// not introduce `app.edits` as a new precedence input. Memory
 /// `feedback_reload_precedence_snapshot`.
 fn reload_snapshot_inline(app: &mut App) -> Result<(), crate::error::Error> {

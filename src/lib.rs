@@ -510,13 +510,14 @@ pub mod __test_api {
     }
 
     /// True iff a `Modal::Confirm` is currently open with a
-    /// `DeleteUserRule` action (any rule name).
+    /// `DeleteRule` action (any `RuleId`). Renamed from
+    /// `is_delete_user_rule_confirm_modal_open` in v0.6.2 §3.3.
     #[must_use]
-    pub fn is_delete_user_rule_confirm_modal_open(app: &AppHandle) -> bool {
+    pub fn is_delete_rule_confirm_modal_open(app: &AppHandle) -> bool {
         matches!(
             app.0.modal,
             Some(crate::config_tui::app::Modal::Confirm {
-                action: crate::config_tui::app::ConfirmAction::DeleteUserRule(_),
+                action: crate::config_tui::app::ConfirmAction::DeleteRule(_),
                 ..
             })
         )
@@ -767,6 +768,89 @@ pub mod __test_api {
         let Some(re) = app.0.edits.rules.get(&rule_id) else { return (None, None, None) };
         let Some(ns) = re.styles.get(&StyleKey::Default) else { return (None, None, None) };
         (ns.bold, ns.italic, ns.underline)
+    }
+
+    // -----------------------------------------------------------------------
+    // G4: RuleId 4-variant delete + ResetOverride rename helpers.
+    // Spec v0.6.2 §3.3.
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // G4: RuleId 4-variant delete + ResetOverride helpers.
+    // All helpers use concrete primitives (&'static str / String) so that
+    // `RuleId` (which is `pub(crate)`) does not need to appear in a `pub`
+    // function signature. Spec v0.6.2 §3.3.
+    // -----------------------------------------------------------------------
+
+    /// Stage a `RuleId::Builtin(name)` delete in `app.edits.deleted`.
+    pub fn stage_delete_builtin(app: &mut AppHandle, name: &'static str) {
+        use crate::config_tui::edit::RuleId;
+        app.0.edits.deleted.insert(RuleId::Builtin(name));
+    }
+
+    /// Stage a `RuleId::UserConfig(name)` delete in `app.edits.deleted`.
+    pub fn stage_delete_user_config(app: &mut AppHandle, name: &str) {
+        use crate::config_tui::edit::RuleId;
+        app.0.edits.deleted.insert(RuleId::UserConfig(name.to_owned()));
+    }
+
+    /// Stage a `RuleId::Embedded { profile, rule }` delete.
+    pub fn stage_delete_embedded(app: &mut AppHandle, profile: &'static str, rule: &str) {
+        use crate::config_tui::edit::RuleId;
+        app.0.edits.deleted.insert(RuleId::Embedded { profile, rule: rule.to_owned() });
+    }
+
+    /// Stage a `RuleId::DiskProfile { profile, rule }` delete.
+    pub fn stage_delete_disk_profile(app: &mut AppHandle, profile: &str, rule: &str) {
+        use crate::config_tui::edit::RuleId;
+        app.0
+            .edits
+            .deleted
+            .insert(RuleId::DiskProfile { profile: profile.to_owned(), rule: rule.to_owned() });
+    }
+
+    /// Run `compile_pending` and return the pattern strings of all compiled
+    /// individuals. Allows tests to assert rule presence/absence without
+    /// exposing `Compiled` (which is `pub(crate)`).
+    ///
+    /// # Panics
+    /// Panics if `compile_pending` returns an error (test convenience).
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn compile_pending_individual_patterns(app: &AppHandle) -> Vec<String> {
+        let theme = app.0.snapshot.parsed.theme.as_deref();
+        let profile = app.0.snapshot.parsed.profile.as_deref();
+        let compiled = crate::config_tui::compile_pending::compile_pending(
+            &app.0.snapshot,
+            &app.0.edits,
+            theme,
+            profile,
+        )
+        .expect("compile_pending_individual_patterns: unexpected compile error");
+        compiled.individuals.iter().map(|r| r.as_str().to_owned()).collect()
+    }
+
+    /// True iff `edits.deleted` contains a `RuleId::Builtin(name)` entry.
+    #[must_use]
+    pub fn edits_deleted_has_builtin(app: &AppHandle, name: &'static str) -> bool {
+        use crate::config_tui::edit::RuleId;
+        app.0.edits.deleted.contains(&RuleId::Builtin(name))
+    }
+
+    /// True iff `edits.rules` contains a `RuleId::Builtin(name)` entry.
+    #[must_use]
+    pub fn edits_rules_has_builtin(app: &AppHandle, name: &'static str) -> bool {
+        use crate::config_tui::edit::RuleId;
+        app.0.edits.rules.contains_key(&RuleId::Builtin(name))
+    }
+
+    /// Apply a reset-override for a `RuleId::Builtin(name)`: clears both
+    /// `edits.rules[Builtin(name)]` and `edits.deleted[Builtin(name)]`.
+    pub fn apply_reset_override_builtin(app: &mut AppHandle, name: &'static str) {
+        use crate::config_tui::edit::RuleId;
+        let rid = RuleId::Builtin(name);
+        app.0.edits.rules.remove(&rid);
+        app.0.edits.deleted.remove(&rid);
     }
 }
 

@@ -151,10 +151,63 @@ pub(crate) fn compile_pending(
         }
     }
 
-    // 3. Apply deletions (UserConfig variant only — non-UserConfig
-    //    variants name builtins/embedded/disk-profile rules that don't
-    //    appear in `user_rules` and so naturally no-op here).
-    user_rules.retain(|r| !edits.deleted.contains(&RuleId::UserConfig(r.name.clone())));
+    // 3. Apply deletions for all 4 RuleId variants. Spec v0.6.2 §3.3.
+    //
+    // `UserConfig` entries live in `user_rules` directly — drop them with
+    // `retain`. Builtin / Embedded / DiskProfile rules are injected by
+    // `compile_from_config` downstream and are NOT present in `user_rules`;
+    // we suppress them by pushing an `enabled = false` UserRule whose name
+    // matches the target, which causes `apply_user_rules_with_source` in
+    // rules.rs to skip the rule during the canonical merge step.
+    //
+    // `enabled = false` semantics are established in rules.rs §5 (see
+    // `load_with_all_builtins_disabled_yields_passthrough` test) and are
+    // guaranteed to work for any variant name present in the canonical
+    // rules vec (built-ins + profile.append_rules).
+    for rule_id in &edits.deleted {
+        match rule_id {
+            RuleId::UserConfig(name) => {
+                user_rules.retain(|r| r.name != name.as_str());
+            }
+            RuleId::Builtin(name) => {
+                // Suppress a builtin by injecting `enabled = false` so the
+                // canonical apply_user_rules_with_source path removes it.
+                // Only inject if no existing user_rules entry already covers
+                // this name (avoid duplicate-seen rejection inside
+                // `apply_user_rules_with_source`).
+                let name: &str = name;
+                if let Some(r) = user_rules.iter_mut().find(|r| r.name == name) {
+                    r.enabled = false;
+                } else {
+                    user_rules.push(crate::config::UserRule {
+                        name: name.to_owned(),
+                        pattern: None,
+                        style: None,
+                        enabled: false,
+                        styles: None,
+                        priority: None,
+                    });
+                }
+            }
+            RuleId::Embedded { rule: name, .. } | RuleId::DiskProfile { rule: name, .. } => {
+                // Same `enabled = false` suppression for embedded / disk-profile
+                // rules. Both have `rule: String`, so they share this arm.
+                let name: &str = name.as_str();
+                if let Some(r) = user_rules.iter_mut().find(|r| r.name == name) {
+                    r.enabled = false;
+                } else {
+                    user_rules.push(crate::config::UserRule {
+                        name: name.to_owned(),
+                        pattern: None,
+                        style: None,
+                        enabled: false,
+                        styles: None,
+                        priority: None,
+                    });
+                }
+            }
+        }
+    }
 
     // 4. ReDoS-guard each added pattern, then push as a UserRule.
     for new_rule in &edits.added {

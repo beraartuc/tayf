@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use crate::config_tui::edit::PendingEdits;
+use crate::config_tui::edit::{PendingEdits, RuleId};
 use crate::config_tui::snapshot::ConfigSnapshot;
 
 /// Which top-level tab is focused.
@@ -150,8 +150,14 @@ pub(crate) enum ConfirmAction {
     /// `app.edits.is_dirty()`. Reloads the snapshot from disk and
     /// clears staged edits. Spec v0.6.1 §3.3.
     DiscardEditsAndReload,
-    DeleteUserRule(String),
-    ResetUserOverride(String),
+    /// Delete a rule by its full `RuleId` (R-I3 + T-I8: payload widens
+    /// `String` → `RuleId`). Wired from the `'d'` / `Delete` keystroke on
+    /// the Patterns tab; confirmed by `apply_confirm` which inserts into
+    /// `PendingEdits::deleted`. Spec v0.6.2 §3.3.
+    DeleteRule(RuleId),
+    /// Reset all staged overrides (style + regex + delete) for a rule.
+    /// Symmetric with `DeleteRule`. Spec v0.6.2 §3.3.
+    ResetOverride(RuleId),
     /// First-run init-from-dump path — opened by `Shift+D` when the
     /// bound config path does not yet exist. Writes the built-in
     /// default config and reloads the snapshot. Spec v0.6.1 §3.3.

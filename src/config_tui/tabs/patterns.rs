@@ -102,18 +102,25 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('d') | KeyCode::Delete => {
+            // Patterns tab currently renders builtins-only; every entry in
+            // `filtered` is a &'static str from BUILTIN_NAMES, so
+            // RuleId::Builtin is the correct payload. v0.6.2 §3.3.
             if let Some(name) = filtered.get(app.focus.patterns.selected_idx) {
+                let rule_id = crate::config_tui::edit::RuleId::Builtin(name);
                 app.modal = Some(Modal::Confirm {
-                    msg: format!("Delete user-config rule '{name}'? (built-in fallback restored)"),
-                    action: ConfirmAction::DeleteUserRule((*name).to_owned()),
+                    msg: format!("Delete rule '{name}'? (staged for removal on save)"),
+                    action: ConfirmAction::DeleteRule(rule_id),
                 });
             }
         }
         KeyCode::Char('r') => {
+            // Symmetric with 'd': reset all staged overrides for the
+            // selected builtin. v0.6.2 §3.3.
             if let Some(name) = filtered.get(app.focus.patterns.selected_idx) {
+                let rule_id = crate::config_tui::edit::RuleId::Builtin(name);
                 app.modal = Some(Modal::Confirm {
-                    msg: format!("Reset user override of '{name}'? (re-enables built-in)"),
-                    action: ConfirmAction::ResetUserOverride((*name).to_owned()),
+                    msg: format!("Reset all staged overrides of '{name}'?"),
+                    action: ConfirmAction::ResetOverride(rule_id),
                 });
             }
         }
