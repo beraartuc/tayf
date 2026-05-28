@@ -2,8 +2,8 @@
 //!
 //! Vim navigation (§12.2). `o` override built-in into user-config;
 //! `d` delete user-config rule (confirm modal); `r` reset user
-//! override (confirm modal); `n` new pattern modal placeholder
-//! (full new-pattern editor lands in v0.6+).
+//! override (confirm modal); `n` opens the 3-phase `Modal::NewPattern`
+//! wizard (v0.6 D2).
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -108,9 +108,11 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 });
             }
         }
-        KeyCode::Char('n') => {
-            app.toast =
-                Some(crate::config_tui::app::Toast::warn("new-pattern editor lands in v0.6+"));
+        KeyCode::Char('n') if app.modal.is_none() => {
+            app.modal = Some(crate::config_tui::app::Modal::NewPattern {
+                phase: crate::config_tui::app::NewPatternPhase::Name,
+                draft: crate::config_tui::app::PatternDraft::new(),
+            });
         }
         KeyCode::Char('c') if app.modal.is_none() => {
             app.modal = Some(Modal::ColorPicker(

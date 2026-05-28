@@ -80,7 +80,10 @@ pub(crate) struct StatusFocus {
 /// declared here so `dispatch_key` can pattern-match them.
 #[derive(Debug)]
 pub(crate) enum Modal {
-    Confirm { msg: String, action: ConfirmAction },
+    Confirm {
+        msg: String,
+        action: ConfirmAction,
+    },
     Error(String),
     QuitWithUnsavedEdits,
     ColorPicker(crate::config_tui::widgets::color_picker::ColorPickerState),
@@ -88,6 +91,57 @@ pub(crate) enum Modal {
     FullPreview,
     Search,
     SampleSet,
+    NewPattern {
+        phase: NewPatternPhase,
+        draft: PatternDraft,
+    },
+    // reason: v0.6 Group 7 wires `e` keystroke → `Modal::EditRegex`; declared
+    // here so events.rs dispatch + widgets/mod.rs render stay exhaustive.
+    #[allow(dead_code)]
+    EditRegex {
+        rule_id: crate::config_tui::edit::RuleId,
+        buffer: String,
+        error: Option<String>,
+    },
+    // reason: v0.6 Group 8 wires `?` / F1 → `Modal::Help`; declared here so
+    // events.rs dispatch + widgets/mod.rs render stay exhaustive.
+    #[allow(dead_code)]
+    Help,
+}
+
+/// 3-phase wizard state for the `n` keystroke new-pattern modal
+/// (spec §12.4 D2). Each phase owns a distinct input surface:
+/// `Name` and `Regex` write to the draft text buffers; `Style`
+/// delegates to the embedded `ColorPickerState`.
+#[derive(Debug)]
+pub(crate) enum NewPatternPhase {
+    Name,
+    Regex,
+    Style,
+}
+
+/// Mutable draft accumulator for `Modal::NewPattern`. Lives inside
+/// the modal variant so Esc back-paths preserve in-progress input
+/// (TUI reviewer I4 fold — phase-aware back-out without data loss).
+#[derive(Debug)]
+pub(crate) struct PatternDraft {
+    pub(crate) name: String,
+    pub(crate) pattern: String,
+    pub(crate) pattern_error: Option<String>,
+    pub(crate) picker_state: crate::config_tui::widgets::color_picker::ColorPickerState,
+    pub(crate) draft_style: crate::config_tui::edit::NewStyle,
+}
+
+impl PatternDraft {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: String::new(),
+            pattern: String::new(),
+            pattern_error: None,
+            picker_state: crate::config_tui::widgets::color_picker::ColorPickerState::default(),
+            draft_style: crate::config_tui::edit::NewStyle::default(),
+        }
+    }
 }
 
 #[derive(Debug)]

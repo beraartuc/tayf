@@ -9,12 +9,17 @@ use ratatui::Frame;
 use crate::config_tui::app::{App, Modal};
 
 pub(crate) mod color_picker;
+pub(crate) mod new_pattern;
 pub(crate) mod preview;
 pub(crate) mod sample_set;
 pub(crate) mod save_diff;
 pub(crate) mod search;
 
 /// Render the active modal as an overlay over the centered area.
+// reason: `EditRegex` and `Help` carry empty bodies as forward-pointers
+// to Groups 7+8; merging them with `|` would erase the per-variant TODO
+// comments that flag where each renderer wires in.
+#[allow(clippy::match_same_arms)]
 pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
     let Some(modal) = &app.modal else {
         return;
@@ -36,6 +41,15 @@ pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
             if let Some(state) = app.sample_set_state.as_ref() {
                 sample_set::render(frame, area, state);
             }
+        }
+        Modal::NewPattern { phase, draft } => {
+            new_pattern::render(frame, area, phase, draft);
+        }
+        Modal::EditRegex { .. } => {
+            // Group 7 will wire widgets::edit_regex::render.
+        }
+        Modal::Help => {
+            // Group 8 will wire widgets::help::render.
         }
     }
 }

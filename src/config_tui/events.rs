@@ -104,6 +104,9 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             Modal::SaveDiff => handle_save_diff_key(app, k),
             Modal::Search => handle_search_key(app, k),
             Modal::SampleSet => handle_sample_set_key(app, k),
+            Modal::NewPattern { .. } => handle_new_pattern_key(app, k),
+            Modal::EditRegex { .. } => handle_edit_regex_key(app, k),
+            Modal::Help => handle_help_key(app, k),
             Modal::FullPreview => {
                 // Shift+P overlay; only Esc dismisses (handled above).
             }
@@ -246,6 +249,25 @@ fn handle_esc(app: &mut App) {
         if state.goto_buf.take().is_some() {
             return;
         }
+    }
+    // Tier 1b: NewPattern phase-aware back-out (TUI reviewer I4 fold —
+    // Esc rewinds through Style → Regex → Name, only closing the modal
+    // on Esc from the Name phase. Draft buffers are preserved across
+    // back-steps so an accidental rewind doesn't lose input.
+    if let Some(Modal::NewPattern { phase, .. }) = app.modal.as_mut() {
+        use crate::config_tui::app::NewPatternPhase;
+        match phase {
+            NewPatternPhase::Name => {
+                app.modal = None;
+            }
+            NewPatternPhase::Regex => {
+                *phase = NewPatternPhase::Name;
+            }
+            NewPatternPhase::Style => {
+                *phase = NewPatternPhase::Regex;
+            }
+        }
+        return;
     }
     // Tier 2: close modal. Drop side-channels alongside so the
     // `side_channel.is_some() ↔ modal == Some(MatchingVariant)`
@@ -520,6 +542,155 @@ fn handle_sample_set_key(app: &mut App, k: KeyEvent) {
     }
 }
 
+/// `Modal::NewPattern` 3-phase wizard dispatch (spec §12.4 D2).
+///
+/// Phase transitions:
+/// - `Name → Regex`  on Enter when `validate_pattern_name` passes.
+/// - `Regex → Style` on Enter when `validate_pattern_regex` compiles.
+/// - `Style → commit` on `ColorPickerOutcome::Accept` OR Enter; commits the
+///   draft into `edits.added` and triggers `apply_pending_and_recompile`.
+///
+/// Esc back-out is handled by `handle_esc` (tier 1b) before dispatch reaches
+/// this function, so Esc is not handled here.
+fn handle_new_pattern_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::app::{Modal, NewPatternPhase};
+
+    // Enter: phase transition or commit.
+    if matches!(k.code, KeyCode::Enter) {
+        let Some(Modal::NewPattern { phase, draft }) = app.modal.as_mut() else {
+            return;
+        };
+        match phase {
+            NewPatternPhase::Name => {
+                if validate_pattern_name(&draft.name).is_ok() {
+                    *phase = NewPatternPhase::Regex;
+                }
+            }
+            NewPatternPhase::Regex => match validate_pattern_regex(&draft.pattern) {
+                Ok(()) => {
+                    draft.pattern_error = None;
+                    *phase = NewPatternPhase::Style;
+                }
+                Err(e) => {
+                    draft.pattern_error = Some(e);
+                }
+            },
+            NewPatternPhase::Style => {
+                // Enter in the style phase accepts the picker's current selection.
+                if let Some(color) = draft.picker_state.selected_color() {
+                    draft.draft_style.fg = Some(Some(color));
+                }
+                commit_new_pattern_draft(app);
+            }
+        }
+        return;
+    }
+
+    // Per-phase text input / picker delegation.
+    let Some(Modal::NewPattern { phase, draft }) = app.modal.as_mut() else {
+        return;
+    };
+    match phase {
+        NewPatternPhase::Name => {
+            handle_text_input(&mut draft.name, k, 64);
+        }
+        NewPatternPhase::Regex => {
+            handle_text_input(&mut draft.pattern, k, 4096);
+            // Live syntax check; commit-time recompile still runs on advance.
+            draft.pattern_error = validate_pattern_regex(&draft.pattern).err();
+        }
+        NewPatternPhase::Style => {
+            let outcome =
+                crate::config_tui::widgets::color_picker::dispatch_key(&mut draft.picker_state, k);
+            match outcome {
+                crate::config_tui::widgets::color_picker::ColorPickerOutcome::Accept => {
+                    if let Some(color) = draft.picker_state.selected_color() {
+                        draft.draft_style.fg = Some(Some(color));
+                    }
+                    commit_new_pattern_draft(app);
+                }
+                crate::config_tui::widgets::color_picker::ColorPickerOutcome::Cancel => {
+                    *phase = NewPatternPhase::Regex;
+                }
+                crate::config_tui::widgets::color_picker::ColorPickerOutcome::StayOpen => {}
+            }
+        }
+    }
+}
+
+/// Identifier rules for new-pattern names: non-empty, ≤ 64 chars,
+/// `[A-Za-z0-9_-]+`. Mirrors the user-config `[[rules]].name` schema.
+fn validate_pattern_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("name required".into());
+    }
+    if name.len() > 64 {
+        return Err("name too long (max 64)".into());
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("name must be [A-Za-z0-9_-]+".into());
+    }
+    Ok(())
+}
+
+/// Inline regex syntax/size validation. Mirrors the canonical
+/// `REGEX_SIZE_LIMIT_BYTES = 1 << 20` from `src/rules.rs:15` so a draft that
+/// passes here will also pass the v0.5 compile path. Inlined to avoid
+/// widening `rules.rs` visibility (same pattern as `compile_pending.rs`).
+fn validate_pattern_regex(pattern: &str) -> Result<(), String> {
+    const REGEX_SIZE_LIMIT_BYTES: usize = 1 << 20;
+    if pattern.is_empty() {
+        return Err("pattern required".into());
+    }
+    regex::bytes::RegexBuilder::new(pattern)
+        .size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .dfa_size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .build()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Commit the draft as a `NewRule` into `edits.added`, close the modal,
+/// trigger a preview recompile, and surface a confirmation toast.
+fn commit_new_pattern_draft(app: &mut App) {
+    use crate::config_tui::app::Modal;
+    let Some(Modal::NewPattern { draft, .. }) = app.modal.take() else {
+        return;
+    };
+    let new_rule = crate::config_tui::edit::NewRule {
+        name: draft.name,
+        pattern: draft.pattern,
+        style: draft.draft_style,
+    };
+    app.edits.added.push(new_rule);
+    apply_pending_and_recompile(app);
+    app.toast = Some(crate::config_tui::app::Toast::ok("new pattern added"));
+}
+
+/// Plain text-input buffer mutation for the Name/Regex phases. Backspace
+/// pops, printable chars push (up to `max_len`); every other key is ignored.
+fn handle_text_input(buf: &mut String, k: KeyEvent, max_len: usize) {
+    match k.code {
+        KeyCode::Char(c) if buf.len() < max_len => buf.push(c),
+        KeyCode::Backspace => {
+            buf.pop();
+        }
+        _ => {}
+    }
+}
+
+/// `Modal::EditRegex` key dispatch — Group 7 will replace this stub with the
+/// inline editor implementation. Until then any key closes the modal.
+fn handle_edit_regex_key(app: &mut App, _k: KeyEvent) {
+    app.modal = None;
+}
+
+/// `Modal::Help` key dispatch — Group 8 will wire the help overlay. Stub
+/// closes the modal so the dispatch arm stays exhaustive.
+fn handle_help_key(app: &mut App, _k: KeyEvent) {
+    app.modal = None;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +835,51 @@ mod tests {
             !app.preview.debouncer.should_recompile(),
             "spec §9.2 forbids debouncer trigger on sample-input change"
         );
+    }
+
+    #[test]
+    fn new_pattern_modal_name_phase_validates_alphanumeric_and_hyphen() {
+        assert_eq!(validate_pattern_name(""), Err("name required".to_owned()));
+        assert_eq!(validate_pattern_name("valid_name"), Ok(()));
+        assert_eq!(validate_pattern_name("with-hyphen"), Ok(()));
+        assert_eq!(
+            validate_pattern_name("invalid space"),
+            Err("name must be [A-Za-z0-9_-]+".to_owned()),
+        );
+        assert_eq!(
+            validate_pattern_name(&"x".repeat(65)),
+            Err("name too long (max 64)".to_owned()),
+        );
+    }
+
+    #[test]
+    fn new_pattern_modal_regex_phase_validates_inline_with_size_limit() {
+        assert_eq!(validate_pattern_regex(""), Err("pattern required".to_owned()));
+        assert_eq!(validate_pattern_regex(r"\bfoo\b"), Ok(()));
+        assert!(
+            validate_pattern_regex("[unbalanced").is_err(),
+            "unbalanced character class must fail to compile"
+        );
+    }
+
+    #[test]
+    fn new_pattern_modal_commit_appends_added_new_rule() {
+        use crate::config_tui::app::{Modal, NewPatternPhase, PatternDraft};
+        let snapshot = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snapshot);
+        let mut draft = PatternDraft::new();
+        draft.name = "test_rule".to_owned();
+        draft.pattern = r"\bX\b".to_owned();
+        draft.draft_style = crate::config_tui::edit::NewStyle {
+            fg: Some(Some(crate::style::Color::Cyan)),
+            ..Default::default()
+        };
+        app.modal = Some(Modal::NewPattern { phase: NewPatternPhase::Style, draft });
+        commit_new_pattern_draft(&mut app);
+        assert_eq!(app.edits.added.len(), 1);
+        assert_eq!(app.edits.added[0].name, "test_rule");
+        assert_eq!(app.edits.added[0].pattern, r"\bX\b");
+        assert_eq!(app.edits.added[0].style.fg, Some(Some(crate::style::Color::Cyan)));
+        assert!(app.modal.is_none(), "commit must close the modal");
     }
 }
