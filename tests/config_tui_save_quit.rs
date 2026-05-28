@@ -72,7 +72,7 @@ fn save_close_modal_n_resets_pending_save_and_quit_flag() {
 ///
 /// G2 spec §3.8: Esc-tier-2 SaveDiff close MUST reset `pending_save_and_quit`.
 #[test]
-fn save_esc_on_save_diff_resets_pending_save_and_quit_flag() {
+fn save_esc_on_clean_resets_pending_save_and_quit_flag() {
     let mut app = boot_app_with_sample("hello world");
     make_pending_edit(&mut app);
     send_q(&mut app);
@@ -82,6 +82,70 @@ fn save_esc_on_save_diff_resets_pending_save_and_quit_flag() {
     send_esc(&mut app); // Esc tier-2 closes SaveDiff
     assert!(!pending_save_and_quit(&app), "Esc on SaveDiff must reset pending_save_and_quit flag");
     assert!(!should_quit(&app), "Esc must not trigger quit");
+}
+
+/// Enumeration test: every non-commit `SaveDiff` exit path MUST reset
+/// `pending_save_and_quit`. Covers the 3 paths reachable without Conflict
+/// state in a single assertion sweep:
+///
+/// * Path 1 — `CloseModal` (`n` on Clean SaveDiff)
+/// * Path 3 — SaveDiff Esc tier-2 (`handle_esc` → `Modal::SaveDiff` branch)
+/// * Path 4 — commit-error (`y` when `source_path` is `None` → `Err`)
+///
+/// Path 2 (`DiscardAndReload`, reachable only via `ConflictDiscardConfirm`)
+/// requires a disk file with a hash mismatch to enter Conflict state; it is
+/// out-of-scope for this integration test. The reset at
+/// `events.rs:SaveDiffOutcome::DiscardAndReload` is the direct enforcement.
+///
+/// Pinned by the doc-comment on `App::pending_save_and_quit` in `app.rs`.
+#[test]
+fn test_pending_save_and_quit_resets_on_every_non_commit_exit() {
+    // Path 1: CloseModal (n on Clean SaveDiff)
+    {
+        let mut app = boot_app_with_sample("hello world");
+        make_pending_edit(&mut app);
+        send_q(&mut app);
+        send_char(&mut app, 's');
+        assert!(pending_save_and_quit(&app), "path 1 precondition: flag set after s");
+        send_char(&mut app, 'n');
+        assert!(
+            !pending_save_and_quit(&app),
+            "path 1: CloseModal (n on Clean) must reset pending_save_and_quit"
+        );
+        assert!(!should_quit(&app), "path 1: n must not trigger quit");
+    }
+
+    // Path 3: SaveDiff Esc tier-2 (handle_esc → Modal::SaveDiff branch)
+    {
+        let mut app = boot_app_with_sample("hello world");
+        make_pending_edit(&mut app);
+        send_q(&mut app);
+        send_char(&mut app, 's');
+        assert!(pending_save_and_quit(&app), "path 3 precondition: flag set after s");
+        send_esc(&mut app);
+        assert!(
+            !pending_save_and_quit(&app),
+            "path 3: SaveDiff Esc tier-2 must reset pending_save_and_quit"
+        );
+        assert!(!should_quit(&app), "path 3: Esc must not trigger quit");
+    }
+
+    // Path 4: commit-error (source_path is None → commit_save returns Err)
+    // boot_app_with_sample produces source_path = None; 'y' on Clean triggers
+    // commit_save which immediately errors, hitting the Err reset branch.
+    {
+        let mut app = boot_app_with_sample("hello world");
+        make_pending_edit(&mut app);
+        send_q(&mut app);
+        send_char(&mut app, 's');
+        assert!(pending_save_and_quit(&app), "path 4 precondition: flag set after s");
+        send_char(&mut app, 'y'); // triggers commit_save → Err → resets flag
+        assert!(
+            !pending_save_and_quit(&app),
+            "path 4: commit-error branch must reset pending_save_and_quit"
+        );
+        assert!(!should_quit(&app), "path 4: save error must not trigger quit");
+    }
 }
 
 /// Confirm the help modal lists the save-then-quit binding.
