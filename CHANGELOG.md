@@ -4,6 +4,87 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-05-28
+
+### Added
+- **Builtin / Embedded / DiskProfile rule overlay routing** in
+  `compile_pending`. ColorPicker now updates the live preview for ALL
+  rule sources, not just user-config (v0.6 limitation closed). Strategy
+  is dedupe-then-mutate-or-push: if `user_rules` already contains an
+  entry with the same name (e.g., snapshot's `[[rules]]` override of a
+  builtin), mutate in place; otherwise push a synth `UserRule` that the
+  canonical `apply_user_rules_with_source` (`src/rules.rs` zero touch)
+  will name-match against builtins + theme + profile.append_rules and
+  apply in place there. (Group A — 8e91bc0.)
+- **`Ctrl+R` keystroke:** reload config from disk. With pending edits,
+  opens a Discard-and-Reload confirm modal; with a clean state,
+  reloads directly. (Group B — 828b030.)
+- **`Shift+D` keystroke:** write the built-in default config to a
+  missing bound path. Opens an InitFromDump confirm modal first; warns
+  if the config file already exists. (Group B.)
+- **`V` keystroke:** alias for `Shift+P` (full preview overlay).
+  (Group B.)
+- **`Delete` keystroke:** alias for `d` in the Patterns tab — both
+  open the same DeleteUserRule confirm modal. (Group C — cc9826f.)
+- **Search filter (`/`)** now actually hides non-matching entries on
+  Patterns / Themes / Profiles tabs (was stored but not rendered in
+  v0.6). Filter scope is builtin name catalogs (user-rule render in
+  Patterns tab is deferred to v0.7). (Group D — db904bf.)
+- **Save-diff modal scrolling:** Up/Down advance one line;
+  PageUp/PageDown advance by `PAGE_STEP = 10`; Home/End jump to top /
+  effective end (ratatui's `Paragraph::scroll` clamps the over-scroll
+  at content-end). (Group D.)
+- **New module:** `src/config_tui/search.rs` exposes a generic
+  `filter_names_lowercase` helper used by all three list tabs.
+  (Group D.)
+
+### Fixed
+- **`apply_confirm` for `DiscardEditsAndReload` and `InitFromDump`**
+  no longer prints the "lands in v0.5.5+" placeholder toast — both
+  flows are fully implemented. (Group B.)
+- **`tests/common/tui_harness.rs::find_text`** now documents its
+  ASCII-only byte-offset assumption (multi-byte UTF-8 cells split
+  across columns; non-ASCII assertion paths must compare
+  `frame.buffer.content[i].symbol` directly). (Group E — 1b55d62.)
+- **v0.6 spec §13 disposition count drift** (`9+17+14=40 fold+4
+  drop=44` → actual `9+18+14=37 fold+4 drop=41`). (Group E.)
+- **Stale `(v0.6+)` forward-pointer comments** refreshed across
+  `src/config_tui/`: sites implemented in v0.6.1 lose the gate;
+  sites still deferred forward-point to `(v0.7+)`. (Group E.)
+
+### Internal
+- `src/rules.rs` **zero touch** — the overlay route reuses the
+  canonical `apply_user_rules_with_source` mechanism (single source of
+  truth, memory `feedback_parallel_call_site_invariant_audit`).
+- `src/{pty,io_loop,tty_guard,signals,runtime,pipeline}.rs` zero
+  touch.
+- 21 new tests across the cycle: 7 Group A lib (overlay matrix), 1
+  Group B lib (reload helper), 4 Group B integration
+  (`tests/integration_tui_apply_confirm.rs`), 1 Group C integration
+  (`tests/integration_tui_delete_alias.rs`), 3 Group D lib
+  (`search.rs::tests`), 5 Group D integration
+  (`tests/integration_tui_polish.rs`). Final lib test count: 700
+  (was 679 at v0.6.0).
+- Ceremony: LEAN per memory `feedback_lean_process_small_subversions`
+  — single release with paralel spec review (Rust + TUI senior) +
+  final cross-cutting opus 4.7 review on the full v0.6.0..v0.6.1
+  diff (mandate `feedback_cross_cutting_review_value` —
+  not skipped in lean cycle).
+
+### Deferred (v0.7+)
+- **bool-axes-clear** `c` keystroke (item 9 from v0.6 §14.2): the
+  ColorPicker axis-row UI does not ship in v0.6, and adding it was
+  out of LEAN budget. Plan-phase review (TUI rev1 B1) explicitly
+  deferred.
+- **Patterns tab user-rule render** — union with builtins so a user's
+  `[[rules]]` entries become visible in the list.
+- `RuleId::Embedded` / `DiskProfile` deletion (only UserConfig
+  deletion is wired in v0.6.1).
+- `mark_edit_clear` debouncer helper (v0.6 §14.2 nice-to-have).
+- `Modal::EditRegex` Esc-cancel debouncer pending state cleanup
+  (v0.6 §14.3 #1).
+- Save-quit single-step (events.rs:412 separate quit flag).
+
 ## [0.6.0] - 2026-05-28
 
 ### Added
