@@ -509,6 +509,19 @@ pub mod __test_api {
         )
     }
 
+    /// True iff a `Modal::Confirm` is currently open with a
+    /// `DeleteUserRule` action (any rule name).
+    #[must_use]
+    pub fn is_delete_user_rule_confirm_modal_open(app: &AppHandle) -> bool {
+        matches!(
+            app.0.modal,
+            Some(crate::config_tui::app::Modal::Confirm {
+                action: crate::config_tui::app::ConfirmAction::DeleteUserRule(_),
+                ..
+            })
+        )
+    }
+
     /// True iff a `Modal::FullPreview` is currently open.
     #[must_use]
     pub fn is_full_preview_modal_open(app: &AppHandle) -> bool {

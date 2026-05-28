@@ -90,7 +90,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 )));
             }
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('d') | KeyCode::Delete => {
             if let Some(name) = app.catalog.builtin_rule_names.get(app.focus.patterns.selected_idx)
             {
                 app.modal = Some(Modal::Confirm {

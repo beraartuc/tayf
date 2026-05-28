@@ -32,6 +32,7 @@ Editing (Patterns tab)
   c                Open color picker for selected rule
   o                Override builtin rule
   r                Reset user override
+  d / Delete       Delete user override (confirm)
 
 Display
   s                Set sample input
