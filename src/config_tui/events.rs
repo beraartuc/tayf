@@ -36,11 +36,13 @@ Editing (Patterns tab)
 Display
   s                Set sample input
   p                Toggle live preview strip
-  Shift+P          Full preview overlay
+  Shift+P / V      Full preview overlay
   / (forward-slash) Search filter
 
 Persistence
   Ctrl+S / Ctrl+W  Save
+  Ctrl+R           Reload from disk (discards edits)
+  Shift+D          Initialize default config (if file missing)
   ? / F1           This help
   Esc              Dismiss modal / cancel edit
   Ctrl+C / q       Quit
@@ -83,6 +85,31 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
     // 1. Ctrl+C is one of two keys that bypass modal-absorbs (§7.2).
     if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
         handle_quit_request(app);
+        return;
+    }
+    // 1b. Ctrl+R reload (v0.6.1 §3.3). When no modal is open: if edits are
+    //     pending, open a Confirm modal; otherwise reload directly. Inside
+    //     a modal the keystroke is absorbed by the modal arm (no-op).
+    if k.code == KeyCode::Char('r') && k.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.modal.is_none() {
+            if app.edits.is_dirty() {
+                app.modal = Some(Modal::Confirm {
+                    msg: "Discard all pending edits and reload from disk?".to_owned(),
+                    action: ConfirmAction::DiscardEditsAndReload,
+                });
+            } else {
+                match reload_snapshot_inline(app) {
+                    Ok(()) => {
+                        app.toast = Some(crate::config_tui::app::Toast::ok("Reloaded from disk."));
+                    }
+                    Err(e) => {
+                        app.toast = Some(crate::config_tui::app::Toast::warn(format!(
+                            "Reload failed: {e}"
+                        )));
+                    }
+                }
+            }
+        }
         return;
     }
     // 2. Esc precedence (§12.1).
@@ -212,7 +239,43 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         (KeyCode::Char('p'), m) if m.is_empty() => {
             app.mini_preview_visible = !app.mini_preview_visible;
         }
-        // Shift+D first-run init (§9.6) lands in v0.5.5+.
+        (KeyCode::Char('D'), _) => {
+            // First-run init dump (v0.6.1 §3.3). Enabled only when the
+            // bound config path does not exist on disk. `KeyCode::Char('D')`
+            // is the canonical SHIFT+d delivery across crossterm backends
+            // (the shift is absorbed into the character on most terminals);
+            // we therefore do not gate on the SHIFT modifier flag.
+            if app.modal.is_none() {
+                let path = app.snapshot.source_path.as_deref();
+                if let Some(p) = path {
+                    if p.exists() {
+                        app.toast = Some(crate::config_tui::app::Toast::warn(
+                            "Init dump only available when config file does not exist",
+                        ));
+                    } else {
+                        app.modal = Some(Modal::Confirm {
+                            msg: format!(
+                                "Initialize {} with the built-in default config?",
+                                p.display()
+                            ),
+                            action: ConfirmAction::InitFromDump,
+                        });
+                    }
+                } else {
+                    app.toast = Some(crate::config_tui::app::Toast::warn(
+                        "Init dump requires a bound config path (none in this session)",
+                    ));
+                }
+            }
+        }
+        (KeyCode::Char('V'), _) => {
+            // V alias for Shift+P (FullPreview). v0.6.1 §3.5.
+            // Like Shift+D, the SHIFT-on-V delivery is implicit in the
+            // uppercase keycode; modifier flags are not gated.
+            if app.modal.is_none() {
+                app.modal = Some(Modal::FullPreview);
+            }
+        }
         _ => {
             crate::config_tui::tabs::dispatch_key(app, k);
         }
@@ -414,10 +477,18 @@ fn apply_confirm(app: &mut App, action: &ConfirmAction) {
             };
             app.toast = Some(crate::config_tui::app::Toast::ok(msg));
         }
-        ConfirmAction::DiscardEditsAndReload | ConfirmAction::InitFromDump => {
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "this action lands in v0.5.5+ (init-from-dump and discard-reload deferred)",
-            ));
+        ConfirmAction::DiscardEditsAndReload => match reload_snapshot_inline(app) {
+            Ok(()) => {
+                app.toast =
+                    Some(crate::config_tui::app::Toast::ok("Reloaded from disk; edits discarded."));
+            }
+            Err(e) => {
+                app.toast =
+                    Some(crate::config_tui::app::Toast::warn(format!("Reload failed: {e}")));
+            }
+        },
+        ConfirmAction::InitFromDump => {
+            apply_init_from_dump(app);
         }
     }
 }
@@ -463,6 +534,54 @@ pub(crate) fn apply_pending_and_recompile(app: &mut App) {
         }
         Err(err) => {
             app.preview.compile_error = Some(err.to_string());
+        }
+    }
+}
+
+/// Reload `app.snapshot` from disk, clear pending edits, and recompile
+/// the live preview. Used by the `Ctrl+R` / `DiscardEditsAndReload` /
+/// `InitFromDump` flows (v0.6.1 §3.3).
+///
+/// Mirrors `SaveDiffOutcome::DiscardAndReload` semantics from
+/// `handle_save_diff_key`: all precedence-chain inputs (theme / profile /
+/// CLI flags) flow through `ConfigSnapshot::read_from_disk` — reload does
+/// not introduce `app.edits` as a new precedence input. Memory
+/// `feedback_reload_precedence_snapshot`.
+fn reload_snapshot_inline(app: &mut App) -> Result<(), crate::error::Error> {
+    let snap = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(
+        app.snapshot.source_path.as_deref(),
+    )?;
+    app.snapshot = snap;
+    app.edits.clear();
+    apply_pending_and_recompile(app);
+    Ok(())
+}
+
+/// Real impl for `ConfirmAction::InitFromDump` (v0.6.1 §3.3). Writes the
+/// built-in default config to `snapshot.source_path` (file must not
+/// already exist — gate enforced at keystroke time in `dispatch_key`'s
+/// `Shift+D` arm) and reloads the snapshot.
+fn apply_init_from_dump(app: &mut App) {
+    let Some(path) = app.snapshot.source_path.clone() else {
+        app.toast = Some(crate::config_tui::app::Toast::warn("Cannot init: no config path bound."));
+        return;
+    };
+    let toml = crate::config_tui::save::default_config_toml();
+    if let Err(e) = crate::config_tui::save::write_atomic_to(&path, &toml) {
+        app.toast = Some(crate::config_tui::app::Toast::warn(format!("Init failed: {e}")));
+        return;
+    }
+    match reload_snapshot_inline(app) {
+        Ok(()) => {
+            app.toast = Some(crate::config_tui::app::Toast::ok(format!(
+                "Initialized {} with defaults.",
+                path.display()
+            )));
+        }
+        Err(e) => {
+            app.toast = Some(crate::config_tui::app::Toast::warn(format!(
+                "Init wrote but reload failed: {e}"
+            )));
         }
     }
 }
@@ -1129,6 +1248,131 @@ mod tests {
     }
 
     #[test]
+    fn reload_snapshot_inline_clears_edits_and_recompiles_preview() {
+        // v0.6.1 §3.3: reload_snapshot_inline is the shared helper for the
+        // Ctrl+R / DiscardEditsAndReload / InitFromDump flows. With a
+        // source_path = None (empty snapshot), read_from_disk returns the
+        // empty-snapshot shape; the assertion focuses on the invariants
+        // that downstream flows depend on (edits cleared + compile_error
+        // not stuck).
+        use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
+        use std::collections::HashMap;
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        // Pre-populate an edit so the clear assertion is meaningful.
+        let mut styles: HashMap<StyleKey, NewStyle> = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
+        );
+        app.edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        assert!(app.edits.is_dirty(), "precondition: edits dirty");
+        reload_snapshot_inline(&mut app).expect("reload empty-snapshot path must succeed");
+        assert!(!app.edits.is_dirty(), "edits cleared after reload");
+        // Recompile ran without a compile_error stuck on the App.
+        assert!(app.preview.compile_error.is_none(), "preview recompile clean");
+    }
+
+    #[test]
+    fn ctrl_r_with_dirty_edits_opens_discard_confirm_modal() {
+        // v0.6.1 §3.3: Ctrl+R when edits are pending must open the
+        // DiscardEditsAndReload Confirm modal (not reload directly).
+        use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
+        use std::collections::HashMap;
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        let mut styles: HashMap<StyleKey, NewStyle> = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
+        );
+        app.edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(
+            matches!(
+                app.modal,
+                Some(Modal::Confirm { action: ConfirmAction::DiscardEditsAndReload, .. })
+            ),
+            "Ctrl+R with dirty edits must open DiscardEditsAndReload Confirm modal",
+        );
+    }
+
+    #[test]
+    fn ctrl_r_with_clean_edits_reloads_directly_without_modal() {
+        // v0.6.1 §3.3: Ctrl+R with no pending edits reloads inline (no
+        // confirm) and surfaces an Ok toast.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        assert!(!app.edits.is_dirty(), "precondition: clean");
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(app.modal.is_none(), "no modal on clean Ctrl+R");
+        let toast = app.toast.as_ref().expect("Ok toast set");
+        assert!(toast.text.contains("Reloaded"), "toast: {}", toast.text);
+    }
+
+    #[test]
+    fn shift_d_with_existing_config_file_warns_via_toast() {
+        // v0.6.1 §3.3: Shift+D refuses to overwrite an existing config —
+        // surfaces a warn toast instead of opening InitFromDump confirm.
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().expect("tmp");
+        file.write_all(b"# existing\n").expect("seed");
+        let path = file.path().to_path_buf();
+        let snap = ConfigSnapshot::read_from_disk(Some(&path)).expect("read");
+        let mut app = App::from_snapshot(snap);
+        dispatch_key(&mut app, mk(KeyCode::Char('D')));
+        assert!(app.modal.is_none(), "no modal when config file exists");
+        let toast = app.toast.as_ref().expect("warn toast set");
+        assert!(
+            toast.text.contains("does not exist"),
+            "expected 'does not exist' guard wording; got: {}",
+            toast.text,
+        );
+    }
+
+    #[test]
+    fn shift_d_with_missing_config_file_opens_init_confirm_modal() {
+        // v0.6.1 §3.3: Shift+D against a bound-but-absent config path
+        // opens the InitFromDump confirm modal.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        assert!(!cfg_path.exists(), "precondition: config absent");
+        let mut snap = ConfigSnapshot::empty();
+        snap.source_path = Some(cfg_path);
+        let mut app = App::from_snapshot(snap);
+        dispatch_key(&mut app, mk(KeyCode::Char('D')));
+        assert!(
+            matches!(app.modal, Some(Modal::Confirm { action: ConfirmAction::InitFromDump, .. })),
+            "Shift+D with missing config must open InitFromDump Confirm modal",
+        );
+    }
+
+    #[test]
+    fn shift_d_with_no_bound_path_warns_via_toast() {
+        // v0.6.1 §3.3: Shift+D on an empty snapshot (source_path = None)
+        // surfaces a warn toast — no Confirm modal.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        dispatch_key(&mut app, mk(KeyCode::Char('D')));
+        assert!(app.modal.is_none(), "no modal when source_path is None");
+        let toast = app.toast.as_ref().expect("warn toast set");
+        assert!(
+            toast.text.contains("bound config path"),
+            "expected 'bound config path' wording; got: {}",
+            toast.text,
+        );
+    }
+
+    #[test]
+    fn v_keystroke_opens_full_preview_modal_as_shift_p_alias() {
+        // v0.6.1 §3.5: V is an alias for Shift+P — both open Modal::FullPreview.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        dispatch_key(&mut app, mk(KeyCode::Char('V')));
+        assert!(matches!(app.modal, Some(Modal::FullPreview)), "V must open Modal::FullPreview");
+    }
+
+    #[test]
     fn help_modal_content_lists_canonical_keybindings_present_in_dispatch() {
         // Drift guard: if a keybinding is added/moved in dispatch_key,
         // HELP_MODAL_CONTENT must be updated in the same commit. These
@@ -1137,7 +1381,13 @@ mod tests {
         assert!(HELP_MODAL_CONTENT.contains("Ctrl+S / Ctrl+W"), "save bindings listed");
         assert!(HELP_MODAL_CONTENT.contains("? / F1"), "help bindings listed");
         assert!(HELP_MODAL_CONTENT.contains("Ctrl+C / q"), "quit bindings listed");
-        assert!(HELP_MODAL_CONTENT.contains("Shift+P"), "full preview overlay listed");
+        assert!(
+            HELP_MODAL_CONTENT.contains("Shift+P / V"),
+            "full preview overlay + V alias listed"
+        );
         assert!(HELP_MODAL_CONTENT.contains("Esc"), "esc listed");
+        // v0.6.1 §3.3: Ctrl+R reload + Shift+D init keybindings pinned.
+        assert!(HELP_MODAL_CONTENT.contains("Ctrl+R"), "Ctrl+R reload listed");
+        assert!(HELP_MODAL_CONTENT.contains("Shift+D"), "Shift+D init listed");
     }
 }

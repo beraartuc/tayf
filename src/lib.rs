@@ -436,6 +436,106 @@ pub mod __test_api {
     pub fn is_new_pattern_modal_open(app: &AppHandle) -> bool {
         matches!(app.0.modal, Some(crate::config_tui::app::Modal::NewPattern { .. }))
     }
+
+    /// Boot a fresh App with an EMPTY snapshot whose `source_path` is
+    /// bound to the caller-provided `cfg_path` (the file does NOT need
+    /// to exist; the `Shift+D` init-from-dump path expects it to be
+    /// absent). v0.6.1 §3.3 integration test helper.
+    #[must_use]
+    pub fn boot_app_with_bound_empty_snapshot(cfg_path: std::path::PathBuf) -> AppHandle {
+        let mut snap = crate::config_tui::snapshot::ConfigSnapshot::empty();
+        snap.source_path = Some(cfg_path);
+        AppHandle(crate::config_tui::app::App::from_snapshot(snap))
+    }
+
+    /// Boot a fresh App by reading the snapshot from `cfg_path` on disk.
+    /// The file MUST exist; use this when the test seeds an existing
+    /// config and expects the "Init dump only available when config file
+    /// does not exist" branch.
+    ///
+    /// # Errors
+    /// Returns any [`crate::error::Error`] surfaced by `read_from_disk`.
+    pub fn boot_app_from_disk_path(
+        cfg_path: &std::path::Path,
+    ) -> Result<AppHandle, crate::error::Error> {
+        let snap = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(cfg_path))?;
+        Ok(AppHandle(crate::config_tui::app::App::from_snapshot(snap)))
+    }
+
+    /// Stage a foreground-color edit on a built-in rule so
+    /// `app.edits.is_dirty()` becomes true. Used by `Ctrl+R` integration
+    /// tests that need a dirty-edits precondition without driving the
+    /// full `ColorPicker` modal path.
+    pub fn stage_builtin_fg_edit(app: &mut AppHandle, builtin_name: &'static str) {
+        use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
+        use std::collections::HashMap;
+        let mut styles: HashMap<StyleKey, NewStyle> = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
+        );
+        app.0.edits.rules.insert(RuleId::Builtin(builtin_name), RuleEdit { pattern: None, styles });
+    }
+
+    /// True iff `app.edits.is_dirty()` (any staged mutation present).
+    #[must_use]
+    pub fn edits_are_dirty(app: &AppHandle) -> bool {
+        app.0.edits.is_dirty()
+    }
+
+    /// True iff a `Modal::Confirm` is currently open with the
+    /// `DiscardEditsAndReload` action.
+    #[must_use]
+    pub fn is_discard_reload_confirm_modal_open(app: &AppHandle) -> bool {
+        matches!(
+            app.0.modal,
+            Some(crate::config_tui::app::Modal::Confirm {
+                action: crate::config_tui::app::ConfirmAction::DiscardEditsAndReload,
+                ..
+            })
+        )
+    }
+
+    /// True iff a `Modal::Confirm` is currently open with the
+    /// `InitFromDump` action.
+    #[must_use]
+    pub fn is_init_from_dump_confirm_modal_open(app: &AppHandle) -> bool {
+        matches!(
+            app.0.modal,
+            Some(crate::config_tui::app::Modal::Confirm {
+                action: crate::config_tui::app::ConfirmAction::InitFromDump,
+                ..
+            })
+        )
+    }
+
+    /// True iff a `Modal::FullPreview` is currently open.
+    #[must_use]
+    pub fn is_full_preview_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::FullPreview))
+    }
+
+    /// Static list of built-in rule names, in canonical order. Mirrors
+    /// `crate::rules::BUILTIN_NAMES` for integration tests that need to
+    /// assert "every shipped builtin is present in X" invariants.
+    #[must_use]
+    pub fn builtin_rule_names() -> &'static [&'static str] {
+        crate::rules::BUILTIN_NAMES
+    }
+
+    /// Returns the current toast text (and `Ok` / `Warn` kind tag) if any.
+    /// Used by integration tests to assert toast contents without
+    /// re-exporting [`crate::config_tui::app::Toast`].
+    #[must_use]
+    pub fn current_toast(app: &AppHandle) -> Option<(String, &'static str)> {
+        app.0.toast.as_ref().map(|t| {
+            let kind = match t.kind {
+                crate::config_tui::app::ToastKind::Ok => "ok",
+                crate::config_tui::app::ToastKind::Warn => "warn",
+            } as &'static str;
+            (t.text.clone(), kind)
+        })
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

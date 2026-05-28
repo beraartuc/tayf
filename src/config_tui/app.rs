@@ -146,15 +146,15 @@ impl PatternDraft {
 
 #[derive(Debug)]
 pub(crate) enum ConfirmAction {
-    // reason: v0.5.5+ "Discard edits and reload" Confirm path; tag declared
-    // here so events.rs apply_confirm pattern-match stays exhaustive.
-    #[allow(dead_code)]
+    /// "Discard edits and reload" path — opened by `Ctrl+R` when
+    /// `app.edits.is_dirty()`. Reloads the snapshot from disk and
+    /// clears staged edits. Spec v0.6.1 §3.3.
     DiscardEditsAndReload,
     DeleteUserRule(String),
     ResetUserOverride(String),
-    // reason: v0.5.5+ Shift+D init-from-dump Confirm path; tag declared
-    // here so events.rs apply_confirm pattern-match stays exhaustive.
-    #[allow(dead_code)]
+    /// First-run init-from-dump path — opened by `Shift+D` when the
+    /// bound config path does not yet exist. Writes the built-in
+    /// default config and reloads the snapshot. Spec v0.6.1 §3.3.
     InitFromDump,
 }
 
