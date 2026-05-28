@@ -46,7 +46,7 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
             Some(r) => format!(
                 "Pattern: {}\n\nSource: built-in\nRegex: {}\nStyle: (default — Edit with 'e' or 'c' for color picker)\n\n\
                  Press 'o' to override (copy into user-config so you can edit)\n\
-                 Press 'e' to edit the regex source (lands in v0.6+ inline editor)\n\
+                 Press 'e' to edit the regex source (inline editor)\n\
                  Press 'c' to open color picker (C4)",
                 r.name, r.pattern,
             ),
@@ -119,10 +119,15 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 crate::config_tui::widgets::color_picker::ColorPickerState::default(),
             ));
         }
-        KeyCode::Char('e') => {
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "inline regex source editor lands in v0.6+",
-            ));
+        KeyCode::Char('e') if app.modal.is_none() => {
+            if let Some(rule_id) = crate::config_tui::events::resolve_selected_rule_id(app) {
+                let current_pattern = crate::config_tui::events::pattern_for_rule_id(&rule_id, app);
+                app.modal = Some(crate::config_tui::app::Modal::EditRegex {
+                    rule_id,
+                    buffer: current_pattern,
+                    error: None,
+                });
+            }
         }
         _ => {}
     }

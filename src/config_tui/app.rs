@@ -95,9 +95,9 @@ pub(crate) enum Modal {
         phase: NewPatternPhase,
         draft: PatternDraft,
     },
-    // reason: v0.6 Group 7 wires `e` keystroke → `Modal::EditRegex`; declared
-    // here so events.rs dispatch + widgets/mod.rs render stay exhaustive.
-    #[allow(dead_code)]
+    /// Inline regex-source editor (spec §12.4 D3). `e` keystroke on the
+    /// Patterns tab; buffer initialized via `events::pattern_for_rule_id`.
+    /// Enter commits to `edits.rules[rule_id].pattern`; Esc cancels.
     EditRegex {
         rule_id: crate::config_tui::edit::RuleId,
         buffer: String,

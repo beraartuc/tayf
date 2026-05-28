@@ -388,10 +388,14 @@ fn apply_confirm(app: &mut App, action: &ConfirmAction) {
     }
 }
 
-/// Debounce tick — fires `recompile_preview` once per quiescent window.
+/// Debounce tick — fires `apply_pending_and_recompile` once per quiescent
+/// window (spec §9.1). The in-progress `EditRegex` buffer is NOT applied
+/// to the compile path until Enter commit — the debounced tick re-runs
+/// against the currently committed `edits.rules` state so the rest of
+/// the preview stays live while the user types.
 pub(crate) fn check_debounce(app: &mut App) {
     if app.preview.debouncer.should_recompile() {
-        recompile_preview(app);
+        apply_pending_and_recompile(app);
     }
 }
 
@@ -486,6 +490,37 @@ pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::e
             }
         }
         _ => None,
+    }
+}
+
+/// Look up the current pattern source for a `RuleId`, applying any
+/// `PendingEdits` overlay. Used by the `e` keystroke to initialize the
+/// `EditRegex` modal buffer. Embedded / disk-profile rule sources are
+/// not catalog-resolved in v0.6 (Patterns tab scope only); they fall
+/// through to the empty-string default.
+pub(crate) fn pattern_for_rule_id(rule_id: &crate::config_tui::edit::RuleId, app: &App) -> String {
+    use crate::config_tui::edit::RuleId;
+    // PendingEdits overlay wins over the on-disk / built-in source.
+    if let Some(edit) = app.edits.rules.get(rule_id) {
+        if let Some(p) = &edit.pattern {
+            return p.clone();
+        }
+    }
+    match rule_id {
+        RuleId::Builtin(name) => crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == *name)
+            .map(|r| r.pattern)
+            .unwrap_or_default(),
+        RuleId::UserConfig(name) => app
+            .snapshot
+            .parsed
+            .rules
+            .iter()
+            .find(|r| &r.name == name)
+            .and_then(|r| r.pattern.clone())
+            .unwrap_or_default(),
+        RuleId::Embedded { .. } | RuleId::DiskProfile { .. } => String::new(),
     }
 }
 
@@ -679,10 +714,47 @@ fn handle_text_input(buf: &mut String, k: KeyEvent, max_len: usize) {
     }
 }
 
-/// `Modal::EditRegex` key dispatch — Group 7 will replace this stub with the
-/// inline editor implementation. Until then any key closes the modal.
-fn handle_edit_regex_key(app: &mut App, _k: KeyEvent) {
-    app.modal = None;
+/// `Modal::EditRegex` key dispatch (spec §12.4 D3).
+///
+/// - Esc: cancel — `PendingEdits` unchanged, modal closes. Defensive only;
+///   the global `handle_esc` tier 2 dismisses the modal before this branch
+///   is reached.
+/// - Enter: validate, write to `edits.rules[rule_id].pattern`, recompile.
+///   On invalid regex the modal stays open with `error` set.
+/// - Other keys: text-buffer edit + live syntax check + debouncer tickle.
+fn handle_edit_regex_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::app::Modal;
+
+    if matches!(k.code, KeyCode::Esc) {
+        app.modal = None;
+        return;
+    }
+
+    if matches!(k.code, KeyCode::Enter) {
+        let Some(Modal::EditRegex { rule_id, buffer, .. }) = app.modal.take() else {
+            return;
+        };
+        match validate_pattern_regex(&buffer) {
+            Ok(()) => {
+                app.edits.rules.entry(rule_id).or_default().pattern = Some(buffer);
+                apply_pending_and_recompile(app);
+                app.toast = Some(crate::config_tui::app::Toast::ok("pattern updated"));
+            }
+            Err(e) => {
+                app.modal = Some(Modal::EditRegex { rule_id, buffer, error: Some(e) });
+            }
+        }
+        return;
+    }
+
+    // Text input + debouncer tickle. The in-progress buffer is NOT applied
+    // to the live preview compile until Enter commits (spec §9.1).
+    let Some(Modal::EditRegex { buffer, error, .. }) = app.modal.as_mut() else {
+        return;
+    };
+    handle_text_input(buffer, k, 4096);
+    *error = validate_pattern_regex(buffer).err();
+    app.preview.debouncer.mark_edit();
 }
 
 /// `Modal::Help` key dispatch — Group 8 will wire the help overlay. Stub
@@ -859,6 +931,78 @@ mod tests {
         assert!(
             validate_pattern_regex("[unbalanced").is_err(),
             "unbalanced character class must fail to compile"
+        );
+    }
+
+    #[test]
+    fn edit_regex_modal_marks_debouncer_on_keystroke() {
+        // D3 (spec §12.4): each keystroke in EditRegex pushes a char into
+        // the buffer and tickles the debouncer so the quiescent-window
+        // timer slides. Without mark_edit the live preview would never
+        // recompile while the user is typing.
+        let snapshot = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snapshot);
+        app.modal = Some(Modal::EditRegex {
+            rule_id: crate::config_tui::edit::RuleId::UserConfig("test".to_owned()),
+            buffer: String::new(),
+            error: None,
+        });
+        let k = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
+        handle_edit_regex_key(&mut app, k);
+        if let Some(Modal::EditRegex { buffer, .. }) = &app.modal {
+            assert_eq!(buffer, "a");
+        } else {
+            panic!("modal still EditRegex");
+        }
+    }
+
+    #[test]
+    fn edit_regex_modal_commit_writes_to_edits_rules_pattern_on_enter() {
+        // D3 commit path: Enter on a valid buffer writes the new pattern
+        // into edits.rules[rule_id].pattern and closes the modal.
+        let snapshot = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snapshot);
+        app.modal = Some(Modal::EditRegex {
+            rule_id: crate::config_tui::edit::RuleId::Builtin("ipv4"),
+            buffer: r"\d+\.\d+".to_owned(),
+            error: None,
+        });
+        let k = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        handle_edit_regex_key(&mut app, k);
+        let edit = app
+            .edits
+            .rules
+            .get(&crate::config_tui::edit::RuleId::Builtin("ipv4"))
+            .expect("rule edit recorded");
+        assert_eq!(edit.pattern.as_deref(), Some(r"\d+\.\d+"));
+        assert!(app.modal.is_none(), "modal closed on successful commit");
+    }
+
+    #[test]
+    fn edit_regex_modal_invalid_pattern_on_enter_reopens_with_error() {
+        // D3 error path: Enter on an invalid buffer reopens the modal
+        // with the error string set; PendingEdits is NOT mutated.
+        let snapshot = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snapshot);
+        app.modal = Some(Modal::EditRegex {
+            rule_id: crate::config_tui::edit::RuleId::UserConfig("test".to_owned()),
+            buffer: "[unbalanced".to_owned(),
+            error: None,
+        });
+        let k = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        handle_edit_regex_key(&mut app, k);
+        if let Some(Modal::EditRegex { error, .. }) = &app.modal {
+            assert!(error.is_some(), "error set after invalid regex commit attempt");
+        } else {
+            panic!("modal should still be EditRegex with error");
+        }
+        assert!(
+            app.edits
+                .rules
+                .get(&crate::config_tui::edit::RuleId::UserConfig("test".to_owned()))
+                .and_then(|e| e.pattern.as_deref())
+                .is_none(),
+            "PendingEdits unchanged on invalid commit",
         );
     }
 
