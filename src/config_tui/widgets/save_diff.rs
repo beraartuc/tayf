@@ -13,7 +13,7 @@ use ratatui::Frame;
 use crate::config_tui::app::App;
 
 // reason: `disk_now` on ConflictMergedPreview is carried through the
-// state machine for v0.6+ merge reconciliation; v0.5.4 commits the
+// state machine for v0.7+ merge reconciliation; v0.5.4 commits the
 // TUI-side content unchanged because build_new_content is still
 // pass-through (save.rs §C1c). Keep the field so the state shape
 // matches the spec §8.4 D flow without a follow-up schema change.
@@ -153,7 +153,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) -> SaveDiffOutcome {
             SaveDiffOutcome::DiscardAndReload(disk_now)
         }
         (SaveDiffState::ConflictDiscardConfirm { .. }, KeyCode::Char('n') | KeyCode::Esc) => {
-            // For v0.5.4 we close the modal in this case. v0.6+ may preserve
+            // For v0.5.4 we close the modal in this case. v0.7+ may preserve
             // and bounce back to ConflictPending with the original diffs.
             SaveDiffOutcome::CloseModal
         }
@@ -192,7 +192,7 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
 ///
 /// Known limitation: the `HashSet` collapses duplicate lines, so removing
 /// one copy of a repeated line (`a\na\nb\n` → `a\nb\n`) shows as "(no
-/// changes)". v0.6+ may upgrade if the display becomes confusing.
+/// changes)". v0.7+ may upgrade if the display becomes confusing.
 fn build_diff(old: &[u8], new: &[u8]) -> String {
     let old_str = String::from_utf8_lossy(old);
     let new_str = String::from_utf8_lossy(new);

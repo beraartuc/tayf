@@ -414,7 +414,7 @@ fn handle_quit_confirm_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('s') => {
             // Save-and-quit: open SaveDiff inline; commit will set
-            // should_quit on success via a separate flag (deferred to v0.6+
+            // should_quit on success via a separate flag (deferred to v0.7+
             // because event-loop reentrancy from here is non-trivial). For
             // v0.5.4 we open SaveDiff and let user commit-then-quit manually.
             app.save_diff = Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
@@ -652,8 +652,8 @@ pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::e
 /// Look up the current pattern source for a `RuleId`, applying any
 /// `PendingEdits` overlay. Used by the `e` keystroke to initialize the
 /// `EditRegex` modal buffer. Embedded / disk-profile rule sources are
-/// not catalog-resolved in v0.6 (Patterns tab scope only); they fall
-/// through to the empty-string default.
+/// not catalog-resolved (v0.7+); they fall through to the empty-string
+/// default.
 pub(crate) fn pattern_for_rule_id(rule_id: &crate::config_tui::edit::RuleId, app: &App) -> String {
     use crate::config_tui::edit::RuleId;
     // PendingEdits overlay wins over the on-disk / built-in source.

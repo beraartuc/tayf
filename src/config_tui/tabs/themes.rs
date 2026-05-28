@@ -93,7 +93,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('o') => {
             app.toast = Some(crate::config_tui::app::Toast::warn(
-                "theme override copy lands in v0.6+ (TUI new-disk-file out of v0.5.4 scope)",
+                "theme override copy lands in v0.7+ (TUI new-disk-file out of v0.5.4 scope)",
             ));
         }
         _ => {}

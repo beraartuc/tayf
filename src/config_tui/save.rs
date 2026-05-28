@@ -12,8 +12,8 @@
 //!   8. snapshot reparse
 
 // reason: helpers like `ts_for_backup_filename` and `civil_from_days`
-// are only reachable on the v0.6+ first-run-init Shift+D dump-backup
-// path (timestamp filename helper waits for that wire-up). Module-level
+// are only reachable on the first-run-init Shift+D dump-backup path
+// (timestamp filename helper waits for that wire-up). Module-level
 // allow until that path lands.
 #![allow(dead_code)]
 
@@ -505,7 +505,7 @@ mod tests {
             e.pattern.as_deref(),
             Some("second"),
             "last-write wins by RuleId key; first edit silently lost — \
-             documented behavior, v0.6+ may add per-key conflict UI"
+             documented behavior, v0.7+ may add per-key conflict UI"
         );
     }
 

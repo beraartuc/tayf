@@ -39,6 +39,12 @@ pub fn draw_frame(app: &AppHandle, terminal: &mut Terminal<TestBackend>) -> Buff
 }
 
 /// Find the first occurrence of `needle` text, returning (col, row).
+///
+/// **ASCII assumption:** Cell symbols in ratatui are stored as
+/// `String` but indexed here by byte. Multi-byte UTF-8 graphemes
+/// (CJK, emoji) split across cells; this helper works correctly only
+/// for ASCII (`< 0x80`) needles. Non-ASCII assertion paths must use
+/// `frame.buffer.content[i].symbol` direct comparison.
 pub fn find_text(buf: &Buffer, needle: &str) -> Option<(u16, u16)> {
     let area = buf.area;
     for row in 0..area.height {

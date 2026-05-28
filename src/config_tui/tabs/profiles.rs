@@ -57,7 +57,7 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     let body = if selected.is_empty() {
         "(no profile selected)".to_owned()
     } else {
-        format!("Profile: {selected}\n\nSource: embedded\n\nPress Space to set as active\nPress 'o' to override (v0.6+)")
+        format!("Profile: {selected}\n\nSource: embedded\n\nPress Space to set as active\nPress 'o' to override (v0.7+)")
     };
     frame.render_widget(
         Paragraph::new(body).block(Block::default().borders(Borders::ALL).title("Detail")),
@@ -93,7 +93,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('o') => {
             app.toast = Some(crate::config_tui::app::Toast::warn(
-                "profile override copy lands in v0.6+ (TUI new-disk-file out of v0.5.4 scope)",
+                "profile override copy lands in v0.7+ (TUI new-disk-file out of v0.5.4 scope)",
             ));
         }
         _ => {}

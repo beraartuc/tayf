@@ -3,11 +3,12 @@
 //! Accumulates in-TUI mutations not yet on disk. `is_dirty()` is
 //! consulted by the quit-confirm modal and the save button.
 
-// reason: RuleId::{Embedded, DiskProfile} variants are matched/destructured
-// by reconcile.rs + events.rs but never constructed by the TUI state machine;
-// their construction wires land in v0.6.1+ when non-UserConfig tabs become
-// interactive (profile/theme override-copy). Module-level allow until those
-// TUI wires land.
+// reason: RuleId::{Embedded, DiskProfile} variants are constructed
+// inside compile_pending's overlay loop (v0.6.1 §3.2) and read by
+// reconcile.rs + events.rs, but no top-level tab still constructs
+// them via user keystrokes (profile/theme override-copy lands in
+// v0.7+). StyleKey::{Numbered, Named} are future capture-group
+// style slots (v0.7+). Module-level allow until those TUI wires land.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
