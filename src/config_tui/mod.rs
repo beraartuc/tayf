@@ -30,6 +30,13 @@ pub(crate) mod debounce;
 pub(crate) mod dump_cmd;
 pub(crate) mod edit;
 pub(crate) mod events;
+/// AST-level three-way merge over `toml_edit::DocumentMut`. v0.6.2 §3.5.
+/// Public so integration tests (`tests/config_tui_merge_3way.rs`) can
+/// drive the pure logic directly — the algorithm has no IO and its
+/// boundary surface (`merge_three_way`, `KeyConflict`,
+/// `ConflictValueShape`, `write_to_path`, `WriteToPathError`) is small
+/// and stable.
+pub mod merge;
 pub(crate) mod reconcile;
 pub(crate) mod render;
 pub(crate) mod save;
