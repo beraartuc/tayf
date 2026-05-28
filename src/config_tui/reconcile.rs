@@ -184,14 +184,30 @@ fn write_style_table(mut target: StyleTargetMut<'_>, ns: &NewStyle) -> Result<()
             set_or_insert(&mut target, "bg", Value::from(Color::to_toml_str(*color)));
         }
     }
-    if let Some(b) = ns.bold {
-        set_or_insert(&mut target, "bold", Value::from(b));
+    // Per-axis tri-state arms — symmetric with `fg`/`bg` above (Spec §3.1):
+    // outer `None` leaves the key untouched, `Some(None)` removes it, and
+    // `Some(Some(b))` writes the value. `InlineTable::remove` returns
+    // `Option<Value>`; the return value is intentionally ignored.
+    match ns.bold {
+        None => {}
+        Some(None) => {
+            target.remove("bold");
+        }
+        Some(Some(b)) => set_or_insert(&mut target, "bold", Value::from(b)),
     }
-    if let Some(b) = ns.italic {
-        set_or_insert(&mut target, "italic", Value::from(b));
+    match ns.italic {
+        None => {}
+        Some(None) => {
+            target.remove("italic");
+        }
+        Some(Some(b)) => set_or_insert(&mut target, "italic", Value::from(b)),
     }
-    if let Some(b) = ns.underline {
-        set_or_insert(&mut target, "underline", Value::from(b));
+    match ns.underline {
+        None => {}
+        Some(None) => {
+            target.remove("underline");
+        }
+        Some(Some(b)) => set_or_insert(&mut target, "underline", Value::from(b)),
     }
     if let Some(b) = ns.dim {
         set_or_insert(&mut target, "dim", Value::from(b));
@@ -626,9 +642,9 @@ mod tests {
         styles.insert(
             StyleKey::Default,
             NewStyle {
-                bold: Some(true),
-                italic: Some(true),
-                underline: Some(false),
+                bold: Some(Some(true)),
+                italic: Some(Some(true)),
+                underline: Some(Some(false)),
                 dim: Some(false),
                 ..NewStyle::default()
             },

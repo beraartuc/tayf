@@ -34,6 +34,14 @@ Editing (Patterns tab)
   r                Reset user override
   d / Delete       Delete user override (confirm)
 
+Color Picker (when modal open)
+  Tab              Cycle: ANSI16 → 256 → hex → bold → italic → underline
+  Space            Toggle focused boolean axis
+  c                Clear focused boolean axis (bold/italic/underline only)
+  ← →              Adjust focused color value
+  Enter            Commit
+  Esc              Cancel (discards staged edits)
+
 Display
   s                Set sample input
   p                Toggle live preview strip
@@ -142,16 +150,35 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                     let out = crate::config_tui::widgets::color_picker::dispatch_key(state, k);
                     match out {
                         crate::config_tui::widgets::color_picker::ColorPickerOutcome::Accept => {
-                            // Capture color BEFORE closing the modal (which moves state).
-                            let color = if let Some(Modal::ColorPicker(state)) = &app.modal {
-                                state.selected_color()
-                            } else {
-                                None
-                            };
+                            // Capture color + staged bool-axis edits BEFORE closing
+                            // the modal (which moves state). G3 — Spec §3.1.
+                            let (color, staged_bold, staged_italic, staged_underline) =
+                                if let Some(Modal::ColorPicker(state)) = &app.modal {
+                                    (
+                                        state.selected_color(),
+                                        state.staged_bold,
+                                        state.staged_italic,
+                                        state.staged_underline,
+                                    )
+                                } else {
+                                    (None, None, None, None)
+                                };
                             app.modal = None;
+                            // Commit per-axis tri-state edits regardless of
+                            // whether a color was also picked — the picker
+                            // may be used as a pure attribute editor.
+                            bind_bool_axes_to_selected_rule(
+                                app,
+                                staged_bold,
+                                staged_italic,
+                                staged_underline,
+                            );
                             if let Some(color) = color {
                                 bind_color_to_selected_rule(app, color);
-                            } else {
+                            } else if staged_bold.is_none()
+                                && staged_italic.is_none()
+                                && staged_underline.is_none()
+                            {
                                 app.toast = Some(crate::config_tui::app::Toast::warn(
                                     "color picker yielded no color (truecolor hex incomplete?)",
                                 ));
@@ -641,6 +668,49 @@ fn bind_color_to_selected_rule(app: &mut App, color: crate::style::Color) {
         Some(crate::config_tui::app::Toast::ok(format!("color bound to rule '{rule_name}'")));
 }
 
+/// Bind staged bool-axis tri-state edits onto the focused Patterns rule.
+/// All-`None` is a no-op (the picker was used purely for color or fully
+/// abandoned). Only axes with `Some(_)` (explicit set or clear) write
+/// through into [`PendingEdits`]. G3 — Spec §3.1.
+//
+// reason: `Option<Option<bool>>` is the load-bearing tri-state on
+// `NewStyle::{bold,italic,underline}`; mirrored on these params so the
+// caller can pass-through `ColorPickerState::staged_*` verbatim.
+#[allow(clippy::option_option)]
+fn bind_bool_axes_to_selected_rule(
+    app: &mut App,
+    bold: Option<Option<bool>>,
+    italic: Option<Option<bool>>,
+    underline: Option<Option<bool>>,
+) {
+    if bold.is_none() && italic.is_none() && underline.is_none() {
+        return;
+    }
+    let Some(rule_id) = resolve_selected_rule_id(app) else {
+        // Same warn-toast path as `bind_color_to_selected_rule`. Skip
+        // emitting if the color path already emitted one (caller orders
+        // bool-axes BEFORE color binding so this branch only fires when
+        // no color was picked and no rule is selected — rare).
+        app.toast = Some(crate::config_tui::app::Toast::warn(
+            "no rule selected — switch to Patterns tab and select first",
+        ));
+        return;
+    };
+    let rule_edit = app.edits.rules.entry(rule_id).or_default();
+    let style_entry =
+        rule_edit.styles.entry(crate::config_tui::edit::StyleKey::Default).or_default();
+    if let Some(v) = bold {
+        style_entry.bold = Some(v);
+    }
+    if let Some(v) = italic {
+        style_entry.italic = Some(v);
+    }
+    if let Some(v) = underline {
+        style_entry.underline = Some(v);
+    }
+    apply_pending_and_recompile(app);
+}
+
 /// Map `focus.patterns.selected_idx` to a `RuleId`.
 ///
 /// The Patterns tab list shows built-in rule names (filtered by any
@@ -786,9 +856,19 @@ fn handle_new_pattern_key(app: &mut App, k: KeyEvent) {
                 }
             },
             NewPatternPhase::Style => {
-                // Enter in the style phase accepts the picker's current selection.
+                // Enter in the style phase accepts the picker's current
+                // selection, including any staged bool-axis edits. G3 §3.1.
                 if let Some(color) = draft.picker_state.selected_color() {
                     draft.draft_style.fg = Some(Some(color));
+                }
+                if let Some(v) = draft.picker_state.staged_bold {
+                    draft.draft_style.bold = Some(v);
+                }
+                if let Some(v) = draft.picker_state.staged_italic {
+                    draft.draft_style.italic = Some(v);
+                }
+                if let Some(v) = draft.picker_state.staged_underline {
+                    draft.draft_style.underline = Some(v);
                 }
                 commit_new_pattern_draft(app);
             }
@@ -816,6 +896,15 @@ fn handle_new_pattern_key(app: &mut App, k: KeyEvent) {
                 crate::config_tui::widgets::color_picker::ColorPickerOutcome::Accept => {
                     if let Some(color) = draft.picker_state.selected_color() {
                         draft.draft_style.fg = Some(Some(color));
+                    }
+                    if let Some(v) = draft.picker_state.staged_bold {
+                        draft.draft_style.bold = Some(v);
+                    }
+                    if let Some(v) = draft.picker_state.staged_italic {
+                        draft.draft_style.italic = Some(v);
+                    }
+                    if let Some(v) = draft.picker_state.staged_underline {
+                        draft.draft_style.underline = Some(v);
                     }
                     commit_new_pattern_draft(app);
                 }

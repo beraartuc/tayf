@@ -36,21 +36,30 @@ pub(crate) enum StyleKey {
 }
 
 /// A staged style mutation. `None` means "leave that axis unchanged
-/// from current source"; `Some(None)` (used only for `fg`/`bg`)
-/// means "set explicitly to none / clear".
+/// from current source"; `Some(None)` (on `fg`/`bg` and on the
+/// boolean axes) means "set explicitly to none / clear".
+///
+/// `Option<Option<bool>>` on the three boolean axes is **load-bearing**
+/// for the TUI tri-state: outer `None` = unedited (no axis interaction
+/// this session), `Some(None)` = explicitly cleared by the user (`c`
+/// in the color picker), `Some(Some(b))` = explicit set. The two
+/// `None` shapes are distinguished downstream so explicit clear can
+/// remove the axis key from the inline TOML table — see `reconcile.rs`
+/// `write_style_table`. `dim` stays `Option<bool>` because the picker
+/// has no `c`-clear keystroke for it (CLI-flag mandate; spec §3.1).
 //
-// reason: the `Option<Option<Color>>` shape on fg/bg is the
-// load-bearing tri-state for the TUI (unedited / set-to-color /
-// explicitly-cleared); replacing with a custom enum would just
-// rename the same three states. Spec §6.1.
+// reason: the `Option<Option<_>>` shape on fg/bg + the three bool
+// axes is the load-bearing tri-state for the TUI (unedited /
+// set-explicitly / explicitly-cleared); replacing with a custom enum
+// would just rename the same three states. Spec §6.1 + §3.1.
 #[allow(clippy::option_option)]
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewStyle {
     pub(crate) fg: Option<Option<Color>>,
     pub(crate) bg: Option<Option<Color>>,
-    pub(crate) bold: Option<bool>,
-    pub(crate) italic: Option<bool>,
-    pub(crate) underline: Option<bool>,
+    pub(crate) bold: Option<Option<bool>>,
+    pub(crate) italic: Option<Option<bool>>,
+    pub(crate) underline: Option<Option<bool>>,
     pub(crate) dim: Option<bool>,
 }
 

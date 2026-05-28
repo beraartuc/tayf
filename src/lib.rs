@@ -680,6 +680,94 @@ pub mod __test_api {
     pub fn is_save_diff_modal_open(app: &AppHandle) -> bool {
         matches!(app.0.modal, Some(crate::config_tui::app::Modal::SaveDiff))
     }
+
+    // -----------------------------------------------------------------------
+    // G3: ColorPicker bool-axis helpers (spec §3.1).
+    // -----------------------------------------------------------------------
+
+    /// String tag for the picker's current `axis_focus`: `"none"`, `"bold"`,
+    /// `"italic"`, or `"underline"`. Returns `None` if no `ColorPicker` modal
+    /// is open. G3 §3.1.
+    #[must_use]
+    pub fn color_picker_axis_focus_tag(app: &AppHandle) -> Option<&'static str> {
+        use crate::config_tui::app::Modal;
+        use crate::config_tui::widgets::color_picker::AxisFocus;
+        let Some(Modal::ColorPicker(state)) = &app.0.modal else { return None };
+        Some(match state.axis_focus {
+            AxisFocus::None => "none",
+            AxisFocus::Bold => "bold",
+            AxisFocus::Italic => "italic",
+            AxisFocus::Underline => "underline",
+        })
+    }
+
+    /// String tag for the picker's current `section`: `"ansi16"`,
+    /// `"palette256"`, or `"truehex"`. Returns `None` if no `ColorPicker`
+    /// modal is open. G3 §3.1.
+    #[must_use]
+    pub fn color_picker_section_tag(app: &AppHandle) -> Option<&'static str> {
+        use crate::config_tui::app::Modal;
+        use crate::config_tui::widgets::color_picker::PickerSection;
+        let Some(Modal::ColorPicker(state)) = &app.0.modal else { return None };
+        Some(match state.section {
+            PickerSection::Ansi16 => "ansi16",
+            PickerSection::Palette256 => "palette256",
+            PickerSection::TrueHex => "truehex",
+        })
+    }
+
+    /// One axis's staged tri-state: outer `None` = unedited, `Some(None)`
+    /// = explicit clear, `Some(Some(b))` = explicit set. Mirrors
+    /// `NewStyle::{bold,italic,underline}` for integration-test reads. G3 §3.1.
+    //
+    // reason: the `Option<Option<bool>>` shape is the load-bearing tri-state
+    // on `NewStyle`; the alias only renames it for readability inside the
+    // `__test_api` module without changing the semantic contract.
+    #[allow(clippy::option_option)]
+    pub type AxisTriState = Option<Option<bool>>;
+
+    /// Read the picker's three staged bool-axis tri-states as a `(bold,
+    /// italic, underline)` tuple. Each axis is the raw [`AxisTriState`] shape.
+    /// Returns `None` if no `ColorPicker` modal is open. G3 §3.1.
+    #[must_use]
+    pub fn color_picker_staged_axes(
+        app: &AppHandle,
+    ) -> Option<(AxisTriState, AxisTriState, AxisTriState)> {
+        use crate::config_tui::app::Modal;
+        let Some(Modal::ColorPicker(state)) = &app.0.modal else { return None };
+        Some((state.staged_bold, state.staged_italic, state.staged_underline))
+    }
+
+    /// True iff a `Modal::ColorPicker` is currently open. G3 §3.1.
+    #[must_use]
+    pub fn is_color_picker_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::ColorPicker(_)))
+    }
+
+    /// Open a `Modal::ColorPicker` directly (bypassing the `c` keystroke on
+    /// the Patterns tab) so integration tests do not depend on tab focus or
+    /// existing-edit state. G3 §3.1.
+    pub fn open_color_picker(app: &mut AppHandle) {
+        use crate::config_tui::app::Modal;
+        app.0.modal = Some(Modal::ColorPicker(
+            crate::config_tui::widgets::color_picker::ColorPickerState::default(),
+        ));
+    }
+
+    /// Read the `style` overlay staged on the first built-in rule's
+    /// `StyleKey::Default` slot, after commit, as a `(bold, italic,
+    /// underline)` tuple of raw [`AxisTriState`]. Returns `(None, None, None)`
+    /// if no overlay exists. G3 §3.1.
+    #[must_use]
+    pub fn pending_edits_first_builtin_axes(
+        app: &AppHandle,
+    ) -> (AxisTriState, AxisTriState, AxisTriState) {
+        use crate::config_tui::edit::{RuleId, StyleKey};
+        let rule_id = RuleId::Builtin(crate::rules::BUILTIN_NAMES[0]);
+        let Some(re) = app.0.edits.rules.get(&rule_id) else { return (None, None, None) };
+        let Some(ns) = re.styles.get(&StyleKey::Default) else { return (None, None, None) };
+        (ns.bold, ns.italic, ns.underline)
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

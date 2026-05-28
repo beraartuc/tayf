@@ -200,9 +200,12 @@ fn new_style_to_user_style(ns: &NewStyle) -> crate::config::UserStyle {
     crate::config::UserStyle {
         fg: ns.fg.unwrap_or(None).map(crate::style::Color::to_toml_str),
         bg: ns.bg.unwrap_or(None).map(crate::style::Color::to_toml_str),
-        bold: ns.bold.unwrap_or(false),
-        italic: ns.italic.unwrap_or(false),
-        underline: ns.underline.unwrap_or(false),
+        // Tri-state flatten: outer None and Some(None) both collapse to false
+        // on the on-disk shape (UserStyle has a single bool per axis). Only
+        // Some(Some(true)) survives as true. Spec §3.1.
+        bold: ns.bold.flatten().unwrap_or(false),
+        italic: ns.italic.flatten().unwrap_or(false),
+        underline: ns.underline.flatten().unwrap_or(false),
         dim: ns.dim.unwrap_or(false),
     }
 }
@@ -220,14 +223,23 @@ fn apply_new_style_to_user_rule(rule: &mut crate::config::UserRule, ns: &NewStyl
     if let Some(bg) = ns.bg {
         us.bg = bg.map(crate::style::Color::to_toml_str);
     }
-    if let Some(b) = ns.bold {
-        us.bold = b;
+    // Per-axis tri-state arms: outer None preserves existing, Some(None)
+    // clears to false, Some(Some(b)) sets the inner value. Mirrors the
+    // axis row in `reconcile.rs` `write_style_table`. Spec §3.1.
+    match ns.bold {
+        None => {}
+        Some(None) => us.bold = false,
+        Some(Some(b)) => us.bold = b,
     }
-    if let Some(i) = ns.italic {
-        us.italic = i;
+    match ns.italic {
+        None => {}
+        Some(None) => us.italic = false,
+        Some(Some(b)) => us.italic = b,
     }
-    if let Some(u) = ns.underline {
-        us.underline = u;
+    match ns.underline {
+        None => {}
+        Some(None) => us.underline = false,
+        Some(Some(b)) => us.underline = b,
     }
     if let Some(d) = ns.dim {
         us.dim = d;
@@ -621,5 +633,106 @@ mod tests {
             Some(crate::style::Color::Cyan),
             "DiskProfile overlay applies style on name match"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // G3 — NewStyle.{bold,italic,underline} tri-state migration semantics.
+    // Pins per-axis arm dispatch at `apply_new_style_to_user_rule` and
+    // `new_style_to_user_style` after the type change from `Option<bool>`
+    // to `Option<Option<bool>>`. Spec §3.1.
+    // -----------------------------------------------------------------------
+
+    /// Outer `None` on every axis must leave the existing `UserStyle` unmodified.
+    #[test]
+    fn apply_new_style_per_axis_unedited_outer_none_preserves_existing() {
+        let mut rule = UserRule {
+            name: "x".to_owned(),
+            pattern: None,
+            style: Some(UserStyle {
+                bold: true,
+                italic: false,
+                underline: true,
+                ..UserStyle::default()
+            }),
+            enabled: true,
+            styles: None,
+            priority: None,
+        };
+        let ns = NewStyle { bold: None, italic: None, underline: None, ..Default::default() };
+        apply_new_style_to_user_rule(&mut rule, &ns);
+        let us = rule.style.expect("style present");
+        assert!(us.bold, "outer None preserves existing bold=true");
+        assert!(!us.italic, "outer None preserves existing italic=false");
+        assert!(us.underline, "outer None preserves existing underline=true");
+    }
+
+    /// `Some(None)` on every axis must explicitly clear to `false`.
+    #[test]
+    fn apply_new_style_per_axis_some_none_explicit_clears_to_false() {
+        let mut rule = UserRule {
+            name: "x".to_owned(),
+            pattern: None,
+            style: Some(UserStyle {
+                bold: true,
+                italic: true,
+                underline: true,
+                ..UserStyle::default()
+            }),
+            enabled: true,
+            styles: None,
+            priority: None,
+        };
+        let ns = NewStyle {
+            bold: Some(None),
+            italic: Some(None),
+            underline: Some(None),
+            ..Default::default()
+        };
+        apply_new_style_to_user_rule(&mut rule, &ns);
+        let us = rule.style.expect("style present");
+        assert!(!us.bold);
+        assert!(!us.italic);
+        assert!(!us.underline);
+    }
+
+    /// `Some(Some(b))` on every axis must set to the inner boolean.
+    #[test]
+    fn apply_new_style_per_axis_some_some_explicit_sets_value() {
+        let mut rule = UserRule {
+            name: "x".to_owned(),
+            pattern: None,
+            style: Some(UserStyle::default()),
+            enabled: true,
+            styles: None,
+            priority: None,
+        };
+        let ns = NewStyle {
+            bold: Some(Some(true)),
+            italic: Some(Some(false)),
+            underline: Some(Some(true)),
+            ..Default::default()
+        };
+        apply_new_style_to_user_rule(&mut rule, &ns);
+        let us = rule.style.expect("style present");
+        assert!(us.bold);
+        assert!(!us.italic);
+        assert!(us.underline);
+    }
+
+    /// `new_style_to_user_style` flattens both outer-`None` and `Some(None)`
+    /// to `false`; only `Some(Some(true))` survives as `true`. Mirrors the
+    /// on-disk `UserStyle` shape (single bool per axis).
+    #[test]
+    fn new_style_to_user_style_flattens_outer_none_and_some_none_to_false() {
+        let ns = NewStyle {
+            bold: None,
+            italic: Some(None),
+            underline: Some(Some(true)),
+            ..Default::default()
+        };
+        let us = new_style_to_user_style(&ns);
+        assert!(!us.bold);
+        assert!(!us.italic);
+        assert!(us.underline);
     }
 }

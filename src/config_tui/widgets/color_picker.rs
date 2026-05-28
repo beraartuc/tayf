@@ -17,6 +17,20 @@ pub(crate) enum PickerSection {
     TrueHex,
 }
 
+/// Tracks which boolean style axis (if any) currently owns keyboard
+/// focus inside the color picker modal. Parallel to [`PickerSection`]
+/// which only governs the three color sub-sections. When
+/// `axis_focus != AxisFocus::None`, the `c` keystroke clears the focused
+/// axis (writes `Some(None)` into the staged `Option<Option<bool>>`)
+/// instead of falling through to the `TrueHex` hex-digit branch. Spec §3.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AxisFocus {
+    None,
+    Bold,
+    Italic,
+    Underline,
+}
+
 #[derive(Debug)]
 pub(crate) struct ColorPickerState {
     pub(crate) section: PickerSection,
@@ -24,6 +38,23 @@ pub(crate) struct ColorPickerState {
     pub(crate) palette_idx: u16,
     pub(crate) hex_buf: String,
     pub(crate) goto_buf: Option<String>,
+    /// Which bool axis (if any) currently has focus. `AxisFocus::None`
+    /// means color-section focus (one of `section`'s three values).
+    pub(crate) axis_focus: AxisFocus,
+    /// Staged tri-state edits per bool axis. Outer `None` = unedited
+    /// (no write into `app.edits` on commit), `Some(None)` = explicit
+    /// clear (`c` keystroke), `Some(Some(b))` = explicit set
+    /// (Space-toggle). Spec §3.1.
+    //
+    // reason: `Option<Option<bool>>` is the load-bearing tri-state shape
+    // mirrored from `NewStyle::{bold,italic,underline}`. Replacing with a
+    // custom enum would only rename the same three states.
+    #[allow(clippy::option_option)]
+    pub(crate) staged_bold: Option<Option<bool>>,
+    #[allow(clippy::option_option)]
+    pub(crate) staged_italic: Option<Option<bool>>,
+    #[allow(clippy::option_option)]
+    pub(crate) staged_underline: Option<Option<bool>>,
 }
 
 impl Default for ColorPickerState {
@@ -34,6 +65,10 @@ impl Default for ColorPickerState {
             palette_idx: 0,
             hex_buf: String::new(),
             goto_buf: None,
+            axis_focus: AxisFocus::None,
+            staged_bold: None,
+            staged_italic: None,
+            staged_underline: None,
         }
     }
 }
@@ -100,6 +135,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
         Constraint::Length(3),
         Constraint::Min(8),
         Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Length(2),
     ])
     .split(inner);
@@ -107,7 +143,8 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
     render_ansi16(frame, chunks[0], state);
     render_palette256(frame, chunks[1], state);
     render_truecolor_hex(frame, chunks[2], state);
-    render_status(frame, chunks[3], state);
+    render_axis_row(frame, chunks[3], state);
+    render_status(frame, chunks[4], state);
 }
 
 fn render_ansi16(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
@@ -150,20 +187,58 @@ fn render_palette256(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
 }
 
 fn render_truecolor_hex(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
-    let active_section = state.section == PickerSection::TrueHex;
+    let active_section =
+        state.section == PickerSection::TrueHex && state.axis_focus == AxisFocus::None;
     let prefix = if active_section { "▶ #" } else { "  #" };
     let display = format!("{prefix}{:<6}", state.hex_buf);
     frame.render_widget(Paragraph::new(display), area);
 }
 
+/// Render the one-line bool-axis row (chunks[3]). Each axis is shown as
+/// `[label: value]` where `value` is `—` (unedited), `✗` (explicit clear),
+/// `yes` or `no` (explicit set). The currently focused axis is underlined.
+/// Spec §3.1.
+fn render_axis_row(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
+    use ratatui::style::Modifier;
+    let format_axis = |label: &str, staged: Option<Option<bool>>, focused: bool| -> Span<'_> {
+        let val = match staged {
+            None => "—",
+            Some(None) => "✗",
+            Some(Some(true)) => "yes",
+            Some(Some(false)) => "no",
+        };
+        let style = if focused {
+            RaStyle::default().add_modifier(Modifier::UNDERLINED)
+        } else {
+            RaStyle::default()
+        };
+        Span::styled(format!("[{label}: {val}]"), style)
+    };
+
+    let line = Line::from(vec![
+        format_axis("bold", state.staged_bold, state.axis_focus == AxisFocus::Bold),
+        Span::raw(" "),
+        format_axis("italic", state.staged_italic, state.axis_focus == AxisFocus::Italic),
+        Span::raw(" "),
+        format_axis("underline", state.staged_underline, state.axis_focus == AxisFocus::Underline),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_status(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
     let s = state.goto_buf.as_ref().map_or_else(
-        || "Tab=section ←→=value N=none Enter=accept Esc=cancel".to_owned(),
+        || "Tab=section ←→=val Space=toggle c=clear Enter=accept Esc=cancel".to_owned(),
         |b| format!("goto idx: {b}_"),
     );
     frame.render_widget(Paragraph::new(s), area);
 }
 
+// reason: G3 expanded dispatch with the 6-step Tab cycle + `c`/Space axis
+// arms + their `BackTab` mirrors. Splitting the match into helpers would
+// duplicate the `state` `&mut` plumbing and obscure the keystroke trace;
+// the function remains a single flat dispatch table consistent with the
+// other TUI widget dispatchers.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn dispatch_key(state: &mut ColorPickerState, k: KeyEvent) -> ColorPickerOutcome {
     if k.code == KeyCode::Esc {
         if state.goto_buf.take().is_some() {
@@ -190,20 +265,53 @@ pub(crate) fn dispatch_key(state: &mut ColorPickerState, k: KeyEvent) -> ColorPi
         return ColorPickerOutcome::StayOpen;
     }
     match k.code {
+        // 6-step Tab cycle: Ansi16 → Palette256 → TrueHex → Bold → Italic →
+        // Underline → wrap. While an `AxisFocus` is non-None the `section`
+        // stays at TrueHex (its last color value); resetting to Ansi16 on
+        // wrap restores the spec §3.1 invariant that color-section focus
+        // implies `axis_focus == None`.
         KeyCode::Tab => {
-            state.section = match state.section {
-                PickerSection::Ansi16 => PickerSection::Palette256,
-                PickerSection::Palette256 => PickerSection::TrueHex,
-                PickerSection::TrueHex => PickerSection::Ansi16,
-            };
+            match (state.section, state.axis_focus) {
+                (PickerSection::Ansi16, _) => {
+                    state.section = PickerSection::Palette256;
+                    state.axis_focus = AxisFocus::None;
+                }
+                (PickerSection::Palette256, _) => {
+                    state.section = PickerSection::TrueHex;
+                    state.axis_focus = AxisFocus::None;
+                }
+                (PickerSection::TrueHex, AxisFocus::None) => {
+                    state.axis_focus = AxisFocus::Bold;
+                }
+                (_, AxisFocus::Bold) => state.axis_focus = AxisFocus::Italic,
+                (_, AxisFocus::Italic) => state.axis_focus = AxisFocus::Underline,
+                (_, AxisFocus::Underline) => {
+                    state.section = PickerSection::Ansi16;
+                    state.axis_focus = AxisFocus::None;
+                }
+            }
             ColorPickerOutcome::StayOpen
         }
         KeyCode::BackTab => {
-            state.section = match state.section {
-                PickerSection::Ansi16 => PickerSection::TrueHex,
-                PickerSection::Palette256 => PickerSection::Ansi16,
-                PickerSection::TrueHex => PickerSection::Palette256,
-            };
+            // Mirror of the 6-step Tab cycle in reverse.
+            match (state.section, state.axis_focus) {
+                (_, AxisFocus::Bold) => {
+                    state.axis_focus = AxisFocus::None;
+                    state.section = PickerSection::TrueHex;
+                }
+                (_, AxisFocus::Italic) => state.axis_focus = AxisFocus::Bold,
+                (_, AxisFocus::Underline) => state.axis_focus = AxisFocus::Italic,
+                (PickerSection::Ansi16, AxisFocus::None) => {
+                    state.section = PickerSection::TrueHex;
+                    state.axis_focus = AxisFocus::Underline;
+                }
+                (PickerSection::Palette256, AxisFocus::None) => {
+                    state.section = PickerSection::Ansi16;
+                }
+                (PickerSection::TrueHex, AxisFocus::None) => {
+                    state.section = PickerSection::Palette256;
+                }
+            }
             ColorPickerOutcome::StayOpen
         }
         KeyCode::Left => {
@@ -238,6 +346,36 @@ pub(crate) fn dispatch_key(state: &mut ColorPickerState, k: KeyEvent) -> ColorPi
         }
         KeyCode::Char('g') if state.section == PickerSection::Palette256 => {
             state.goto_buf = Some(String::new());
+            ColorPickerOutcome::StayOpen
+        }
+        // `c` — clear the focused bool axis to `Some(None)`. GATED on
+        // `axis_focus != None` so it does NOT shadow the TrueHex
+        // hex-digit branch below (T-B2 regression pin). Spec §3.1.
+        KeyCode::Char('c') if state.axis_focus != AxisFocus::None => {
+            match state.axis_focus {
+                AxisFocus::Bold => state.staged_bold = Some(None),
+                AxisFocus::Italic => state.staged_italic = Some(None),
+                AxisFocus::Underline => state.staged_underline = Some(None),
+                AxisFocus::None => unreachable!("guarded by `if` clause above"),
+            }
+            ColorPickerOutcome::StayOpen
+        }
+        // Space — toggle the focused bool axis. Unedited/cleared/false all
+        // advance to `Some(Some(true))`; `Some(Some(true))` flips to
+        // `Some(Some(false))`. Spec §3.1.
+        KeyCode::Char(' ') if state.axis_focus != AxisFocus::None => {
+            let toggle = |staged: &mut Option<Option<bool>>| {
+                *staged = match staged {
+                    Some(Some(true)) => Some(Some(false)),
+                    None | Some(None | Some(false)) => Some(Some(true)),
+                };
+            };
+            match state.axis_focus {
+                AxisFocus::Bold => toggle(&mut state.staged_bold),
+                AxisFocus::Italic => toggle(&mut state.staged_italic),
+                AxisFocus::Underline => toggle(&mut state.staged_underline),
+                AxisFocus::None => unreachable!("guarded by `if` clause above"),
+            }
             ColorPickerOutcome::StayOpen
         }
         KeyCode::Char(c @ ('0'..='9' | 'a'..='f')) if state.section == PickerSection::TrueHex => {
@@ -276,15 +414,27 @@ mod tests {
     }
 
     #[test]
-    fn tab_advances_section_circular() {
+    fn tab_advances_section_then_axes_then_wraps() {
+        // G3 — 6-step Tab cycle:
+        //   Ansi16 → Palette256 → TrueHex → Bold → Italic → Underline → wrap.
         let mut s = ColorPickerState::default();
         assert_eq!(s.section, PickerSection::Ansi16);
+        assert_eq!(s.axis_focus, AxisFocus::None);
         dispatch_key(&mut s, mk(KeyCode::Tab));
         assert_eq!(s.section, PickerSection::Palette256);
+        assert_eq!(s.axis_focus, AxisFocus::None);
         dispatch_key(&mut s, mk(KeyCode::Tab));
         assert_eq!(s.section, PickerSection::TrueHex);
+        assert_eq!(s.axis_focus, AxisFocus::None);
         dispatch_key(&mut s, mk(KeyCode::Tab));
-        assert_eq!(s.section, PickerSection::Ansi16);
+        assert_eq!(s.axis_focus, AxisFocus::Bold);
+        dispatch_key(&mut s, mk(KeyCode::Tab));
+        assert_eq!(s.axis_focus, AxisFocus::Italic);
+        dispatch_key(&mut s, mk(KeyCode::Tab));
+        assert_eq!(s.axis_focus, AxisFocus::Underline);
+        dispatch_key(&mut s, mk(KeyCode::Tab));
+        assert_eq!(s.section, PickerSection::Ansi16, "wrap back to first color section");
+        assert_eq!(s.axis_focus, AxisFocus::None);
     }
 
     #[test]
