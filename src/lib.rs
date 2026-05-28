@@ -420,6 +420,22 @@ pub mod __test_api {
     pub fn current_selected_idx(app: &AppHandle) -> usize {
         app.0.focus.patterns.selected_idx
     }
+
+    /// Count of pending newly-added rules in `PendingEdits::added`. Used by
+    /// the editor integration test to assert that the `n` new-pattern modal
+    /// commit path appended a draft to the edits set.
+    #[must_use]
+    pub fn pending_added_count(app: &AppHandle) -> usize {
+        app.0.edits.added.len()
+    }
+
+    /// True iff the `Modal::NewPattern` overlay is currently open. Lets
+    /// integration tests confirm modal open/dismiss transitions without
+    /// reaching `pub(crate)` enum variants directly.
+    #[must_use]
+    pub fn is_new_pattern_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::NewPattern { .. }))
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

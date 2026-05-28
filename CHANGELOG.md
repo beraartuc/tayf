@@ -4,6 +4,62 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-28
+
+### Added
+- **Span-emitting preview pipeline.** New `apply_rules_spans` API in
+  `src/pipeline.rs` yields a list of `StyleSpan` runs for TUI consumers
+  alongside the existing byte-emit `apply_rules`. Both share a new
+  `select_runs` helper so matching, overlap rejection, and priority
+  resolution have a single source of truth — `apply_rules` byte output
+  is byte-identical to v0.5.7 (golden parity tests).
+- **Config TUI live preview.** Mini-preview strip and Shift+P full-screen
+  overlay now render the user's sample input with actual rule styling
+  (including capture-group substyling) via the new `PreviewState`.
+  Initial compute runs on TUI boot; debounced recompile (200 ms quiescent
+  window) on edits.
+- **Config TUI editing core (spec §12.4).**
+  - `c` on a selected rule opens the ColorPicker; Accept binds the chosen
+    color to the rule via `PendingEdits` and triggers a preview recompile.
+  - `n` opens a 3-phase new-pattern modal (Name → Regex → Style). Name
+    requires `[A-Za-z0-9_-]+`; Regex is validated inline with
+    `RegexBuilder::size_limit` (ReDoS guard, mirrors `rules.rs`'s
+    1 MB limit). Style phase delegates to an inline ColorPicker.
+  - `e` opens an inline regex-source editor for the selected rule.
+    Buffer initialized from the rule's current pattern; debouncer-driven
+    preview recompile while typing; Enter commits to
+    `edits.rules[rule_id].pattern`; Esc cancels.
+  - `?` / `F1` opens a read-only Help modal listing all keybindings; any
+    key dismisses (vim/less convention — dismissing key discarded).
+- `src/config_tui/compile_pending.rs`: rebuilds a `Compiled` from a
+  `ConfigSnapshot` plus a `PendingEdits` delta, backing the live-preview
+  recompile path.
+- `src/rules.rs::compile_from_config` `pub(crate)` entry-point —
+  additive (does not change `load_with_theme` semantics).
+- `src/config_tui/style_ratatui.rs`: `Style::to_ratatui()` helper kept
+  out of core `src/style.rs` to avoid a ratatui dependency in core.
+- `Modal::NewPattern`, `Modal::EditRegex`, `Modal::Help` variants plus
+  `PatternDraft` / `NewPatternPhase` modal-local state.
+- TestBackend integration-test harness (`tests/common/tui_harness.rs`)
+  with `boot_tui_with_sample` + key-driven assertions; new
+  `tests/integration_tui_preview.rs`, `tests/integration_tui_editor.rs`,
+  `tests/integration_tui_help_modal.rs` integration suites.
+
+### Changed
+- Stale forward-pointers stripped: 8 `// reason: v0.5.5+ ...` annotations
+  removed or rewritten to reflect what landed in v0.6, plus 4 `Toast::warn`
+  v0.6+ stubs replaced with real implementations (D1 ColorPicker bind,
+  D2 NewPattern open, D3 EditRegex open, D4 Help open). KEEP set for
+  v0.6.1 / v0.7 defers documented in spec §11.1/§11.2.
+
+### Fixed
+- Config TUI live preview no longer shows raw sample text; renders
+  colorized output matching the runtime byte-emit path.
+
+Runtime behavior change to existing rule application: **none**. The
+`apply_rules` byte-emit path is byte-identical to v0.5.7 via golden parity
+tests in `src/pipeline.rs` (see the rev2 spec §3 / §4 parity contract).
+
 ## [0.5.7] - 2026-05-28
 
 ### Changed

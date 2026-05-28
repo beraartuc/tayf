@@ -3,12 +3,11 @@
 //! Accumulates in-TUI mutations not yet on disk. `is_dirty()` is
 //! consulted by the quit-confirm modal and the save button.
 
-// reason: RuleId::{Builtin, Embedded, DiskProfile} variants + StyleKey
-// variants are matched/destructured by reconcile.rs but never constructed
-// by TUI state machine; construction wires land in v0.6+ when non-UserConfig
-// tabs are interactive. PendingEdits::clear() is used only by the v0.6+
-// Shift+M discard-and-reload path (SaveDiff modal m key not yet wired).
-// Module-level allow until those TUI wires land.
+// reason: RuleId::{Embedded, DiskProfile} variants are matched/destructured
+// by reconcile.rs + events.rs but never constructed by the TUI state machine;
+// their construction wires land in v0.6.1+ when non-UserConfig tabs become
+// interactive (profile/theme override-copy). Module-level allow until those
+// TUI wires land.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
