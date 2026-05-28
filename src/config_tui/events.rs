@@ -360,6 +360,10 @@ fn handle_esc(app: &mut App) {
         use crate::config_tui::app::NewPatternPhase;
         match phase {
             NewPatternPhase::Name => {
+                // T-I5 paragraph 2: symmetric debouncer-leak fix — clear any
+                // pending debounce mark so a phantom recompile cannot fire
+                // after the modal is dismissed. See spec §3.7.
+                app.preview.debouncer.mark_edit_clear();
                 app.modal = None;
             }
             NewPatternPhase::Regex => {
@@ -382,6 +386,11 @@ fn handle_esc(app: &mut App) {
             }
             Some(Modal::Search) => app.search_state = None,
             Some(Modal::SampleSet) => app.sample_set_state = None,
+            Some(Modal::EditRegex { .. }) => {
+                // G1 spec §3.7: clear pending debounce mark on Esc-cancel so
+                // the quiescent timer does not trigger a phantom recompile.
+                app.preview.debouncer.mark_edit_clear();
+            }
             _ => {}
         }
         app.modal = None;

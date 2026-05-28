@@ -587,6 +587,54 @@ pub mod __test_api {
     pub fn filter_names_lowercase(names: &[&'static str], filter: &str) -> Vec<&'static str> {
         crate::config_tui::search::filter_names_lowercase(names.iter().copied(), filter)
     }
+
+    // -----------------------------------------------------------------------
+    // G1: debouncer-clear helpers (spec §3.7).
+    // -----------------------------------------------------------------------
+
+    /// True iff the preview debouncer has a pending edit mark. G1 integration
+    /// tests use this to assert that Esc-cancel clears the pending mark.
+    #[must_use]
+    pub fn debouncer_pending(app: &AppHandle) -> bool {
+        app.0.preview.debouncer.is_pending()
+    }
+
+    /// Open a `Modal::EditRegex` for the first builtin rule. Bypasses the
+    /// `'e'` keystroke path so tests do not depend on tab focus order.
+    /// G1 spec §3.7.
+    pub fn open_edit_regex_modal_first_builtin(app: &mut AppHandle) {
+        use crate::config_tui::app::Modal;
+        use crate::config_tui::edit::RuleId;
+        let rule_id = RuleId::Builtin(crate::rules::BUILTIN_NAMES[0]);
+        let buffer = crate::config_tui::events::pattern_for_rule_id(&rule_id, &app.0);
+        app.0.modal = Some(Modal::EditRegex { rule_id, buffer, error: None });
+    }
+
+    /// Open a `Modal::NewPattern` in the `Name` phase. Bypasses the `'n'`
+    /// keystroke so tests do not depend on tab focus. G1 spec §3.7.
+    pub fn open_new_pattern_modal(app: &mut AppHandle) {
+        use crate::config_tui::app::{Modal, NewPatternPhase, PatternDraft};
+        app.0.modal =
+            Some(Modal::NewPattern { phase: NewPatternPhase::Name, draft: PatternDraft::new() });
+    }
+
+    /// True iff a `Modal::EditRegex` is currently open.
+    #[must_use]
+    pub fn is_edit_regex_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::EditRegex { .. }))
+    }
+
+    /// Invoke one debounce tick as if the main loop's timer fired. Returns
+    /// whether a recompile was triggered. G1 spec §3.7.
+    pub fn tick_debounce(app: &mut AppHandle) -> bool {
+        let was_pending = app.0.preview.debouncer.is_pending();
+        crate::config_tui::events::check_debounce(&mut app.0);
+        // Recompile happened if pending was true before and is now false
+        // (consumed by should_recompile after the timer elapsed). We cannot
+        // observe the recompile itself here; callers compare via
+        // debouncer_pending() or preview state.
+        was_pending && !app.0.preview.debouncer.is_pending()
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

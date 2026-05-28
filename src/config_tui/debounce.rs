@@ -19,6 +19,19 @@ impl Debouncer {
         self.pending = true;
     }
 
+    /// Clear any pending edit mark. Called on Esc-cancel of an in-flight
+    /// edit modal so the debouncer does not trigger a phantom recompile.
+    pub(crate) fn mark_edit_clear(&mut self) {
+        self.pending = false;
+        self.last_edit = None;
+    }
+
+    /// True iff a pending edit mark is set. Used by `__test_api` integration
+    /// test helpers to assert debouncer state without direct field access.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending
+    }
+
     /// Caller invokes after the main loop's 100 ms tick; returns true exactly
     /// once per quiescent-window expiry. Pending flag clears on consume.
     pub(crate) fn should_recompile(&mut self) -> bool {
@@ -58,6 +71,17 @@ mod tests {
         thread::sleep(Duration::from_millis(250));
         assert!(d.should_recompile());
         assert!(!d.should_recompile(), "consume-once semantic; pending flag clears");
+    }
+
+    #[test]
+    fn mark_edit_clear_resets_pending_and_last_edit() {
+        let mut d = Debouncer::default();
+        d.mark_edit();
+        assert!(d.pending);
+        assert!(d.last_edit.is_some());
+        d.mark_edit_clear();
+        assert!(!d.pending);
+        assert!(d.last_edit.is_none());
     }
 
     #[test]
