@@ -51,8 +51,10 @@ pub(crate) struct ColorPickerState {
     // custom enum would only rename the same three states.
     #[allow(clippy::option_option)]
     pub(crate) staged_bold: Option<Option<bool>>,
+    // reason: same tri-state shape as `staged_bold`; see the doc-comment above.
     #[allow(clippy::option_option)]
     pub(crate) staged_italic: Option<Option<bool>>,
+    // reason: same tri-state shape as `staged_bold`; see the doc-comment above.
     #[allow(clippy::option_option)]
     pub(crate) staged_underline: Option<Option<bool>>,
 }
