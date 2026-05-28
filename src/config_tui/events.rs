@@ -592,12 +592,9 @@ pub(crate) fn apply_pending_and_recompile(app: &mut App) {
 /// the live preview. Used by the `Ctrl+R` / `DiscardEditsAndReload` /
 /// `InitFromDump` flows (v0.6.1 §3.3).
 ///
-/// Mirrors `SaveDiffOutcome::DiscardAndReload` semantics from
-/// `handle_save_diff_key`: all precedence-chain inputs (theme / profile /
-/// CLI flags) flow through `ConfigSnapshot::read_from_disk` — reload does
 /// Extract a human-readable rule name from a [`RuleId`] for use in toast
 /// messages. Returns just the rule name component (not the profile prefix).
-fn rule_id_display_name(rule_id: &crate::config_tui::edit::RuleId) -> String {
+pub(crate) fn rule_id_display_name(rule_id: &crate::config_tui::edit::RuleId) -> String {
     match rule_id {
         crate::config_tui::edit::RuleId::Builtin(n) => (*n).to_owned(),
         crate::config_tui::edit::RuleId::UserConfig(n) => n.clone(),
@@ -740,26 +737,37 @@ fn bind_bool_axes_to_draft(
 
 /// Map `focus.patterns.selected_idx` to a `RuleId`.
 ///
-/// The Patterns tab list shows built-in rule names (filtered by any
-/// active `app.search_filter`). The index resolves to `RuleId::Builtin`
-/// against the same filtered view used by `tabs::patterns::render_list`
-/// + `dispatch_key`. Other tabs yield `None` — v0.7 may extend.
+/// The Patterns tab list is a union of built-in + user-config rules
+/// presented under two section headers (see
+/// [`crate::config_tui::tabs::patterns::patterns_list_layout`]). The
+/// selectable-index space is `[0..builtin_count)` followed by
+/// `[builtin_count..total)`; this function maps that index to
+/// `RuleId::Builtin(name)` in the first range and `RuleId::UserConfig(name)`
+/// in the second.
 ///
-/// User-config rule render (union with builtins) lands in v0.7+; the
-/// `UserConfig` fallback path is therefore unreachable in v0.6.1 and was
-/// removed.
+/// Other tabs yield `None` — v0.7+ may extend (Themes / Profiles).
 pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::edit::RuleId> {
     use crate::config_tui::app::Tab;
     use crate::config_tui::edit::RuleId;
     match app.tab {
         Tab::Patterns => {
             let filter = app.search_filter.as_deref().unwrap_or("");
-            let filtered = crate::config_tui::search::filter_names_lowercase(
-                app.catalog.builtin_rule_names.iter().copied(),
+            let layout = crate::config_tui::tabs::patterns::patterns_list_layout(
+                &app.catalog.builtin_rule_names,
+                &app.snapshot.parsed.rules,
                 filter,
             );
-            let idx = app.focus.patterns.selected_idx;
-            filtered.get(idx).copied().map(RuleId::Builtin)
+            let total = layout.builtin_count + layout.user_count;
+            if total == 0 {
+                return None;
+            }
+            let idx = app.focus.patterns.selected_idx.min(total - 1);
+            if idx < layout.builtin_count {
+                Some(RuleId::Builtin(layout.builtin_names[idx]))
+            } else {
+                let user_pos = idx - layout.builtin_count;
+                layout.user_names.get(user_pos).cloned().map(RuleId::UserConfig)
+            }
         }
         _ => None,
     }

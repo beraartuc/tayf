@@ -462,6 +462,50 @@ pub mod __test_api {
         Ok(AppHandle(crate::config_tui::app::App::from_snapshot(snap)))
     }
 
+    /// Boot a fresh App on an empty snapshot whose `parsed.rules` is
+    /// pre-populated with synthetic `UserRule` entries (one per `(name,
+    /// pattern)` tuple in `user_rules`), then seed the live-preview
+    /// pipeline with `sample`. Used by v0.6.2 G5 integration tests
+    /// asserting the Patterns tab union render (built-in + user-config
+    /// rules under two DIM section headers).
+    ///
+    /// Each synthetic `UserRule` carries `enabled = true` and no style /
+    /// styles / priority overrides — enough to surface in
+    /// `patterns_list_layout` and the rendered list without affecting
+    /// the live preview pipeline. Also builds a `TestBackend` terminal
+    /// sized `cols × rows` so the caller can draw and inspect the buffer.
+    ///
+    /// Primitive `&str` signatures keep `pub(crate) UserRule` /
+    /// `ConfigSnapshot` off the public boundary.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn boot_app_with_user_config_and_sample(
+        user_rules: &[(&str, &str)],
+        sample: &str,
+        cols: u16,
+        rows: u16,
+    ) -> (AppHandle, ratatui::Terminal<ratatui::backend::TestBackend>) {
+        let mut snapshot = crate::config_tui::snapshot::ConfigSnapshot::empty();
+        for (name, pattern) in user_rules {
+            snapshot.parsed.rules.push(crate::config::UserRule {
+                name: (*name).to_owned(),
+                pattern: Some((*pattern).to_owned()),
+                style: None,
+                enabled: true,
+                styles: None,
+                priority: None,
+            });
+        }
+        let mut app = crate::config_tui::app::App::from_snapshot(snapshot);
+        sample.clone_into(&mut app.sample_input.text);
+        app.preview.recompile(&app.sample_input.text);
+
+        let backend = ratatui::backend::TestBackend::new(cols, rows);
+        let terminal = ratatui::Terminal::new(backend)
+            .expect("TestBackend init in boot_app_with_user_config_and_sample");
+        (AppHandle(app), terminal)
+    }
+
     /// Stage a foreground-color edit on a built-in rule so
     /// `app.edits.is_dirty()` becomes true. Used by `Ctrl+R` integration
     /// tests that need a dirty-edits precondition without driving the
