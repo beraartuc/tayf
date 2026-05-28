@@ -79,10 +79,20 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                     let out = crate::config_tui::widgets::color_picker::dispatch_key(state, k);
                     match out {
                         crate::config_tui::widgets::color_picker::ColorPickerOutcome::Accept => {
+                            // Capture color BEFORE closing the modal (which moves state).
+                            let color = if let Some(Modal::ColorPicker(state)) = &app.modal {
+                                state.selected_color()
+                            } else {
+                                None
+                            };
                             app.modal = None;
-                            app.toast = Some(crate::config_tui::app::Toast::ok(
-                                "color accepted (binding to selected rule lands in v0.6+)",
-                            ));
+                            if let Some(color) = color {
+                                bind_color_to_selected_rule(app, color);
+                            } else {
+                                app.toast = Some(crate::config_tui::app::Toast::warn(
+                                    "color picker yielded no color (truecolor hex incomplete?)",
+                                ));
+                            }
                         }
                         crate::config_tui::widgets::color_picker::ColorPickerOutcome::Cancel => {
                             app.modal = None;
@@ -371,6 +381,92 @@ pub(crate) fn recompile_preview(app: &mut App) {
     app.preview.recompile(&app.sample_input.text);
 }
 
+/// Recompile the live preview from current `PendingEdits` + snapshot.
+///
+/// On success: replaces the compiled snapshot via `ArcSwap` and re-runs
+/// the per-line span computation. On failure: sets `preview.compile_error`
+/// banner; existing `preview.runs` are preserved for visual continuity
+/// (spec §9.4 — last-good preview survives transient compile errors).
+pub(crate) fn apply_pending_and_recompile(app: &mut App) {
+    let theme = app.snapshot.parsed.theme.as_deref();
+    let profile = app.snapshot.parsed.profile.as_deref();
+    match crate::config_tui::compile_pending::compile_pending(
+        &app.snapshot,
+        &app.edits,
+        theme,
+        profile,
+    ) {
+        Ok(new_compiled) => {
+            app.preview.compiled.store(std::sync::Arc::new(new_compiled));
+            app.preview.compile_error = None;
+            recompile_preview(app);
+        }
+        Err(err) => {
+            app.preview.compile_error = Some(err.to_string());
+        }
+    }
+}
+
+/// Bind the picked color to the rule currently focused under the
+/// Patterns tab, then drive a recompile + toast.
+///
+/// v0.6 limitation: `ColorPicker` writes to
+/// `edits.rules[RuleId::Builtin | RuleId::UserConfig][StyleKey::Default].fg`,
+/// but `compile_pending`'s overlay path applies edits only to
+/// `RuleId::UserConfig` entries. Builtin color edits are PERSISTED in
+/// `PendingEdits` (and will surface in `SaveDiff`) but do NOT update the
+/// live preview compile path until v0.6.1+ wires the `styles_override`
+/// route for builtin rules. The success toast below reflects that the
+/// edit was recorded; the preview color stays the builtin default until
+/// that route lands.
+fn bind_color_to_selected_rule(app: &mut App, color: crate::style::Color) {
+    let Some(rule_id) = resolve_selected_rule_id(app) else {
+        app.toast = Some(crate::config_tui::app::Toast::warn(
+            "no rule selected — switch to Patterns tab and select first",
+        ));
+        return;
+    };
+    let rule_name = match &rule_id {
+        crate::config_tui::edit::RuleId::Builtin(n) => (*n).to_owned(),
+        crate::config_tui::edit::RuleId::UserConfig(n) => n.clone(),
+        crate::config_tui::edit::RuleId::Embedded { rule, .. }
+        | crate::config_tui::edit::RuleId::DiskProfile { rule, .. } => rule.clone(),
+    };
+    let rule_edit = app.edits.rules.entry(rule_id).or_default();
+    let style_entry =
+        rule_edit.styles.entry(crate::config_tui::edit::StyleKey::Default).or_default();
+    style_entry.fg = Some(Some(color));
+    apply_pending_and_recompile(app);
+    app.toast =
+        Some(crate::config_tui::app::Toast::ok(format!("color bound to rule '{rule_name}'")));
+}
+
+/// Map `focus.patterns.selected_idx` to a `RuleId`.
+///
+/// The Patterns tab list is rendered as `[builtins ...][user_rules ...]`,
+/// so indices below `builtin_rule_names.len()` resolve to `RuleId::Builtin`
+/// and indices above resolve to `RuleId::UserConfig` (clipped to the
+/// `snapshot.parsed.rules` length). Other tabs yield `None` — v0.6 scope
+/// is Patterns only (spec §12.4).
+pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::edit::RuleId> {
+    use crate::config_tui::app::Tab;
+    use crate::config_tui::edit::RuleId;
+    match app.tab {
+        Tab::Patterns => {
+            let idx = app.focus.patterns.selected_idx;
+            let builtin_count = app.catalog.builtin_rule_names.len();
+            if idx < builtin_count {
+                let name = app.catalog.builtin_rule_names[idx];
+                Some(RuleId::Builtin(name))
+            } else {
+                let user_idx = idx - builtin_count;
+                app.snapshot.parsed.rules.get(user_idx).map(|r| RuleId::UserConfig(r.name.clone()))
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Toast expiration tick.
 pub(crate) fn check_toast(app: &mut App) {
     if app.toast.as_ref().is_some_and(crate::config_tui::app::Toast::expired) {
@@ -515,6 +611,35 @@ mod tests {
         assert!(matches!(app.modal, Some(Modal::SampleSet)));
         let state = app.sample_set_state.as_ref().expect("state set");
         assert_eq!(state.buf, original, "buffer must be pre-filled with current sample");
+    }
+
+    #[test]
+    fn color_picker_commit_binds_to_selected_rule_via_styles_default_key() {
+        let snapshot = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snapshot);
+        // Default tab is Patterns; first builtin is at index 0.
+        app.focus.patterns.selected_idx = 0;
+        let color = crate::style::Color::Cyan;
+        bind_color_to_selected_rule(&mut app, color);
+        let first_builtin = app.catalog.builtin_rule_names[0];
+        let rule_id = crate::config_tui::edit::RuleId::Builtin(first_builtin);
+        let edit = app.edits.rules.get(&rule_id).expect("rule edit recorded");
+        let style =
+            edit.styles.get(&crate::config_tui::edit::StyleKey::Default).expect("style entry");
+        assert_eq!(style.fg, Some(Some(color)));
+    }
+
+    #[test]
+    fn color_picker_commit_invokes_recompile_preview() {
+        let snapshot = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snapshot);
+        app.sample_input.text = "see 192.168.1.1 here".to_owned();
+        app.preview.recompile(&app.sample_input.text);
+        let runs_before = app.preview.runs.len();
+        app.focus.patterns.selected_idx = 0;
+        bind_color_to_selected_rule(&mut app, crate::style::Color::Magenta);
+        assert!(app.preview.compile_error.is_none(), "valid edit yields no error");
+        assert_eq!(app.preview.runs.len(), runs_before, "line count stable");
     }
 
     #[test]

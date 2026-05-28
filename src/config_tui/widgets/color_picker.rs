@@ -38,6 +38,56 @@ impl Default for ColorPickerState {
     }
 }
 
+impl ColorPickerState {
+    /// Returns the color currently highlighted by the active section.
+    ///
+    /// - `Ansi16` always yields `Some(_)` (one of `Color::Black..BrightWhite`).
+    /// - `Palette256` always yields `Some(Color::Indexed(_))`.
+    /// - `TrueHex` yields `Some(Color::Rgb(_,_,_))` only when `hex_buf`
+    ///   is a complete six-digit hex value; partial input yields `None`
+    ///   so the Accept caller can show a toast instead of binding to a
+    ///   spurious color.
+    pub(crate) fn selected_color(&self) -> Option<crate::style::Color> {
+        use crate::style::Color;
+        match self.section {
+            PickerSection::Ansi16 => Some(match self.ansi16_idx {
+                0 => Color::Black,
+                1 => Color::Red,
+                2 => Color::Green,
+                3 => Color::Yellow,
+                4 => Color::Blue,
+                5 => Color::Magenta,
+                6 => Color::Cyan,
+                7 => Color::White,
+                8 => Color::BrightBlack,
+                9 => Color::BrightRed,
+                10 => Color::BrightGreen,
+                11 => Color::BrightYellow,
+                12 => Color::BrightBlue,
+                13 => Color::BrightMagenta,
+                14 => Color::BrightCyan,
+                _ => Color::BrightWhite,
+            }),
+            PickerSection::Palette256 => {
+                // reason: palette_idx is clamped to 0..=255 in dispatch_key,
+                // so the cast is in-range. Mirrors the same cast in render_palette256.
+                #[allow(clippy::cast_possible_truncation)]
+                let idx_u8 = self.palette_idx as u8;
+                Some(Color::Indexed(idx_u8))
+            }
+            PickerSection::TrueHex => {
+                if self.hex_buf.len() != 6 {
+                    return None;
+                }
+                let r = u8::from_str_radix(&self.hex_buf[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&self.hex_buf[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&self.hex_buf[4..6], 16).ok()?;
+                Some(Color::Rgb(r, g, b))
+            }
+        }
+    }
+}
+
 pub(crate) fn render(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
     frame.render_widget(Clear, area);
     let block = Block::default()

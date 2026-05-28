@@ -29,15 +29,6 @@
 //! truth for merge semantics (memory
 //! `feedback_parallel_call_site_invariant_audit`).
 
-// reason: Group 4 lands the compile pipeline + tests. The preview
-// thread that drives `compile_pending` from the debouncer tick lands
-// in Group 5 (debounce → recompile wire). Until that wire ships,
-// `compile_pending` + `CompileError` + the helpers are exercised only
-// by this module's unit tests. Per-item allows below mirror the
-// debounce.rs / edit.rs pattern (see memory
-// `feedback_stale_dead_code_reason_drift` — strip once Group 5 lands
-// the call-site).
-
 use crate::config_tui::edit::{NewRule, NewStyle, PendingEdits, RuleId, StyleKey};
 use crate::config_tui::snapshot::ConfigSnapshot;
 use crate::rules::{compile_from_config, Compiled};
@@ -47,7 +38,6 @@ use crate::rules::{compile_from_config, Compiled};
 // to widening visibility of an internal NFA-size cap. Keep in sync by
 // inspection — both values gate the same ReDoS guard. See
 // `src/rules.rs:15` and CLAUDE.md §3.
-#[allow(dead_code)] // reason: Group 5 wires the debounce → compile_pending call site.
 const REGEX_SIZE_LIMIT_BYTES: usize = 1 << 20;
 
 /// Failure modes for [`compile_pending`]. `InvalidPattern` originates
@@ -55,7 +45,6 @@ const REGEX_SIZE_LIMIT_BYTES: usize = 1 << 20;
 /// `CompileFailed` wraps any error surfaced by
 /// [`crate::rules::compile_from_config`] after the synth `Config` has
 /// been built.
-#[allow(dead_code)] // reason: Group 5 wires the debounce → compile_pending call site.
 #[derive(Debug)]
 pub(crate) enum CompileError {
     /// A user-supplied [`NewRule`] pattern failed to compile via the
@@ -101,7 +90,6 @@ impl std::error::Error for CompileError {}
 ///   fails the local `RegexBuilder::size_limit` guard.
 /// - [`CompileError::CompileFailed`] for any error surfaced by
 ///   [`crate::rules::compile_from_config`].
-#[allow(dead_code)] // reason: Group 5 wires the debounce → compile_pending call site.
 pub(crate) fn compile_pending(
     snapshot: &ConfigSnapshot,
     edits: &PendingEdits,
@@ -158,7 +146,6 @@ pub(crate) fn compile_pending(
 /// shape expected by `compile_from_config`. Style axes that were never
 /// edited (outer `None` on [`NewStyle`] fields) map to the
 /// [`crate::config::UserStyle`] default for that axis.
-#[allow(dead_code)] // reason: Group 5 wires the debounce → compile_pending call site.
 fn new_rule_to_user_rule(new_rule: &NewRule) -> crate::config::UserRule {
     let style = new_style_to_user_style(&new_rule.style);
     crate::config::UserRule {
@@ -175,7 +162,6 @@ fn new_rule_to_user_rule(new_rule: &NewRule) -> crate::config::UserRule {
 /// [`crate::config::UserStyle`] (single-state per axis with `String`
 /// colour fields). Unedited axes collapse to the `UserStyle` default
 /// (no colour / attribute off).
-#[allow(dead_code)] // reason: Group 5 wires the debounce → compile_pending call site.
 fn new_style_to_user_style(ns: &NewStyle) -> crate::config::UserStyle {
     crate::config::UserStyle {
         fg: ns.fg.unwrap_or(None).map(crate::style::Color::to_toml_str),
@@ -192,7 +178,6 @@ fn new_style_to_user_style(ns: &NewStyle) -> crate::config::UserStyle {
 /// (outer `None`) preserve the existing value; edited axes overwrite.
 /// If the existing rule has `style: None`, a fresh `UserStyle::default()`
 /// receives the overlay.
-#[allow(dead_code)] // reason: Group 5 wires the debounce → compile_pending call site.
 fn apply_new_style_to_user_rule(rule: &mut crate::config::UserRule, ns: &NewStyle) {
     let mut us = rule.style.clone().unwrap_or_default();
     if let Some(fg) = ns.fg {
