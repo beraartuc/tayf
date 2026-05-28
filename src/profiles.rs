@@ -135,6 +135,28 @@ pub(crate) fn embedded_profile_names() -> impl Iterator<Item = &'static str> {
     EMBEDDED_PROFILES.iter().map(|(n, _)| *n)
 }
 
+/// Raw embedded TOML source for `name` if it names a compile-time profile.
+/// Used by the config TUI 'o' override-copy handler (v0.6.2 §3.4) to
+/// materialize the embedded profile under `~/.config/tayf/profiles/`.
+pub(crate) fn embedded_source(name: &str) -> Option<&'static str> {
+    EMBEDDED_PROFILES.iter().find(|(n, _)| *n == name).map(|(_, src)| *src)
+}
+
+/// `<tayf_root>/profiles/<name>.toml` — canonical on-disk location for a
+/// user-editable profile file. `tayf_root` is the resolved
+/// `~/.config/tayf/` directory (see
+/// [`crate::config_tui::save::tayf_config_root`]).
+pub(crate) fn disk_path_with_root(tayf_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    profiles_dir_with_root(tayf_root).join(format!("{name}.toml"))
+}
+
+/// `<tayf_root>/profiles/` — pure sibling of the env-resolved directory;
+/// used by integration tests that prefer a deterministic root over
+/// mutating `XDG_CONFIG_HOME`.
+pub(crate) fn profiles_dir_with_root(tayf_root: &std::path::Path) -> std::path::PathBuf {
+    tayf_root.join("profiles")
+}
+
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
 /// the environment for disk discovery; falls back to the embedded
 /// library ([`EMBEDDED_PROFILES`]) on miss.
@@ -705,6 +727,46 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, vec!["aws", "docker", "gcp", "k8s", "network"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // G6 — Item 4 accessors used by the TUI 'o' override-copy handler.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn embedded_source_round_trips_with_every_embedded_profile_name() {
+        for name in embedded_profile_names() {
+            assert!(
+                embedded_source(name).is_some(),
+                "every embedded profile must expose its source: {name}"
+            );
+        }
+        assert!(embedded_source("does-not-exist").is_none(), "unknown name → None");
+    }
+
+    #[test]
+    fn embedded_source_returns_byte_for_byte_match_for_aws() {
+        let direct = EMBEDDED_PROFILES.iter().find(|(n, _)| *n == "aws").map(|(_, s)| *s).unwrap();
+        assert_eq!(embedded_source("aws"), Some(direct), "aws source bytes match the registry");
+    }
+
+    #[test]
+    fn disk_path_with_root_builds_canonical_profiles_layout() {
+        let tayf_root = std::path::Path::new("/tmp/example-config/tayf");
+        assert_eq!(
+            disk_path_with_root(tayf_root, "aws"),
+            std::path::PathBuf::from("/tmp/example-config/tayf/profiles/aws.toml"),
+            "disk path = <tayf_root>/profiles/<name>.toml"
+        );
+    }
+
+    #[test]
+    fn profiles_dir_with_root_appends_profiles_segment_to_tayf_root() {
+        let tayf_root = std::path::Path::new("/tmp/example-config/tayf");
+        assert_eq!(
+            profiles_dir_with_root(tayf_root),
+            std::path::PathBuf::from("/tmp/example-config/tayf/profiles"),
+        );
     }
 
     // --- aws / instance_id (§7.2.1) ---

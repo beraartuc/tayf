@@ -896,6 +896,70 @@ pub mod __test_api {
         app.0.edits.rules.remove(&rid);
         app.0.edits.deleted.remove(&rid);
     }
+
+    // -----------------------------------------------------------------------
+    // G6 — Item 4 helpers used by the override-copy integration tests.
+    // All inputs are primitive types so `pub(crate) Tab` does not need to
+    // appear in a `pub` signature.
+    // -----------------------------------------------------------------------
+
+    /// Switch the active tab to Profiles. Used by override-copy tests that
+    /// need to drive `tabs::profiles::dispatch_key` directly.
+    pub fn goto_profiles_tab(app: &mut AppHandle) {
+        app.0.tab = crate::config_tui::app::Tab::Profiles;
+    }
+
+    /// Switch the active tab to Themes.
+    pub fn goto_themes_tab(app: &mut AppHandle) {
+        app.0.tab = crate::config_tui::app::Tab::Themes;
+    }
+
+    /// Set the focus selection on the Profiles tab to `idx`. Caller is
+    /// responsible for ensuring `idx < catalog.embedded_profile_names.len()`.
+    pub fn set_selected_profile_idx(app: &mut AppHandle, idx: usize) {
+        app.0.focus.profiles.selected_idx = idx;
+    }
+
+    /// Set the focus selection on the Themes tab to `idx`.
+    pub fn set_selected_theme_idx(app: &mut AppHandle, idx: usize) {
+        app.0.focus.themes.selected_idx = idx;
+    }
+
+    /// Look up the catalog index for `name` in the Profiles embedded list.
+    /// Returns `None` when the name is not in the embedded set.
+    #[must_use]
+    pub fn embedded_profile_idx(app: &AppHandle, name: &str) -> Option<usize> {
+        app.0.catalog.embedded_profile_names.iter().position(|n| *n == name)
+    }
+
+    /// Look up the catalog index for `name` in the Themes built-in list.
+    #[must_use]
+    pub fn builtin_theme_idx(app: &AppHandle, name: &str) -> Option<usize> {
+        app.0.catalog.builtin_theme_names.iter().position(|n| *n == name)
+    }
+
+    /// Read the current toast message text, if any. Convenience over
+    /// [`current_toast`] for assertions that only need the body string.
+    #[must_use]
+    pub fn current_toast_message(app: &AppHandle) -> Option<String> {
+        app.0.toast.as_ref().map(|t| t.text.clone())
+    }
+
+    /// Raw embedded TOML source for a built-in profile. Lets integration
+    /// tests assert byte-equality between the copy-on-disk and the
+    /// compile-time embedded source without exposing `pub(crate)
+    /// crate::profiles::embedded_source` itself.
+    #[must_use]
+    pub fn embedded_profile_source(name: &str) -> Option<&'static str> {
+        crate::profiles::embedded_source(name)
+    }
+
+    /// Raw embedded TOML source for a built-in theme — symmetric to
+    /// [`embedded_profile_source`].
+    #[must_use]
+    pub fn embedded_theme_source(name: &str) -> Option<&'static str> {
+        crate::themes::embedded_source(name)
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

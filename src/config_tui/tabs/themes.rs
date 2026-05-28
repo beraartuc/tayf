@@ -92,9 +92,57 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('o') => {
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "theme override copy lands in v0.7+ (TUI new-disk-file out of v0.5.4 scope)",
-            ));
+            let Some(name) = filtered.get(app.focus.themes.selected_idx).copied() else {
+                return;
+            };
+
+            // Source check: only built-in themes need the copy. A disk
+            // theme is already editable in place.
+            if !crate::themes::embedded_theme_names().any(|n| n == name) {
+                app.toast = Some(crate::config_tui::app::Toast::warn(format!(
+                    "Already a disk theme — edit ~/.config/tayf/themes/{name}.toml"
+                )));
+                return;
+            }
+
+            let Some(tayf_root) = crate::config_tui::save::tayf_config_root() else {
+                app.toast = Some(crate::config_tui::app::Toast::warn(
+                    "Override failed: cannot resolve ~/.config/tayf/".to_owned(),
+                ));
+                return;
+            };
+            let dest = crate::themes::disk_path_with_root(&tayf_root, name);
+
+            if let Err(reason) =
+                crate::config_tui::save::check_safe_write_destination(&dest, &tayf_root)
+            {
+                app.toast = Some(crate::config_tui::app::Toast::warn(format!(
+                    "Override refused: {reason}"
+                )));
+                return;
+            }
+
+            if dest.exists() {
+                app.toast = Some(crate::config_tui::app::Toast::warn(format!(
+                    "Already on disk — edit ~/.config/tayf/themes/{name}.toml"
+                )));
+                return;
+            }
+
+            let Some(src) = crate::themes::embedded_source(name) else {
+                return;
+            };
+
+            if let Err(e) = crate::config_tui::save::write_atomic_to(&dest, src) {
+                app.toast =
+                    Some(crate::config_tui::app::Toast::warn(format!("Override failed: {e}")));
+                return;
+            }
+
+            crate::config_tui::events::request_snapshot_reload(app);
+            app.toast = Some(crate::config_tui::app::Toast::ok(format!(
+                "Copied '{name}' to disk; now editable"
+            )));
         }
         _ => {}
     }

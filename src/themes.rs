@@ -341,6 +341,35 @@ pub(crate) fn names() -> &'static [&'static str] {
     &THEME_NAMES
 }
 
+/// Iterator alias around [`names`] for naming-symmetry with
+/// [`crate::profiles::embedded_profile_names`]. Used by the v0.6.2 config
+/// TUI 'o' override-copy handler.
+pub(crate) fn embedded_theme_names() -> impl Iterator<Item = &'static str> {
+    THEME_NAMES.iter().copied()
+}
+
+/// Raw embedded TOML source for `name` if it names a built-in theme.
+/// Used by the config TUI 'o' override-copy handler (v0.6.2 §3.4) to
+/// materialize the embedded theme under `~/.config/tayf/themes/`.
+pub(crate) fn embedded_source(name: &str) -> Option<&'static str> {
+    REGISTRY.iter().find(|(n, _)| *n == name).map(|(_, src)| *src)
+}
+
+/// `<tayf_root>/themes/<name>.toml` — canonical on-disk location for a
+/// user-editable theme file. `tayf_root` is the resolved
+/// `~/.config/tayf/` directory (see
+/// [`crate::config_tui::save::tayf_config_root`]).
+pub(crate) fn disk_path_with_root(tayf_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    themes_dir_with_root(tayf_root).join(format!("{name}.toml"))
+}
+
+/// `<tayf_root>/themes/` — pure sibling of the env-resolved directory;
+/// used by integration tests that prefer a deterministic root over
+/// mutating `XDG_CONFIG_HOME`.
+pub(crate) fn themes_dir_with_root(tayf_root: &std::path::Path) -> std::path::PathBuf {
+    tayf_root.join("themes")
+}
+
 /// Validate the shape of a theme's parsed config (`[general]` and
 /// `[[rules]]`). Themes may only override existing built-in styles,
 /// never define new rules, change patterns, set `enabled = false`, or
@@ -488,6 +517,52 @@ mod tests {
                 "theme {name:?} embedded source must not be empty"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // G6 — Item 4 accessors used by the TUI 'o' override-copy handler.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn embedded_source_round_trips_with_every_builtin_theme_name() {
+        for &name in names() {
+            assert!(
+                embedded_source(name).is_some(),
+                "every built-in theme must expose its source: {name}"
+            );
+        }
+        assert!(embedded_source("does-not-exist").is_none(), "unknown name → None");
+    }
+
+    #[test]
+    fn embedded_source_returns_byte_for_byte_match_for_dark() {
+        let direct = REGISTRY.iter().find(|(n, _)| *n == "dark").map(|(_, s)| *s).unwrap();
+        assert_eq!(embedded_source("dark"), Some(direct), "dark source bytes match the registry");
+    }
+
+    #[test]
+    fn embedded_theme_names_yields_same_set_as_names_accessor() {
+        let from_iter: Vec<&str> = embedded_theme_names().collect();
+        assert_eq!(from_iter, names().to_vec(), "iterator alias matches slice accessor");
+    }
+
+    #[test]
+    fn disk_path_with_root_builds_canonical_themes_layout() {
+        let tayf_root = std::path::Path::new("/tmp/example-config/tayf");
+        assert_eq!(
+            disk_path_with_root(tayf_root, "dark"),
+            std::path::PathBuf::from("/tmp/example-config/tayf/themes/dark.toml"),
+            "disk path = <tayf_root>/themes/<name>.toml"
+        );
+    }
+
+    #[test]
+    fn themes_dir_with_root_appends_themes_segment_to_tayf_root() {
+        let tayf_root = std::path::Path::new("/tmp/example-config/tayf");
+        assert_eq!(
+            themes_dir_with_root(tayf_root),
+            std::path::PathBuf::from("/tmp/example-config/tayf/themes"),
+        );
     }
 
     #[test]

@@ -603,7 +603,15 @@ pub(crate) fn rule_id_display_name(rule_id: &crate::config_tui::edit::RuleId) ->
     }
 }
 
-/// not introduce `app.edits` as a new precedence input. Memory
+/// Re-read the config snapshot from disk, clear pending edits, and
+/// recompile the live-preview pipeline. Used by `DiscardAndReload`
+/// (`handle_save_diff_key`) and the v0.6.2 override-copy 'o' handler
+/// (via [`request_snapshot_reload`]).
+///
+/// Mirrors `SaveDiffOutcome::DiscardAndReload` semantics: all
+/// precedence-chain inputs (theme / profile / CLI flags) flow through
+/// `ConfigSnapshot::read_from_disk` — reload does not introduce
+/// `app.edits` as a new precedence input. Memory
 /// `feedback_reload_precedence_snapshot`.
 fn reload_snapshot_inline(app: &mut App) -> Result<(), crate::error::Error> {
     let snap = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(
@@ -613,6 +621,20 @@ fn reload_snapshot_inline(app: &mut App) -> Result<(), crate::error::Error> {
     app.edits.clear();
     apply_pending_and_recompile(app);
     Ok(())
+}
+
+/// `pub(crate)` wrapper around [`reload_snapshot_inline`] so non-events.rs
+/// callers (the override-copy 'o' handler in `tabs/profiles.rs` and
+/// `tabs/themes.rs`) can request a snapshot reload without duplicating
+/// the policy. Surface a warn toast on failure rather than bubbling the
+/// error — the override write already succeeded; failure to *re-read*
+/// the snapshot is a soft error.
+pub(crate) fn request_snapshot_reload(app: &mut App) {
+    if let Err(e) = reload_snapshot_inline(app) {
+        app.toast = Some(crate::config_tui::app::Toast::warn(format!(
+            "Override written; snapshot reload failed: {e}"
+        )));
+    }
 }
 
 /// Real impl for `ConfirmAction::InitFromDump` (v0.6.1 §3.3). Writes the

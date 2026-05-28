@@ -317,6 +317,75 @@ pub(crate) fn default_config_toml() -> String {
 /// `0o600` (init-from-dump is the only path that creates a fresh
 /// config file; preserved-mode does not apply because no prior file
 /// exists to read the mode from).
+/// Verify `dest` is safe to write through, given `tayf_root` as the
+/// canonical config-tree root (e.g. `~/.config/tayf/`). Two-layer gate:
+///
+/// 1. **lstat:** the destination itself must not be a symlink.
+///    `rename(2)` would dereference one and overwrite the target — a
+///    user could craft `~/.config/tayf/profiles/aws.toml -> /etc/passwd`
+///    and have tayf silently clobber it. Refuse outright.
+/// 2. **Canonical parent:** the destination's parent directory, after
+///    `canonicalize`, must lie under `tayf_root` (also canonicalized).
+///    Protects against a symlinked `profiles/` directory pointing
+///    outside the tayf tree.
+///
+/// Returns a human-readable rejection reason in the `Err` case — the
+/// caller surfaces it as a TUI toast. CLAUDE.md §3 mandate.
+///
+/// # Errors
+/// `Err(reason)` when either gate trips, the parent cannot be created,
+/// or canonicalization fails. Treats `dest` not existing as fine — the
+/// override-copy path writes a *new* file.
+pub(crate) fn check_safe_write_destination(dest: &Path, tayf_root: &Path) -> Result<(), String> {
+    // 1. lstat — does NOT follow symlinks
+    match dest.symlink_metadata() {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(format!("dest is a symlink: {}", dest.display()));
+        }
+        Ok(_) | Err(_) if !dest.exists() => {
+            // dest absent — fall through; the write_atomic_to path will
+            // create it (and `rename(2)` does not follow nonexistent
+            // targets).
+        }
+        Ok(_) => {}
+        Err(e) => return Err(format!("dest stat failed: {e}")),
+    }
+
+    // 2. Canonical parent inside canonical tayf_root
+    let Some(parent) = dest.parent() else {
+        return Err("dest has no parent directory".to_owned());
+    };
+    std::fs::create_dir_all(parent).map_err(|e| format!("mkdir parent failed: {e}"))?;
+    let canonical_parent =
+        parent.canonicalize().map_err(|e| format!("canonicalize parent failed: {e}"))?;
+    let canonical_root =
+        tayf_root.canonicalize().map_err(|e| format!("canonicalize tayf_root failed: {e}"))?;
+    if !canonical_parent.starts_with(&canonical_root) {
+        return Err(format!(
+            "parent {} resolves outside tayf root {}",
+            canonical_parent.display(),
+            canonical_root.display(),
+        ));
+    }
+    Ok(())
+}
+
+/// Canonical `~/.config/tayf/` resolved from `$XDG_CONFIG_HOME` (preferred)
+/// or `$HOME/.config`. Returns `None` when neither environment variable
+/// is set. The returned path is NOT canonicalized (it may not exist
+/// yet); call `canonicalize` if you need the resolved filesystem path.
+///
+/// Centralized here so the profile / theme override-copy path and any
+/// future writer share a single env-resolution policy.
+pub(crate) fn tayf_config_root() -> Option<PathBuf> {
+    let base = if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg)
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".config")
+    };
+    Some(base.join("tayf"))
+}
+
 pub(crate) fn write_atomic_to(target: &Path, content: &str) -> std::io::Result<()> {
     let parent = target.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "target path has no parent directory")
@@ -336,6 +405,71 @@ pub(crate) fn write_atomic_to(target: &Path, content: &str) -> std::io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // G6 — check_safe_write_destination symlink + canonical-parent gate.
+    // CLAUDE.md §3 mandate: "reject symlink traversal outside ~/.config/tayf/".
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn check_safe_write_destination_accepts_path_inside_canonical_root() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let tayf_root = tmp.path().join("tayf");
+        std::fs::create_dir_all(tayf_root.join("profiles")).expect("mkdir");
+        let dest = tayf_root.join("profiles").join("aws.toml");
+
+        check_safe_write_destination(&dest, &tayf_root)
+            .expect("path under canonical tayf root is safe");
+    }
+
+    #[test]
+    fn check_safe_write_destination_rejects_when_dest_is_symlink() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let tayf_root = tmp.path().join("tayf");
+        let profiles_dir = tayf_root.join("profiles");
+        std::fs::create_dir_all(&profiles_dir).expect("mkdir");
+        let outside = tmp.path().join("outside.toml");
+        std::fs::write(&outside, "stolen-target").expect("write outside");
+        let dest = profiles_dir.join("aws.toml");
+        std::os::unix::fs::symlink(&outside, &dest).expect("symlink");
+
+        let err = check_safe_write_destination(&dest, &tayf_root)
+            .expect_err("symlink dest must be rejected");
+        assert!(err.contains("symlink"), "rejection reason must mention 'symlink'; got: {err}");
+        // Outside file must NOT have been touched by the check itself.
+        assert_eq!(std::fs::read_to_string(&outside).expect("read outside"), "stolen-target");
+    }
+
+    #[test]
+    fn check_safe_write_destination_rejects_when_parent_canonicalizes_outside_root() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let tayf_root = tmp.path().join("tayf");
+        std::fs::create_dir_all(&tayf_root).expect("mkdir tayf");
+        let outside_dir = tmp.path().join("outside-config");
+        std::fs::create_dir_all(&outside_dir).expect("mkdir outside");
+        // Symlink ~/.config/tayf/profiles → /tmp/.../outside-config
+        let profiles_link = tayf_root.join("profiles");
+        std::os::unix::fs::symlink(&outside_dir, &profiles_link).expect("symlink dir");
+        let dest = profiles_link.join("aws.toml");
+
+        let err = check_safe_write_destination(&dest, &tayf_root)
+            .expect_err("parent canonicalizing outside root must be rejected");
+        assert!(
+            err.to_lowercase().contains("outside"),
+            "rejection reason must mention 'outside'; got: {err}"
+        );
+    }
+
+    #[test]
+    fn check_safe_write_destination_accepts_nonexistent_dest_when_parent_inside_root() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let tayf_root = tmp.path().join("tayf");
+        std::fs::create_dir_all(tayf_root.join("profiles")).expect("mkdir");
+        let dest = tayf_root.join("profiles").join("does-not-exist-yet.toml");
+
+        check_safe_write_destination(&dest, &tayf_root)
+            .expect("nonexistent dest is fine when parent is safe");
+    }
 
     #[test]
     fn ts_for_backup_filename_byte_pinned() {
