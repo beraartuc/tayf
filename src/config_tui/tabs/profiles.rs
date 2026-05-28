@@ -25,9 +25,12 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
         .and_then(|x| x.as_deref())
         .or(app.snapshot.parsed.profile.as_deref())
         .unwrap_or("");
-    let items: Vec<ListItem> = app
-        .catalog
-        .embedded_profile_names
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.embedded_profile_names.iter().copied(),
+        filter,
+    );
+    let items: Vec<ListItem> = filtered
         .iter()
         .map(|name| {
             let marker = if *name == active { "● " } else { "  " };
@@ -35,7 +38,9 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
     let mut state = ListState::default();
-    state.select(Some(app.focus.profiles.selected_idx.min(items.len().saturating_sub(1))));
+    if !items.is_empty() {
+        state.select(Some(app.focus.profiles.selected_idx.min(items.len() - 1)));
+    }
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title("Profiles (embedded)"))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -43,12 +48,12 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
-    let selected = app
-        .catalog
-        .embedded_profile_names
-        .get(app.focus.profiles.selected_idx)
-        .copied()
-        .unwrap_or("");
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.embedded_profile_names.iter().copied(),
+        filter,
+    );
+    let selected = filtered.get(app.focus.profiles.selected_idx).copied().unwrap_or("");
     let body = if selected.is_empty() {
         "(no profile selected)".to_owned()
     } else {
@@ -61,7 +66,12 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
-    let len = app.catalog.embedded_profile_names.len();
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.embedded_profile_names.iter().copied(),
+        filter,
+    );
+    let len = filtered.len();
     match k.code {
         KeyCode::Char('j') | KeyCode::Down => {
             app.focus.profiles.selected_idx =
@@ -74,9 +84,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('G') => app.focus.profiles.selected_idx = len.saturating_sub(1),
         KeyCode::Enter => app.focus.profiles.detail_focused = true,
         KeyCode::Char(' ') => {
-            if let Some(name) =
-                app.catalog.embedded_profile_names.get(app.focus.profiles.selected_idx)
-            {
+            if let Some(name) = filtered.get(app.focus.profiles.selected_idx) {
                 app.edits.general.profile = Some(Some((*name).to_owned()));
                 app.toast = Some(crate::config_tui::app::Toast::ok(format!(
                     "staged profile = {name}; Ctrl+S to save"

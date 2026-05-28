@@ -25,9 +25,12 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
         .and_then(|x| x.as_deref())
         .or(app.snapshot.parsed.theme.as_deref())
         .unwrap_or("");
-    let items: Vec<ListItem> = app
-        .catalog
-        .builtin_theme_names
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.builtin_theme_names.iter().copied(),
+        filter,
+    );
+    let items: Vec<ListItem> = filtered
         .iter()
         .map(|name| {
             let marker = if *name == active { "● " } else { "  " };
@@ -35,7 +38,9 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
     let mut state = ListState::default();
-    state.select(Some(app.focus.themes.selected_idx.min(items.len().saturating_sub(1))));
+    if !items.is_empty() {
+        state.select(Some(app.focus.themes.selected_idx.min(items.len() - 1)));
+    }
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title("Themes (built-in)"))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -43,8 +48,12 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
-    let selected =
-        app.catalog.builtin_theme_names.get(app.focus.themes.selected_idx).copied().unwrap_or("");
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.builtin_theme_names.iter().copied(),
+        filter,
+    );
+    let selected = filtered.get(app.focus.themes.selected_idx).copied().unwrap_or("");
     let body = if selected.is_empty() {
         "(no theme selected)".to_owned()
     } else {
@@ -57,7 +66,12 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
-    let len = app.catalog.builtin_theme_names.len();
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.builtin_theme_names.iter().copied(),
+        filter,
+    );
+    let len = filtered.len();
     match k.code {
         KeyCode::Char('j') | KeyCode::Down => {
             app.focus.themes.selected_idx =
@@ -70,7 +84,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('G') => app.focus.themes.selected_idx = len.saturating_sub(1),
         KeyCode::Enter => app.focus.themes.detail_focused = true,
         KeyCode::Char(' ') => {
-            if let Some(name) = app.catalog.builtin_theme_names.get(app.focus.themes.selected_idx) {
+            if let Some(name) = filtered.get(app.focus.themes.selected_idx) {
                 app.edits.general.theme = Some(Some((*name).to_owned()));
                 app.toast = Some(crate::config_tui::app::Toast::ok(format!(
                     "staged theme = {name}; Ctrl+S to save"

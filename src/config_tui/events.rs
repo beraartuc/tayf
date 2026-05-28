@@ -307,6 +307,7 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
                 app.edits.clear();
                 app.modal = None;
                 app.save_diff = None;
+                app.save_diff_scroll = 0;
                 app.toast = Some(crate::config_tui::app::Toast::ok(
                     "Saved. Hot-reload will pick this up shortly.",
                 ));
@@ -314,6 +315,7 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
             Err(e) => {
                 app.modal = Some(Modal::Error(format!("Save failed: {e}")));
                 app.save_diff = None;
+                app.save_diff_scroll = 0;
             }
         },
         SaveDiffOutcome::DiscardAndReload(_disk_now) => {
@@ -325,12 +327,14 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
             app.edits.clear();
             app.modal = None;
             app.save_diff = None;
+            app.save_diff_scroll = 0;
             app.toast =
                 Some(crate::config_tui::app::Toast::ok("Reloaded from disk; TUI edits discarded."));
         }
         SaveDiffOutcome::CloseModal => {
             app.modal = None;
             app.save_diff = None;
+            app.save_diff_scroll = 0;
         }
         SaveDiffOutcome::StayOpen => {}
     }
@@ -372,7 +376,10 @@ fn handle_esc(app: &mut App) {
     // invariants that render + dispatch rely on stay intact.
     if app.modal.is_some() {
         match app.modal {
-            Some(Modal::SaveDiff) => app.save_diff = None,
+            Some(Modal::SaveDiff) => {
+                app.save_diff = None;
+                app.save_diff_scroll = 0;
+            }
             Some(Modal::Search) => app.search_state = None,
             Some(Modal::SampleSet) => app.sample_set_state = None,
             _ => {}
@@ -617,25 +624,26 @@ fn bind_color_to_selected_rule(app: &mut App, color: crate::style::Color) {
 
 /// Map `focus.patterns.selected_idx` to a `RuleId`.
 ///
-/// The Patterns tab list is rendered as `[builtins ...][user_rules ...]`,
-/// so indices below `builtin_rule_names.len()` resolve to `RuleId::Builtin`
-/// and indices above resolve to `RuleId::UserConfig` (clipped to the
-/// `snapshot.parsed.rules` length). Other tabs yield `None` — v0.6 scope
-/// is Patterns only (spec §12.4).
+/// The Patterns tab list shows built-in rule names (filtered by any
+/// active `app.search_filter`). The index resolves to `RuleId::Builtin`
+/// against the same filtered view used by `tabs::patterns::render_list`
+/// + `dispatch_key`. Other tabs yield `None` — v0.7 may extend.
+///
+/// User-config rule render (union with builtins) lands in v0.7+; the
+/// `UserConfig` fallback path is therefore unreachable in v0.6.1 and was
+/// removed.
 pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::edit::RuleId> {
     use crate::config_tui::app::Tab;
     use crate::config_tui::edit::RuleId;
     match app.tab {
         Tab::Patterns => {
+            let filter = app.search_filter.as_deref().unwrap_or("");
+            let filtered = crate::config_tui::search::filter_names_lowercase(
+                app.catalog.builtin_rule_names.iter().copied(),
+                filter,
+            );
             let idx = app.focus.patterns.selected_idx;
-            let builtin_count = app.catalog.builtin_rule_names.len();
-            if idx < builtin_count {
-                let name = app.catalog.builtin_rule_names[idx];
-                Some(RuleId::Builtin(name))
-            } else {
-                let user_idx = idx - builtin_count;
-                app.snapshot.parsed.rules.get(user_idx).map(|r| RuleId::UserConfig(r.name.clone()))
-            }
+            filtered.get(idx).copied().map(RuleId::Builtin)
         }
         _ => None,
     }

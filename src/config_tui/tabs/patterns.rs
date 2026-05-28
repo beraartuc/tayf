@@ -21,14 +21,17 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_list(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = app
-        .catalog
-        .builtin_rule_names
-        .iter()
-        .map(|name| ListItem::new(format!("  {name}")))
-        .collect();
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.builtin_rule_names.iter().copied(),
+        filter,
+    );
+    let items: Vec<ListItem> =
+        filtered.iter().map(|name| ListItem::new(format!("  {name}"))).collect();
     let mut state = ListState::default();
-    state.select(Some(app.focus.patterns.selected_idx.min(items.len().saturating_sub(1))));
+    if !items.is_empty() {
+        state.select(Some(app.focus.patterns.selected_idx.min(items.len() - 1)));
+    }
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title("Patterns"))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -36,8 +39,12 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
-    let selected =
-        app.catalog.builtin_rule_names.get(app.focus.patterns.selected_idx).copied().unwrap_or("");
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.builtin_rule_names.iter().copied(),
+        filter,
+    );
+    let selected = filtered.get(app.focus.patterns.selected_idx).copied().unwrap_or("");
     let body = if selected.is_empty() {
         "(no pattern selected)".to_owned()
     } else {
@@ -60,7 +67,12 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
-    let len = app.catalog.builtin_rule_names.len();
+    let filter = app.search_filter.as_deref().unwrap_or("");
+    let filtered = crate::config_tui::search::filter_names_lowercase(
+        app.catalog.builtin_rule_names.iter().copied(),
+        filter,
+    );
+    let len = filtered.len();
     match k.code {
         KeyCode::Char('j') | KeyCode::Down => {
             app.focus.patterns.selected_idx =
@@ -79,8 +91,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             ));
         }
         KeyCode::Char('o') => {
-            if let Some(name) = app.catalog.builtin_rule_names.get(app.focus.patterns.selected_idx)
-            {
+            if let Some(name) = filtered.get(app.focus.patterns.selected_idx) {
                 app.edits.rules.insert(
                     crate::config_tui::edit::RuleId::UserConfig((*name).to_owned()),
                     crate::config_tui::edit::RuleEdit::default(),
@@ -91,8 +102,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('d') | KeyCode::Delete => {
-            if let Some(name) = app.catalog.builtin_rule_names.get(app.focus.patterns.selected_idx)
-            {
+            if let Some(name) = filtered.get(app.focus.patterns.selected_idx) {
                 app.modal = Some(Modal::Confirm {
                     msg: format!("Delete user-config rule '{name}'? (built-in fallback restored)"),
                     action: ConfirmAction::DeleteUserRule((*name).to_owned()),
@@ -100,8 +110,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('r') => {
-            if let Some(name) = app.catalog.builtin_rule_names.get(app.focus.patterns.selected_idx)
-            {
+            if let Some(name) = filtered.get(app.focus.patterns.selected_idx) {
                 app.modal = Some(Modal::Confirm {
                     msg: format!("Reset user override of '{name}'? (re-enables built-in)"),
                     action: ConfirmAction::ResetUserOverride((*name).to_owned()),

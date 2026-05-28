@@ -549,6 +549,44 @@ pub mod __test_api {
             (t.text.clone(), kind)
         })
     }
+
+    /// Clear any active modal — test-only helper used to reset state
+    /// between sub-assertions in a single test. v0.6.1 Group D parity
+    /// check (V alias → reset → Shift+P).
+    pub fn clear_modal(app: &mut AppHandle) {
+        app.0.modal = None;
+    }
+
+    /// Read the App's current `save_diff_scroll` offset. v0.6.1 §3.7.
+    #[must_use]
+    pub fn save_diff_scroll(app: &AppHandle) -> u16 {
+        app.0.save_diff_scroll
+    }
+
+    /// Open the save-diff modal seeded with a Clean diff body for
+    /// scroll-key integration tests (v0.6.1 §3.7). Bypasses the
+    /// `Ctrl+S` build-initial-state path so tests can assert scroll
+    /// keystroke semantics without a real on-disk config.
+    pub fn open_save_diff_with_clean_body(app: &mut AppHandle, tui_diff: impl Into<String>) {
+        use crate::config_tui::widgets::save_diff::SaveDiffState;
+        app.0.save_diff = Some(SaveDiffState::Clean { tui_diff: tui_diff.into() });
+        app.0.modal = Some(crate::config_tui::app::Modal::SaveDiff);
+    }
+
+    /// Canonical help-modal string. Mirrors
+    /// `crate::config_tui::events::HELP_MODAL_CONTENT` for integration
+    /// tests asserting v0.6.1 keybindings are listed.
+    #[must_use]
+    pub fn help_modal_content() -> &'static str {
+        crate::config_tui::events::HELP_MODAL_CONTENT
+    }
+
+    /// Wrap `crate::config_tui::search::filter_names_lowercase` for
+    /// integration tests. v0.6.1 §3.6.
+    #[must_use]
+    pub fn filter_names_lowercase(names: &[&'static str], filter: &str) -> Vec<&'static str> {
+        crate::config_tui::search::filter_names_lowercase(names.iter().copied(), filter)
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

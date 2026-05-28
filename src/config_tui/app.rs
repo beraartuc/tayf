@@ -268,6 +268,10 @@ pub(crate) struct App {
     pub(crate) toast: Option<Toast>,
     pub(crate) mini_preview_visible: bool,
     pub(crate) save_diff: Option<crate::config_tui::widgets::save_diff::SaveDiffState>,
+    /// Vertical scroll offset for the save-diff modal `Paragraph` render.
+    /// Reset to 0 when the modal closes (Commit ok / `DiscardAndReload` /
+    /// `CloseModal` / Esc tier-2). v0.6.1 §3.7.
+    pub(crate) save_diff_scroll: u16,
     pub(crate) search_filter: Option<String>,
     pub(crate) search_state: Option<crate::config_tui::widgets::search::SearchState>,
     pub(crate) sample_set_state: Option<crate::config_tui::widgets::sample_set::SampleSetState>,
@@ -309,6 +313,7 @@ impl App {
             toast: None,
             mini_preview_visible: true,
             save_diff: None,
+            save_diff_scroll: 0,
             search_filter: None,
             search_state: None,
             sample_set_state: None,

@@ -83,11 +83,47 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
     };
     let block = Block::default().borders(Borders::ALL).title(title);
-    frame.render_widget(Paragraph::new(body).block(block), area);
+    frame.render_widget(Paragraph::new(body).scroll((app.save_diff_scroll, 0)).block(block), area);
 }
+
+/// `PageUp` / `PageDown` step size (rows). Constant rather than a cached
+/// inner-area height (v0.6.1 §3.7 lean simplification): `Paragraph::scroll`
+/// clamps internally so over-scroll past EOF is harmless.
+const PAGE_STEP: u16 = 10;
 
 /// Key dispatch — returns the next state transition.
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) -> SaveDiffOutcome {
+    // Scroll keys (v0.6.1 §3.7). These do not consume the saved
+    // `app.save_diff` state — modal stays open and only the scroll
+    // offset is mutated. `u16::MAX` for End is safe because
+    // `Paragraph::scroll` clamps to the document length.
+    match k.code {
+        KeyCode::Up => {
+            app.save_diff_scroll = app.save_diff_scroll.saturating_sub(1);
+            return SaveDiffOutcome::StayOpen;
+        }
+        KeyCode::Down => {
+            app.save_diff_scroll = app.save_diff_scroll.saturating_add(1);
+            return SaveDiffOutcome::StayOpen;
+        }
+        KeyCode::PageUp => {
+            app.save_diff_scroll = app.save_diff_scroll.saturating_sub(PAGE_STEP);
+            return SaveDiffOutcome::StayOpen;
+        }
+        KeyCode::PageDown => {
+            app.save_diff_scroll = app.save_diff_scroll.saturating_add(PAGE_STEP);
+            return SaveDiffOutcome::StayOpen;
+        }
+        KeyCode::Home => {
+            app.save_diff_scroll = 0;
+            return SaveDiffOutcome::StayOpen;
+        }
+        KeyCode::End => {
+            app.save_diff_scroll = u16::MAX;
+            return SaveDiffOutcome::StayOpen;
+        }
+        _ => {}
+    }
     let Some(state) = app.save_diff.take() else {
         return SaveDiffOutcome::CloseModal;
     };

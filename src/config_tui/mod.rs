@@ -33,6 +33,7 @@ pub(crate) mod events;
 pub(crate) mod reconcile;
 pub(crate) mod render;
 pub(crate) mod save;
+pub(crate) mod search;
 pub(crate) mod snapshot;
 pub(crate) mod status_cmd;
 pub(crate) mod style_ratatui;
