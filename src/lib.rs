@@ -624,15 +624,15 @@ pub mod __test_api {
         matches!(app.0.modal, Some(crate::config_tui::app::Modal::EditRegex { .. }))
     }
 
-    /// Invoke one debounce tick as if the main loop's timer fired. Returns
-    /// whether a recompile was triggered. G1 spec §3.7.
+    /// Invoke one debounce tick as if the main loop's timer fired.
+    ///
+    /// Returns `true` if the pending mark was consumed by this tick
+    /// (i.e., `was_pending` before the tick and `!is_pending` after).
+    /// This does NOT guarantee that a recompile actually ran — use
+    /// `debouncer_pending()` or inspect preview state for that. G1 spec §3.7.
     pub fn tick_debounce(app: &mut AppHandle) -> bool {
         let was_pending = app.0.preview.debouncer.is_pending();
         crate::config_tui::events::check_debounce(&mut app.0);
-        // Recompile happened if pending was true before and is now false
-        // (consumed by should_recompile after the timer elapsed). We cannot
-        // observe the recompile itself here; callers compare via
-        // debouncer_pending() or preview state.
         was_pending && !app.0.preview.debouncer.is_pending()
     }
 }
