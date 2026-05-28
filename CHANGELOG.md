@@ -46,10 +46,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tests/integration_tui_help_modal.rs` integration suites.
 
 ### Changed
-- Stale forward-pointers stripped: 8 `// reason: v0.5.5+ ...` annotations
-  removed or rewritten to reflect what landed in v0.6, plus 4 `Toast::warn`
-  v0.6+ stubs replaced with real implementations (D1 ColorPicker bind,
-  D2 NewPattern open, D3 EditRegex open, D4 Help open). KEEP set for
+- Stale forward-pointers stripped: 7 `// reason: ...` annotations removed
+  or rewritten to reflect what landed in v0.6, plus 4 `Toast::warn` v0.6+
+  stubs replaced with real implementations (D1 ColorPicker bind, D2
+  NewPattern open, D3 EditRegex open, D4 Help open). KEEP set for
   v0.6.1 / v0.7 defers documented in spec §11.1/§11.2.
 
 ### Fixed
