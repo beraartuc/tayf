@@ -711,6 +711,26 @@ fn bind_bool_axes_to_selected_rule(
     apply_pending_and_recompile(app);
 }
 
+/// Apply staged bool axes from the color picker into a draft [`NewStyle`]
+/// in place.
+///
+/// Mirrors [`bind_bool_axes_to_selected_rule`] but targets a mutable draft
+/// owned by the `NewPattern` flow rather than the edits table.
+fn bind_bool_axes_to_draft(
+    draft: &mut crate::config_tui::edit::NewStyle,
+    picker: &crate::config_tui::widgets::color_picker::ColorPickerState,
+) {
+    if let Some(v) = picker.staged_bold {
+        draft.bold = Some(v);
+    }
+    if let Some(v) = picker.staged_italic {
+        draft.italic = Some(v);
+    }
+    if let Some(v) = picker.staged_underline {
+        draft.underline = Some(v);
+    }
+}
+
 /// Map `focus.patterns.selected_idx` to a `RuleId`.
 ///
 /// The Patterns tab list shows built-in rule names (filtered by any
@@ -861,15 +881,7 @@ fn handle_new_pattern_key(app: &mut App, k: KeyEvent) {
                 if let Some(color) = draft.picker_state.selected_color() {
                     draft.draft_style.fg = Some(Some(color));
                 }
-                if let Some(v) = draft.picker_state.staged_bold {
-                    draft.draft_style.bold = Some(v);
-                }
-                if let Some(v) = draft.picker_state.staged_italic {
-                    draft.draft_style.italic = Some(v);
-                }
-                if let Some(v) = draft.picker_state.staged_underline {
-                    draft.draft_style.underline = Some(v);
-                }
+                bind_bool_axes_to_draft(&mut draft.draft_style, &draft.picker_state);
                 commit_new_pattern_draft(app);
             }
         }
@@ -897,15 +909,7 @@ fn handle_new_pattern_key(app: &mut App, k: KeyEvent) {
                     if let Some(color) = draft.picker_state.selected_color() {
                         draft.draft_style.fg = Some(Some(color));
                     }
-                    if let Some(v) = draft.picker_state.staged_bold {
-                        draft.draft_style.bold = Some(v);
-                    }
-                    if let Some(v) = draft.picker_state.staged_italic {
-                        draft.draft_style.italic = Some(v);
-                    }
-                    if let Some(v) = draft.picker_state.staged_underline {
-                        draft.draft_style.underline = Some(v);
-                    }
+                    bind_bool_axes_to_draft(&mut draft.draft_style, &draft.picker_state);
                     commit_new_pattern_draft(app);
                 }
                 crate::config_tui::widgets::color_picker::ColorPickerOutcome::Cancel => {
