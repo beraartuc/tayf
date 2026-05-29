@@ -427,6 +427,18 @@ fn handle_esc(app: &mut App) {
                 app.save_diff = None;
                 app.save_diff_scroll = 0;
             }
+            Some(Modal::ConflictList(_)) => {
+                // G8 §3.6 cross-cutting review fix: the conflict-list
+                // modal shares the `save_diff` side-channel with
+                // `Modal::SaveDiff`, so its Esc-close path needs the
+                // same triple-reset. Without this the next Ctrl+S would
+                // see a stale `MergePending` (4 DocumentMut clones held
+                // alive) and `pending_save_and_quit` could leak past
+                // the Esc into a subsequent save-success commit.
+                app.pending_save_and_quit = false;
+                app.save_diff = None;
+                app.save_diff_scroll = 0;
+            }
             Some(Modal::Search) => app.search_state = None,
             Some(Modal::SampleSet) => app.sample_set_state = None,
             Some(Modal::EditRegex { .. }) => {
@@ -725,11 +737,11 @@ fn handle_conflict_list_key(app: &mut App, k: KeyEvent) {
                     Some(crate::config_tui::app::Toast::warn(format!("merge apply failed: {e}")));
             }
         }
-        KeyCode::Esc => {
-            app.save_diff = None;
-            app.modal = None;
-            app.pending_save_and_quit = false;
-        }
+        // Esc is intentionally not handled here — `dispatch_key` routes
+        // Esc to `handle_esc` (events.rs:~390) BEFORE dispatching to the
+        // modal handler, so `handle_esc`'s `Some(Modal::ConflictList(_))`
+        // arm owns the side-channel triple-reset (`pending_save_and_quit`,
+        // `save_diff`, `save_diff_scroll`). v0.6.2 cross-cutting review.
         _ => {}
     }
 }
@@ -1274,6 +1286,48 @@ mod tests {
         dispatch_key(&mut app, mk(KeyCode::Esc));
         assert!(app.modal.is_none(), "Esc must close SaveDiff modal");
         assert!(app.save_diff.is_none(), "Esc must clear save_diff side-channel");
+    }
+
+    #[test]
+    fn esc_on_conflict_list_modal_clears_side_channel_and_pending_save_and_quit() {
+        // G8 cross-cutting review B1 regression guard: Modal::ConflictList
+        // shares the `save_diff` side-channel with Modal::SaveDiff, so
+        // its Esc-close path needs the same triple-reset. Without this,
+        // `pending_save_and_quit = true` (e.g. set by the QuitWithUnsaved
+        // → 's' path) would leak past Esc into a surprise should_quit on
+        // the next save-success commit.
+        let snap = ConfigSnapshot::empty();
+        let mut app = App::from_snapshot(snap);
+        // Fabricate a MergePending state — only the variant tag matters
+        // for the side-channel reset assertion.
+        let empty_doc = toml_edit::DocumentMut::new();
+        app.save_diff = Some(crate::config_tui::widgets::save_diff::SaveDiffState::MergePending {
+            base: empty_doc.clone(),
+            ours: empty_doc.clone(),
+            theirs: empty_doc.clone(),
+            auto_merged: empty_doc,
+            conflicts: Vec::new(),
+            selection: Vec::new(),
+            focused_row: 0,
+            disk_now: Vec::new(),
+        });
+        app.modal =
+            Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
+        app.pending_save_and_quit = true;
+        app.save_diff_scroll = 7;
+
+        dispatch_key(&mut app, mk(KeyCode::Esc));
+
+        assert!(app.modal.is_none(), "Esc must close ConflictList modal");
+        assert!(
+            app.save_diff.is_none(),
+            "Esc must clear save_diff side-channel — invariant shared with SaveDiff modal"
+        );
+        assert!(
+            !app.pending_save_and_quit,
+            "Esc on ConflictList must clear pending_save_and_quit (T-I6 invariant)"
+        );
+        assert_eq!(app.save_diff_scroll, 0, "Esc must reset save_diff_scroll");
     }
 
     #[test]
