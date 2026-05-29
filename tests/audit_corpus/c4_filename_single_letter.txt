@@ -1,0 +1,33 @@
+# Audit item: C-4
+# Rule under test: filename
+# Measurement mode: PIPELINE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §C-4
+# Decision: TBD
+
+POS: see config.txt is broken => config.txt
+POS: cat /etc/hosts.conf => hosts.conf
+POS: ls -la build.rs output => build.rs
+POS: open src/main.c please => main.c
+POS: header file foo.h compiles => foo.h
+POS: archive libfoo.a linked => libfoo.a
+POS: verilog top.v synth => top.v
+POS: R script run.r => run.r
+POS: object out.o link => out.o
+POS: ObjC class.m hit => class.m
+
+NEG: a.b.c.d
+NEG: numpy.linalg.norm
+NEG: com.acme.proj.Service
+NEG: org.eclipse.jdt.core
+NEG: foo.bar.baz quux
+NEG: see x.y.z please
+NEG: print a.b.c here
+NEG: literal a.b.c.d four
+NEG: dotted i.j.k.l prefix
+NEG: log.warn.error class
+NEG: span.id.x.y prose
+NEG: example a.b.c hit
+NEG: 1.2.3.4 ip
+NEG: foo.bar suffix
+NEG: u.v.w prose

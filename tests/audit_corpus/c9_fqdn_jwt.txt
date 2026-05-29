@@ -1,0 +1,23 @@
+# Audit item: C-9
+# Rule under test: fqdn
+# Measurement mode: PIPELINE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §C-9
+# Decision: TBD
+
+POS: visit example.com please => example.com
+POS: api.test.org served => api.test.org
+POS: link foo.bar.baz.org found => foo.bar.baz.org
+POS: my.host.example here => my.host.example
+POS: see api.gateway.dev now => api.gateway.dev
+
+NEG: Auth: eyJhbGc.eyJzdWI.signature
+NEG: token a.b.c truncated
+NEG: hash xyz.abc.def hash
+NEG: foo.bar very short
+NEG: jwt eyJh.eyJz.cccc here
+NEG: id 1234.5678.9012 num
+NEG: rest.api.x/y url
+NEG: text.with.dots.txt suffix
+NEG: foo.bar.baz hash final
+NEG: short.x.y truncated

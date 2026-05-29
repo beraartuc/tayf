@@ -1,0 +1,26 @@
+# Audit item: C-8
+# Rule under test: filename
+# Measurement mode: PIPELINE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §C-8
+# Decision: TBD
+
+POS: open config.json please => config.json
+POS: edit foo.yaml bar => foo.yaml
+POS: cat README.md ok => README.md
+POS: write log.txt out => log.txt
+POS: src package.json local => package.json
+POS: build Cargo.toml ok => Cargo.toml
+POS: print my.html final => my.html
+POS: log to error.log here => error.log
+
+NEG: pkg.go.dev/foo path
+NEG: golang.org/x/net details
+NEG: github.com/user/proj root
+NEG: api.example.com endpoint
+NEG: registry.npmjs.com fetch
+NEG: cdn.jsdelivr.net link
+NEG: my.subdomain.example.co serve
+NEG: api.gateway.dev hits
+NEG: hosts.local trace
+NEG: dns.example.org lookup
