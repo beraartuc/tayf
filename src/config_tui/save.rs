@@ -647,8 +647,7 @@ mod tests {
         assert_eq!(
             e.pattern.as_deref(),
             Some("second"),
-            "last-write wins by RuleId key; first edit silently lost — \
-             documented behavior, v0.7+ may add per-key conflict UI"
+            "last-write wins by RuleId key; first edit silently lost — documented behavior"
         );
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Single-line text-input contract for v0.5.4: Enter commits; for
 //! multi-line samples users must paste via terminal (paste support
-//! lands in v0.7+).
+//! lands in v0.8+).
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;

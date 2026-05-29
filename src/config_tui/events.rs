@@ -956,7 +956,7 @@ fn bind_bool_axes_to_draft(
 /// `RuleId::Builtin(name)` in the first range and `RuleId::UserConfig(name)`
 /// in the second.
 ///
-/// Other tabs yield `None` — v0.7+ may extend (Themes / Profiles).
+/// Other tabs yield `None` — v0.8+ on community demand may extend (Themes / Profiles).
 pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::edit::RuleId> {
     use crate::config_tui::app::Tab;
     use crate::config_tui::edit::RuleId;
@@ -987,7 +987,7 @@ pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::e
 /// Look up the current pattern source for a `RuleId`, applying any
 /// `PendingEdits` overlay. Used by the `e` keystroke to initialize the
 /// `EditRegex` modal buffer. Embedded / disk-profile rule sources are
-/// not catalog-resolved (v0.7+); they fall through to the empty-string
+/// not catalog-resolved (v0.8+ on community demand); they fall through to the empty-string
 /// default.
 pub(crate) fn pattern_for_rule_id(rule_id: &crate::config_tui::edit::RuleId, app: &App) -> String {
     use crate::config_tui::edit::RuleId;

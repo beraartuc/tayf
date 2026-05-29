@@ -7,8 +7,8 @@
 // inside compile_pending's overlay loop (v0.6.1 §3.2) and read by
 // reconcile.rs + events.rs, but no top-level tab still constructs
 // them via user keystrokes (profile/theme override-copy lands in
-// v0.7+). StyleKey::{Numbered, Named} are future capture-group
-// style slots (v0.7+). Module-level allow until those TUI wires land.
+// v0.8+ on community demand). StyleKey::{Numbered, Named} are future capture-group
+// style slots (v0.8+ on community demand). Module-level allow until those TUI wires land.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
