@@ -1,0 +1,19 @@
+# Audit item: F-3
+# Rule under test: duration
+# Measurement mode: PIPELINE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §F-3
+# Decision: TBD
+
+POS: latency 200μs ok => 200μs
+POS: time 1.5μs span => 1.5μs
+POS: 100μs avg => 100μs
+POS: clock 5μs gap => 5μs
+POS: in 250μs cycle => 250μs
+POS: see 0.1μs hit => 0.1μs
+
+NEG: bare μs prose
+NEG: see μs missing
+NEG: 200μsec spell
+NEG: 1.5microsec spell
+NEG: μs alone

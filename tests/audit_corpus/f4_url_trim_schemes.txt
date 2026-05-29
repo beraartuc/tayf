@@ -1,0 +1,28 @@
+# Audit item: F-4
+# Rule under test: url
+# Measurement mode: RULE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §F-4
+# Decision: TBD
+
+POS: get https://example.com here => https://example.com
+POS: see ssh://host.example/repo path => ssh://host.example/repo
+POS: try ftp://files.example.com/a => ftp://files.example.com/a
+POS: clone git@github.com:u/r.git => git@github.com:u/r.git
+POS: visit https://example.com, ok => https://example.com
+POS: link https://example.com. end => https://example.com
+POS: ssh://x.example/. trim => ssh://x.example/
+POS: clone git@host:p! grab => git@host:p
+POS: visit ftp://x.com? param => ftp://x.com
+POS: see https://x.com! exclaim => https://x.com
+POS: visit https://x.com; semi => https://x.com
+POS: see https://x.com: colon => https://x.com
+
+NEG: bare host.example.com
+NEG: foo://unknown.scheme
+NEG: just text here
+NEG: at@symbol only
+NEG: literal user@x
+NEG: schemeless //example.com
+NEG: ws://unsupported
+NEG: file:///etc/hosts

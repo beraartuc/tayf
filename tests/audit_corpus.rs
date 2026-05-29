@@ -260,3 +260,46 @@ fn e1_semver_vs_ipv4_corpus() {
     );
     check_karar_mandate(fp, nneg, DECISION_E1, "E-1/E-2");
 }
+
+// F-3: duration μs UTF-8 coverage — bare 200μs / 1.5μs forms (6 POS, 5 NEG).
+// Measured: 0/5 FP (0%), 0/6 FN. KALSIN — \b\d+(?:\.\d+)?(?:\s?μs) fires on all
+// numeric-prefix forms; word-boundary after μs (multi-byte UTF-8) rejects
+// `200μsec` (continuation `ec`) and bare `μs alone` (no digit prefix). No change needed.
+const EXPECTED_FP_F3: usize = 0;
+const EXPECTED_FN_F3: usize = 0;
+const DECISION_F3: &str = "KALSIN";
+
+// F-4: url trailing-punct trim across ssh/ftp/git@ schemes (12 POS, 8 NEG).
+// Measured (RULE mode): 0/8 FP (0%), 0/12 FN. KALSIN — sentence-punct trim set
+// (.,;:!?) correctly strips trailing punct for https/ssh/ftp/git@ URLs; unknown
+// schemes (foo://, ws://, file://) and schemeless patterns correctly rejected.
+// RULE mode used because url uses named capture groups → pipeline_spans returns
+// sub-spans (scheme/sep/body) not whole-URL spans; raw pattern test is the right
+// audit vehicle for trailing-trim and scheme-gate behavior.
+const EXPECTED_FP_F4: usize = 0;
+const EXPECTED_FN_F4: usize = 0;
+const DECISION_F4: &str = "KALSIN";
+
+#[test]
+fn f3_duration_microsec_corpus() {
+    let case = parse_corpus_file(&corpus_path("f3_duration_microsec.txt"));
+    let (fp, fn_, npos, nneg) = measure(&case);
+    assert_eq!(
+        (fp, fn_),
+        (EXPECTED_FP_F3, EXPECTED_FN_F3),
+        "F-3 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
+    );
+    check_karar_mandate(fp, nneg, DECISION_F3, "F-3");
+}
+
+#[test]
+fn f4_url_trim_schemes_corpus() {
+    let case = parse_corpus_file(&corpus_path("f4_url_trim_schemes.txt"));
+    let (fp, fn_, npos, nneg) = measure(&case);
+    assert_eq!(
+        (fp, fn_),
+        (EXPECTED_FP_F4, EXPECTED_FN_F4),
+        "F-4 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
+    );
+    check_karar_mandate(fp, nneg, DECISION_F4, "F-4");
+}
