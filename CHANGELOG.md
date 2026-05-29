@@ -4,6 +4,86 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-05-29
+
+### Added
+- Config TUI ColorPicker `bold` / `italic` / `underline` bool-axis row with
+  tri-state edit (Unset → On → Off → Unset) and `c` clear to wipe the
+  whole color block. Plumbed through `NewStyle.{bold,italic,underline}:
+  Option<Option<bool>>` end-to-end (G3 — Item 1, spec §3.1).
+- Patterns tab user-rule render union: built-in and user-config rules now
+  appear under two DIM section headers (`── Builtin ──` / `── User ──`).
+  Search filter applies symmetrically to both sections. `resolve_selected_
+  rule_id` returns `RuleId::Builtin` or `RuleId::UserConfig` based on
+  which section the focus falls in (G5 — Item 2, spec §3.2).
+- 4-variant rule deletion in `compile_pending`: Builtin / UserConfig /
+  Embedded / DiskProfile all routable through the canonical
+  `apply_user_rules_with_source` path. ConfirmAction payloads widened to
+  carry `RuleId` instead of `String` (G4 — Item 3, spec §3.3).
+- `'o'` profile / theme override copy: copies the selected embedded
+  source to `~/.config/tayf/{profiles,themes}/<name>.toml` so the user
+  can edit it on disk. Already-on-disk → toast skip (path-explicit
+  wording); symlink dest or parent canonicalizing outside the tayf root
+  → toast reject (CLAUDE.md §3 mandate). Post-copy snapshot reload
+  refreshes the catalog (G6 — Item 4, spec §3.4 + §3.10).
+- `save::commit_bytes(snapshot, body, now)` helper: the 8-step atomic-
+  write ceremony (rotate backups → preserved_mode → backup → tmpfile →
+  sync_all → atomic rename → parent sync → reparse) is now a single
+  shared helper, called from both the Clean Confirm path and the
+  merge-resolve path (G8 — Item 6 §3.0 invariant share, memory
+  `feedback_parallel_call_site_invariant_audit`).
+- AST-level 3-way merge module `config_tui::merge`: pure
+  `merge_three_way(base, ours, theirs) → MergeResult { auto_merged,
+  conflicts }` recursive walk over `toml_edit::DocumentMut` documents.
+  Auto-merges disjoint / convergent / one-sided changes; per-key
+  `KeyConflict { path, base_value, ours_value, theirs_value, shape,
+  is_array_block }` for the rest (G7A — Item 5, spec §3.5).
+- Per-key conflict resolution UI: `Modal::ConflictList` renders a
+  single-screen list (`▶` focus marker + `[O]`/`[T]`/`[S]` choice
+  marker + truncated ours/theirs preview), driven by `merge_three_way`.
+  `j`/`k` nav; `o`/`t`/`s` toggle the focused row (Block-shape rows
+  reject `o`/`t` with a pinned toast); Enter bulk-applies via
+  `commit_bytes` and routes through the same `request_snapshot_reload`
+  + `pending_save_and_quit` invariants as Clean Confirm (G7B+G8 —
+  Item 6, spec §3.6).
+- Save-quit single-step `s` in the `QuitWithUnsavedEdits` modal:
+  `pending_save_and_quit` flag tracked across the SaveDiff /
+  ConflictList round-trip; every non-commit exit clears it (T-I6
+  invariant) (G2 — Item 8, spec §3.8).
+
+### Changed
+- `ConfirmAction::DeleteUserRule(String)` → `DeleteRule(RuleId)`;
+  `ResetUserOverride(String)` → `ResetOverride(RuleId)`. 15 callsite
+  rename across `lib.rs`, `events.rs`, `app.rs`, `tabs/patterns.rs`,
+  `tests/integration_tui_delete_alias.rs`.
+- `NewStyle.{bold,italic,underline}` widened from `Option<bool>` to
+  `Option<Option<bool>>` so the ColorPicker can stage the tri-state
+  intent (None = unset, Some(None) = explicitly cleared, Some(Some(b))
+  = on/off).
+- `SaveDiffState::ConflictPending` and `ConflictMergedPreview`
+  RETIRED — replaced by `SaveDiffState::MergePending` which carries
+  the merge inputs + per-row selection + focused row, and is driven
+  by `Modal::ConflictList` rather than the SaveDiff modal.
+- `commit_save` reduced to: reconcile → `commit_bytes`. Reconcile is
+  now a pre-flight; failing reconcile no longer leaves an orphan
+  backup (test renamed + rewritten).
+
+### Security
+- `'o'` override-copy refuses when the destination is a symbolic link
+  or its canonical parent resolves outside `~/.config/tayf/` per
+  CLAUDE.md §3 mandate. Outside-target files remain byte-identical
+  through the rejection path.
+
+### Limitations (v0.7+)
+- `[[rules]]` array-of-tables: fine-grained per-index merge not yet
+  implemented. v0.6.2 surfaces whole-array changes as a single
+  Block-shaped conflict (`_v0_6_2_limitation` test suffix pins).
+- ColorPicker `dim` axis: CLI flag only (TUI surface lands later).
+- ConflictList Block-shape expand-modal: forced Skip default + toast
+  on `o`/`t`; full inline edit lands in v0.7+.
+- Wide-char regex column-correct truncation: current `chars().take(N)`
+  truncation may misalign columns for CJK content.
+
 ## [0.6.1] - 2026-05-28
 
 ### Added
