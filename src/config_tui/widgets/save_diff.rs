@@ -230,32 +230,135 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
     }
 }
 
-/// Tiny line-based diff (-/+ prefix). v0.5.4 inline impl — full
-/// patience/Myers diff is overkill for the modal's display purpose.
+/// Line-diff over `&[u8]` inputs, output is +/- prefixed text used by the
+/// save-diff modal. Hunt-McIlroy LCS-DP algorithm. v0.7 spec §4.
 ///
-/// Known limitation: the `HashSet` collapses duplicate lines, so removing
-/// one copy of a repeated line (`a\na\nb\n` → `a\nb\n`) shows as "(no
-/// changes)". v0.7+ may upgrade if the display becomes confusing.
-fn build_diff(old: &[u8], new: &[u8]) -> String {
-    let old_str = String::from_utf8_lossy(old);
-    let new_str = String::from_utf8_lossy(new);
-    let old_lines: std::collections::HashSet<&str> = old_str.lines().collect();
-    let new_lines: std::collections::HashSet<&str> = new_str.lines().collect();
+/// Returns `"(no changes)\n"` literal when inputs are line-equal.
+/// Falls back to a literal removal+addition list when the DP table would
+/// exceed `MAX_DP_CELLS` cells (defensive bound for adversarial inputs).
+pub(crate) fn build_diff(old: &[u8], new: &[u8]) -> String {
+    let old_str = std::str::from_utf8(old).unwrap_or("");
+    let new_str = std::str::from_utf8(new).unwrap_or("");
+    let old_lines: Vec<&str> = old_str.lines().collect();
+    let new_lines: Vec<&str> = new_str.lines().collect();
+    let n = old_lines.len();
+    let m = new_lines.len();
+
+    if n.saturating_mul(m) > MAX_DP_CELLS {
+        return cap_fallback(&old_lines, &new_lines);
+    }
+
+    let dp = build_dp_table(&old_lines, &new_lines);
+    let ops = trace_back(&old_lines, &new_lines, &dp);
+    render_ops(&ops)
+}
+
+const MAX_DP_CELLS: usize = 100_000;
+
+#[derive(Debug)]
+enum DiffOp<'src> {
+    Same(&'src str),
+    Add(&'src str),
+    Remove(&'src str),
+}
+
+/// Flat row-major LCS table. Cells indexed as `cells[i * cols + j]`.
+/// Single allocation, cache-friendly. `u16` per cell suffices: for any
+/// `dp[i][j] <= min(i, j) <= floor(sqrt(n*m)) <= floor(sqrt(MAX_DP_CELLS))
+/// = 316`, well within `u16::MAX`.
+struct DpTable {
+    cols: usize,
+    cells: Vec<u16>,
+}
+
+impl DpTable {
+    fn new(rows: usize, cols: usize) -> Self {
+        Self { cols, cells: vec![0_u16; rows * cols] }
+    }
+    fn get(&self, i: usize, j: usize) -> u16 {
+        self.cells[i * self.cols + j]
+    }
+    fn set(&mut self, i: usize, j: usize, v: u16) {
+        self.cells[i * self.cols + j] = v;
+    }
+}
+
+fn build_dp_table(old: &[&str], new: &[&str]) -> DpTable {
+    let n = old.len();
+    let m = new.len();
+    let mut dp = DpTable::new(n + 1, m + 1);
+    for i in 1..=n {
+        for j in 1..=m {
+            let v = if old[i - 1] == new[j - 1] {
+                dp.get(i - 1, j - 1) + 1
+            } else {
+                std::cmp::max(dp.get(i - 1, j), dp.get(i, j - 1))
+            };
+            debug_assert!(v < u16::MAX, "LCS dp cell overflow");
+            dp.set(i, j, v);
+        }
+    }
+    dp
+}
+
+fn trace_back<'src>(old: &[&'src str], new: &[&'src str], dp: &DpTable) -> Vec<DiffOp<'src>> {
+    let mut ops = Vec::new();
+    let mut i = old.len();
+    let mut j = new.len();
+    while i > 0 || j > 0 {
+        if i == 0 {
+            ops.push(DiffOp::Add(new[j - 1]));
+            j -= 1;
+        } else if j == 0 {
+            ops.push(DiffOp::Remove(old[i - 1]));
+            i -= 1;
+        } else if old[i - 1] == new[j - 1] {
+            ops.push(DiffOp::Same(old[i - 1]));
+            i -= 1;
+            j -= 1;
+        } else if dp.get(i - 1, j) >= dp.get(i, j - 1) {
+            // Tie → Remove (pin convention, spec §4.2).
+            ops.push(DiffOp::Remove(old[i - 1]));
+            i -= 1;
+        } else {
+            ops.push(DiffOp::Add(new[j - 1]));
+            j -= 1;
+        }
+    }
+    ops.reverse();
+    ops
+}
+
+fn render_ops(ops: &[DiffOp<'_>]) -> String {
+    if ops.iter().all(|op| matches!(op, DiffOp::Same(_))) {
+        return "(no changes)\n".to_owned();
+    }
     let mut out = String::new();
-    for line in old_str.lines() {
-        if !new_lines.contains(line) {
-            use std::fmt::Write;
-            let _ = writeln!(out, "- {line}");
-        }
+    for op in ops {
+        use std::fmt::Write;
+        let _ = match op {
+            DiffOp::Same(line) => writeln!(out, "  {line}"),
+            DiffOp::Add(line) => writeln!(out, "+ {line}"),
+            DiffOp::Remove(line) => writeln!(out, "- {line}"),
+        };
     }
-    for line in new_str.lines() {
-        if !old_lines.contains(line) {
-            use std::fmt::Write;
-            let _ = writeln!(out, "+ {line}");
-        }
+    out
+}
+
+fn cap_fallback(old_lines: &[&str], new_lines: &[&str]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "(diff too large for inline display: {} lines removed, {} lines added)",
+        old_lines.len(),
+        new_lines.len(),
+    );
+    for line in old_lines {
+        let _ = writeln!(out, "- {line}");
     }
-    if out.is_empty() {
-        out.push_str("(no changes)\n");
+    for line in new_lines {
+        let _ = writeln!(out, "+ {line}");
     }
     out
 }
@@ -272,16 +375,26 @@ mod tests {
     }
 
     #[test]
-    fn build_diff_addition_emits_plus_prefix() {
+    fn build_diff_pure_addition_emits_plus_prefix() {
         let d = build_diff(b"a\nb\n", b"a\nb\nc\n");
-        assert!(d.contains("+ c"), "expected '+ c' line; got: {d}");
-        assert!(!d.contains("- "), "expected no removals; got: {d}");
+        assert_eq!(d, "  a\n  b\n+ c\n");
     }
 
     #[test]
-    fn build_diff_removal_emits_minus_prefix() {
+    fn build_diff_pure_removal_emits_minus_prefix() {
         let d = build_diff(b"a\nb\nc\n", b"a\nb\n");
-        assert!(d.contains("- c"), "expected '- c' line; got: {d}");
-        assert!(!d.contains("+ "), "expected no additions; got: {d}");
+        assert_eq!(d, "  a\n  b\n- c\n");
+    }
+
+    #[test]
+    fn build_diff_empty_old_emits_only_additions() {
+        let d = build_diff(b"", b"a\nb\n");
+        assert_eq!(d, "+ a\n+ b\n");
+    }
+
+    #[test]
+    fn build_diff_empty_new_emits_only_removals() {
+        let d = build_diff(b"a\nb\n", b"");
+        assert_eq!(d, "- a\n- b\n");
     }
 }
