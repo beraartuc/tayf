@@ -198,13 +198,17 @@ fn merge_table(
             let out_table =
                 out.get_mut(&k).and_then(Item::as_table_mut).expect("just inserted as Item::Table");
             merge_table(bt, ot, tt, out_table, path, conflicts);
-        } else if is_array_of_tables(bv) && is_array_of_tables(ov) && is_array_of_tables(tv) {
+        } else if at_least_one_aot_no_shape_clash(bv, ov, tv) {
             // v0.7: per-element name-keyed merge. Fallback to whole-array
             // conflict on missing identity, same-side duplicate, or order
-            // divergence. Spec §3.2.
-            let baot = bv.and_then(Item::as_array_of_tables).expect("is_array_of_tables");
-            let oaot = ov.and_then(Item::as_array_of_tables).expect("is_array_of_tables");
-            let taot = tv.and_then(Item::as_array_of_tables).expect("is_array_of_tables");
+            // divergence. Spec §3.2. Absent sides are treated as empty AoTs
+            // so a whole-key deletion against the other sides' AoT surfaces
+            // as element-level conflicts rather than a single
+            // whole-key conflict.
+            let empty = toml_edit::ArrayOfTables::new();
+            let baot = bv.and_then(Item::as_array_of_tables).unwrap_or(&empty);
+            let oaot = ov.and_then(Item::as_array_of_tables).unwrap_or(&empty);
+            let taot = tv.and_then(Item::as_array_of_tables).unwrap_or(&empty);
             merge_array_of_tables(baot, oaot, taot, out, &k, path, conflicts);
         } else {
             // Genuine leaf-or-shape-mismatch conflict.
@@ -477,6 +481,21 @@ fn is_table(it: Option<&Item>) -> bool {
 
 fn is_array_of_tables(it: Option<&Item>) -> bool {
     matches!(it, Some(Item::ArrayOfTables(_)))
+}
+
+/// True when at least one side is `Item::ArrayOfTables` and no other side
+/// is a non-`ArrayOfTables` present value. Treats `None` as a compatible
+/// absent-side (synthesised to an empty array-of-tables at the merge call
+/// site), so a whole-key delete against the other sides' array surfaces
+/// as element-level conflicts.
+fn at_least_one_aot_no_shape_clash(b: Option<&Item>, o: Option<&Item>, t: Option<&Item>) -> bool {
+    let has_aot = is_array_of_tables(b) || is_array_of_tables(o) || is_array_of_tables(t);
+    if !has_aot {
+        return false;
+    }
+    let compatible =
+        |x: Option<&Item>| -> bool { matches!(x, None | Some(Item::ArrayOfTables(_))) };
+    compatible(b) && compatible(o) && compatible(t)
 }
 
 fn classify_shape(b: Option<&Item>, o: Option<&Item>, t: Option<&Item>) -> ConflictValueShape {
@@ -906,6 +925,24 @@ mod tests {
         assert_eq!(c.shape, ConflictValueShape::Block, "element-level Block");
         assert!(!c.is_array_block, "per-element conflict, not array-block");
         assert_eq!(c.base_value, "(absent)", "base side absent");
+    }
+
+    #[test]
+    fn merge_array_of_tables_ours_delete_theirs_modify_yields_element_block_conflict() {
+        // Spec §3.4 #6. base has "x" pattern="A"; ours deletes the entire
+        // [[rules]] section; theirs modifies pattern → element-level Block
+        // conflict at ["rules", "x"]. Requires merge_table to treat an absent
+        // AoT key as an empty array-of-tables so per-element merge fires.
+        let base = doc("[[rules]]\nname = \"x\"\npattern = \"A\"\n");
+        let ours = doc("# (no rules)\n");
+        let theirs = doc("[[rules]]\nname = \"x\"\npattern = \"B\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert_eq!(merge.conflicts.len(), 1);
+        let c = &merge.conflicts[0];
+        assert_eq!(c.path, vec!["rules".to_owned(), "x".to_owned()]);
+        assert_eq!(c.shape, ConflictValueShape::Block);
+        assert!(!c.is_array_block);
+        assert_eq!(c.ours_value, "(absent)", "ours deleted; rendered as (absent)");
     }
 
     #[test]
