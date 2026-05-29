@@ -40,11 +40,11 @@ were untouched; `src/rules.rs` lost one extension entry.
 
 Minor bump bundling five engineering-quality items that had been queued as
 `v0.7+` forward-pointers from prior cycles. v0.4.0-class scope (~1100 LOC src
-+ ~3300 LOC tests/corpora/snapshots) with full ceremony — paralel opus 4.7
++ ~3300 LOC tests/corpora/snapshots) with full ceremony — parallel opus 4.7
 spec review (Rust idiom + tayf-architecture lenses, 8 CRITICAL + 13
 IMPORTANT + 11 NIT absorbed into spec rev2) and final cross-cutting opus
 4.7 review (1 CRITICAL + 5 IMPORTANT + 3 NIT absorbed). Zero new
-dependencies. DOKUNULMAZ `src/pty.rs` and `src/runtime.rs` untouched;
+dependencies. Off-limits hot-path modules `src/pty.rs` and `src/runtime.rs` untouched;
 `src/rules.rs` and `src/pipeline.rs` gained only `pub(crate)` test shims +
 `Compiled::names` plumbing for the audit-corpus harness.
 
