@@ -3,7 +3,7 @@
 # Measurement mode: PIPELINE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §C-4
-# Decision: TBD
+# Decision: TIGHTEN (FP 33%, defer pattern fix to v0.7.1; tracked in CHANGELOG known issues)
 
 POS: see config.txt is broken => config.txt
 POS: cat /etc/hosts.conf => hosts.conf

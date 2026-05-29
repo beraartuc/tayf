@@ -808,6 +808,18 @@ fn build_final_doc(
         };
         match crate::config_tui::merge::write_to_path(&mut final_doc, &conflict.path, source) {
             Ok(()) => {}
+            // Delete-modify translation. Spec §3.3 pins `AotElementMissing`
+            // as the canonical signal that the chosen side dropped the
+            // element. `MissingIntermediate` is included alongside because
+            // `descend_source` raises it (not `AotElementMissing`) when the
+            // chosen side dropped the ENTIRE AoT key (e.g. ours has no
+            // `[[rules]]` block at all — Task 11 pin
+            // `apply_conflict_layer_translates_delete_modify_to_remove_
+            // when_source_absent`). The widening is gated by
+            // `is_delete_modify()`, and `remove_aot_element_by_name`
+            // propagates `TypeMismatch` for non-AoT paths via `?`, so the
+            // v0.6.2 I3 "Skip-on-absent-base no toast" contract (handled
+            // earlier by `path_exists`) is not weakened.
             Err(
                 crate::config_tui::merge::WriteToPathError::AotElementMissing { .. }
                 | crate::config_tui::merge::WriteToPathError::MissingIntermediate { .. },
