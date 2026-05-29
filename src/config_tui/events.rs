@@ -806,7 +806,22 @@ fn build_final_doc(
                 base
             }
         };
-        crate::config_tui::merge::write_to_path(&mut final_doc, &conflict.path, source)?;
+        match crate::config_tui::merge::write_to_path(&mut final_doc, &conflict.path, source) {
+            Ok(()) => {}
+            Err(
+                crate::config_tui::merge::WriteToPathError::AotElementMissing { .. }
+                | crate::config_tui::merge::WriteToPathError::MissingIntermediate { .. },
+            ) if conflict.is_delete_modify() => {
+                if let Some((last, parent)) = conflict.path.split_last() {
+                    crate::config_tui::merge::remove_aot_element_by_name(
+                        &mut final_doc,
+                        parent,
+                        last,
+                    )?;
+                }
+            }
+            Err(e) => return Err(e),
+        }
     }
     Ok(final_doc)
 }
@@ -2044,5 +2059,35 @@ mod tests {
         // v0.6.1 §3.3: Ctrl+R reload + Shift+D init keybindings pinned.
         assert!(HELP_MODAL_CONTENT.contains("Ctrl+R"), "Ctrl+R reload listed");
         assert!(HELP_MODAL_CONTENT.contains("Shift+D"), "Shift+D init listed");
+    }
+
+    #[test]
+    fn apply_conflict_layer_translates_delete_modify_to_remove_when_source_absent() {
+        // Spec §3.4 #15. base "x" present, ours deleted, theirs modified.
+        // User picks Ours → the auto_merged loses "x" element (no AotElementMissing toast).
+        use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+
+        let base: toml_edit::DocumentMut =
+            "[[rules]]\nname = \"x\"\npattern = \"A\"\n".parse().expect("base parses");
+        let ours: toml_edit::DocumentMut = "# empty\n".parse().expect("ours parses");
+        let theirs: toml_edit::DocumentMut =
+            "[[rules]]\nname = \"x\"\npattern = \"B\"\n".parse().expect("theirs parses");
+        let auto_merged: toml_edit::DocumentMut =
+            "[[rules]]\nname = \"x\"\npattern = \"A\"\n".parse().expect("auto_merged parses");
+        let conflicts = vec![KeyConflict {
+            path: vec!["rules".to_owned(), "x".to_owned()],
+            base_value: "{name=\"x\", pattern=\"A\"}".to_owned(),
+            ours_value: "(absent)".to_owned(),
+            theirs_value: "{name=\"x\", pattern=\"B\"}".to_owned(),
+            shape: ConflictValueShape::Block,
+            is_array_block: false,
+        }];
+        let selection = vec![crate::config_tui::widgets::save_diff::ConflictChoice::Ours];
+
+        let result = build_final_doc(&base, &ours, &theirs, &auto_merged, &conflicts, &selection)
+            .expect("delete-modify translated, no toast");
+
+        let s = result.to_string();
+        assert!(!s.contains("name = \"x\""), "delete-modify pick translated to remove");
     }
 }

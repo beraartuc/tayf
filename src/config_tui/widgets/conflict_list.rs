@@ -51,7 +51,8 @@ fn render_row(conflict: &KeyConflict, choice: ConflictChoice, focused: bool) -> 
         ConflictValueShape::Block => ("(table)".to_owned(), "(table)".to_owned()),
     };
     let arrow = if focused { "▶ " } else { "  " };
-    let suffix = if conflict.is_array_block { "  ⚠ array merge v0.7+" } else { "" };
+    let suffix =
+        if conflict.is_array_block { "  ⚠ array-shape conflict (no name identity)" } else { "" };
     let text =
         format!("{arrow}{marker} {path}    ours:{ours_short}  theirs:{theirs_short}{suffix}");
     let style =

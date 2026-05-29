@@ -93,6 +93,16 @@ pub struct MergeResult {
     pub conflicts: Vec<KeyConflict>,
 }
 
+impl KeyConflict {
+    /// Returns true when one of the three sides was absent — the conflict
+    /// is a delete-modify (one side deleted, another modified).
+    #[must_use]
+    pub(crate) fn is_delete_modify(&self) -> bool {
+        const ABSENT: &str = "(absent)";
+        self.base_value == ABSENT || self.ours_value == ABSENT || self.theirs_value == ABSENT
+    }
+}
+
 /// Errors returned by [`write_to_path`].
 #[derive(Debug, thiserror::Error)]
 pub enum WriteToPathError {
@@ -699,6 +709,58 @@ pub(crate) fn path_exists(doc: &DocumentMut, path: &[String]) -> bool {
         cur = next;
     }
     true
+}
+
+/// Remove an `AoT` element matching `name` from `doc` at the table reached
+/// by `parent_path`. No-op if absent (idempotent for apply-layer).
+///
+/// # Errors
+///
+/// - [`WriteToPathError::TypeMismatch`] if `parent_path` does not resolve
+///   to an `Item::ArrayOfTables`.
+/// - [`WriteToPathError::MissingIntermediate`] if descent fails before
+///   reaching `parent_path`.
+pub(crate) fn remove_aot_element_by_name(
+    doc: &mut DocumentMut,
+    parent_path: &[String],
+    name: &str,
+) -> Result<(), WriteToPathError> {
+    let display_path = parent_path.join(".");
+    let item = descend_mut(doc.as_item_mut(), parent_path, &display_path)?;
+    let Item::ArrayOfTables(aot) = item else {
+        return Err(WriteToPathError::TypeMismatch {
+            path: display_path,
+            dest_type: item.type_name().to_owned(),
+            source_type: "array-of-tables".to_owned(),
+        });
+    };
+    let idx = aot.iter().position(|t| t.get("name").and_then(Item::as_str) == Some(name));
+    if let Some(i) = idx {
+        aot.remove(i);
+    }
+    Ok(())
+}
+
+fn descend_mut<'doc>(
+    mut cur: &'doc mut Item,
+    path: &[String],
+    display: &str,
+) -> Result<&'doc mut Item, WriteToPathError> {
+    for seg in path {
+        cur = match cur {
+            Item::Table(t) => t.get_mut(seg).ok_or_else(|| {
+                WriteToPathError::MissingIntermediate { path: display.to_owned() }
+            })?,
+            _ => {
+                return Err(WriteToPathError::TypeMismatch {
+                    path: display.to_owned(),
+                    dest_type: cur.type_name().to_owned(),
+                    source_type: "table".to_owned(),
+                });
+            }
+        };
+    }
+    Ok(cur)
 }
 
 #[cfg(test)]
