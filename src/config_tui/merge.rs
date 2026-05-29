@@ -30,11 +30,8 @@
 //! and CRLF→LF normalization at parse time both round-trip equal).
 //! Memory `feedback_toml_edit_025_quirks`.
 //!
-//! # v0.6.2 limitations
+//! # Known limitations
 //!
-//! - **Array-of-tables (`[[rules]]`)**: changes inside such an array
-//!   yield a whole-array conflict, not per-element merging. v0.7+
-//!   may add identity-keyed per-element merge.
 //! - **Numeric coercion**: `1` (Integer) and `1.0` (Float) compare
 //!   distinct — toml_edit makes no coercion. Documented as a test
 //!   so a future change is loud.
@@ -202,15 +199,13 @@ fn merge_table(
                 out.get_mut(&k).and_then(Item::as_table_mut).expect("just inserted as Item::Table");
             merge_table(bt, ot, tt, out_table, path, conflicts);
         } else if is_array_of_tables(bv) && is_array_of_tables(ov) && is_array_of_tables(tv) {
-            // v0.6.2: whole-array conflict; per-element merge lives in v0.7+.
-            conflicts.push(KeyConflict {
-                path: path.clone(),
-                base_value: render_item(bv),
-                ours_value: render_item(ov),
-                theirs_value: render_item(tv),
-                shape: ConflictValueShape::Block,
-                is_array_block: true,
-            });
+            // v0.7: per-element name-keyed merge. Fallback to whole-array
+            // conflict on missing identity, same-side duplicate, or order
+            // divergence. Spec §3.2.
+            let baot = bv.and_then(Item::as_array_of_tables).expect("is_array_of_tables");
+            let oaot = ov.and_then(Item::as_array_of_tables).expect("is_array_of_tables");
+            let taot = tv.and_then(Item::as_array_of_tables).expect("is_array_of_tables");
+            merge_array_of_tables(baot, oaot, taot, out, &k, path, conflicts);
         } else {
             // Genuine leaf-or-shape-mismatch conflict.
             conflicts.push(KeyConflict {
@@ -225,6 +220,212 @@ fn merge_table(
 
         path.pop();
     }
+}
+
+// reason: ba/oa/ta encode the algorithm vocabulary (base/ours/theirs) and
+// match the surrounding `merge_table` style. Spec §3.2.
+#[allow(clippy::similar_names)]
+fn merge_array_of_tables(
+    base: &toml_edit::ArrayOfTables,
+    ours: &toml_edit::ArrayOfTables,
+    theirs: &toml_edit::ArrayOfTables,
+    out: &mut Table,
+    key: &str,
+    path: &mut KeyPath,
+    conflicts: &mut Vec<KeyConflict>,
+) {
+    use std::collections::BTreeSet;
+
+    // Identity validation. Any element without a String `name` → fallback.
+    let identity_ok = |aot: &toml_edit::ArrayOfTables| -> bool {
+        aot.iter().all(|t| t.get("name").and_then(Item::as_str).is_some())
+    };
+    if !(identity_ok(base) && identity_ok(ours) && identity_ok(theirs)) {
+        conflicts.push(KeyConflict {
+            path: path.clone(),
+            base_value: render_item(Some(&Item::ArrayOfTables(base.clone()))),
+            ours_value: render_item(Some(&Item::ArrayOfTables(ours.clone()))),
+            theirs_value: render_item(Some(&Item::ArrayOfTables(theirs.clone()))),
+            shape: ConflictValueShape::Block,
+            is_array_block: true,
+        });
+        return;
+    }
+
+    let collect_names = |aot: &toml_edit::ArrayOfTables| -> Vec<String> {
+        aot.iter()
+            .map(|t| t.get("name").and_then(Item::as_str).expect("identity_ok verified").to_owned())
+            .collect()
+    };
+    let base_names = collect_names(base);
+    let ours_names = collect_names(ours);
+    let theirs_names = collect_names(theirs);
+
+    // Same-side duplicate guard (defensive — apply_user_rules invariant).
+    let has_dup = |names: &[String]| -> bool {
+        let mut sorted = names.to_vec();
+        sorted.sort();
+        sorted.windows(2).any(|w| w[0] == w[1])
+    };
+    if has_dup(&ours_names) {
+        debug_assert!(false, "ours-side duplicate name violates apply_user_rules invariant");
+    }
+    if has_dup(&base_names) || has_dup(&ours_names) || has_dup(&theirs_names) {
+        conflicts.push(KeyConflict {
+            path: path.clone(),
+            base_value: render_item(Some(&Item::ArrayOfTables(base.clone()))),
+            ours_value: render_item(Some(&Item::ArrayOfTables(ours.clone()))),
+            theirs_value: render_item(Some(&Item::ArrayOfTables(theirs.clone()))),
+            shape: ConflictValueShape::Block,
+            is_array_block: true,
+        });
+        return;
+    }
+
+    // Order-divergence guard. Same set, different order → whole-array conflict.
+    let base_set: BTreeSet<&String> = base_names.iter().collect();
+    let ours_set: BTreeSet<&String> = ours_names.iter().collect();
+    let theirs_set: BTreeSet<&String> = theirs_names.iter().collect();
+    if base_set == ours_set && base_set == theirs_set && ours_names != theirs_names {
+        conflicts.push(KeyConflict {
+            path: path.clone(),
+            base_value: render_item(Some(&Item::ArrayOfTables(base.clone()))),
+            ours_value: render_item(Some(&Item::ArrayOfTables(ours.clone()))),
+            theirs_value: render_item(Some(&Item::ArrayOfTables(theirs.clone()))),
+            shape: ConflictValueShape::Block,
+            is_array_block: true,
+        });
+        return;
+    }
+
+    // Distinct ordered name list: base first, then ours-only, then theirs-only.
+    let mut order: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for n in base_names.iter().chain(ours_names.iter()).chain(theirs_names.iter()) {
+        if seen.insert(n.clone()) {
+            order.push(n.clone());
+        }
+    }
+
+    let find_by_name = |aot: &toml_edit::ArrayOfTables, n: &str| -> Option<Table> {
+        aot.iter().find(|t| t.get("name").and_then(Item::as_str) == Some(n)).cloned()
+    };
+
+    // Build the resulting ArrayOfTables on `out` at `key`.
+    let mut result = toml_edit::ArrayOfTables::new();
+    for name in &order {
+        let be = find_by_name(base, name);
+        let oe = find_by_name(ours, name);
+        let te = find_by_name(theirs, name);
+        merge_aot_element(
+            be.as_ref(),
+            oe.as_ref(),
+            te.as_ref(),
+            name,
+            path,
+            &mut result,
+            conflicts,
+        );
+    }
+    out.insert(key, Item::ArrayOfTables(result));
+}
+
+// reason: be/oe/te encode the algorithm vocabulary (base/ours/theirs element)
+// matching the surrounding merge_array_of_tables style. Spec §3.2.
+#[allow(clippy::similar_names, clippy::too_many_arguments)]
+fn merge_aot_element(
+    be: Option<&Table>,
+    oe: Option<&Table>,
+    te: Option<&Table>,
+    name: &str,
+    path: &mut KeyPath,
+    result: &mut toml_edit::ArrayOfTables,
+    conflicts: &mut Vec<KeyConflict>,
+) {
+    path.push(name.to_owned());
+
+    let tables_match = |a: Option<&Table>, b: Option<&Table>| -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(x), Some(y)) => tables_eq(x, y),
+            _ => false,
+        }
+    };
+
+    let beq_oe = tables_match(be, oe);
+    let beq_te = tables_match(be, te);
+    let oeq_te = tables_match(oe, te);
+
+    if beq_oe && beq_te {
+        // No change — propagate base.
+        if let Some(t) = be {
+            result.push(t.clone());
+        }
+    } else if beq_oe {
+        // Only theirs changed → take theirs.
+        if let Some(t) = te {
+            result.push(t.clone());
+        }
+    } else if beq_te {
+        // Only ours changed → take ours.
+        if let Some(t) = oe {
+            result.push(t.clone());
+        }
+    } else if oeq_te {
+        // Convergent — both changed to the same element.
+        if let Some(t) = oe {
+            result.push(t.clone());
+        }
+    } else {
+        match (be, oe, te) {
+            // Delete-modify pairs.
+            (Some(_), None, Some(_)) | (Some(_), Some(_), None) => {
+                let be_item = be.map(item_from_table_ref);
+                let oe_item = oe.map(item_from_table_ref);
+                let te_item = te.map(item_from_table_ref);
+                conflicts.push(KeyConflict {
+                    path: path.clone(),
+                    base_value: render_item(be_item.as_ref()),
+                    ours_value: render_item(oe_item.as_ref()),
+                    theirs_value: render_item(te_item.as_ref()),
+                    shape: ConflictValueShape::Block,
+                    is_array_block: false,
+                });
+                if let Some(t) = be {
+                    result.push(t.clone());
+                }
+            }
+            // Insert collision (be absent, oe and te both present, oe != te).
+            (None, Some(_), Some(_)) => {
+                let oe_item = oe.map(item_from_table_ref);
+                let te_item = te.map(item_from_table_ref);
+                conflicts.push(KeyConflict {
+                    path: path.clone(),
+                    base_value: "(absent)".to_owned(),
+                    ours_value: render_item(oe_item.as_ref()),
+                    theirs_value: render_item(te_item.as_ref()),
+                    shape: ConflictValueShape::Block,
+                    is_array_block: false,
+                });
+            }
+            // All three present, all different → recurse on element fields.
+            (Some(b), Some(o), Some(t)) => {
+                let mut element = Table::new();
+                merge_table(b, o, t, &mut element, path, conflicts);
+                result.push(element);
+            }
+            // Unreachable: equality short-circuits earlier in this function.
+            (Some(_) | None, None, None) | (None, None, Some(_)) | (None, Some(_), None) => {
+                unreachable!("equality cases handled above in merge_aot_element");
+            }
+        }
+    }
+
+    path.pop();
+}
+
+fn item_from_table_ref(t: &Table) -> Item {
+    Item::Table(t.clone())
 }
 
 fn items_eq(a: Option<&Item>, b: Option<&Item>) -> bool {
@@ -531,20 +732,21 @@ mod tests {
     }
 
     #[test]
-    fn merge_array_of_tables_yields_whole_array_block_conflict_v0_6_2_limitation() {
-        // v0.6.2 does NOT element-wise merge `[[rules]]` array-of-tables.
-        // Whole-array conflict is the documented limitation. Test name pins
-        // the limitation per memory `feedback_collision_pin_pattern` — a
-        // future per-element AoT merge will rename and force this assertion
-        // off the `_v0_6_2_limitation` suffix grep.
+    fn merge_array_of_tables_per_element_yields_field_level_conflict() {
+        // v0.7 spec §3.4 #1 — rename + assert flip of the v0.6.2 limitation pin.
+        // base/ours/theirs each have one [[rules]] with name="a" but the
+        // `pattern` field differs across the three. Per-element merge
+        // descends into the element and produces a single Leaf conflict
+        // at path = ["rules", "a", "pattern"].
         let base = doc("[[rules]]\nname = \"a\"\npattern = \"A\"\n");
         let ours = doc("[[rules]]\nname = \"a\"\npattern = \"B\"\n");
         let theirs = doc("[[rules]]\nname = \"a\"\npattern = \"C\"\n");
         let merge = merge_three_way(&base, &ours, &theirs);
-        assert_eq!(merge.conflicts.len(), 1, "whole-array conflict, not per-element");
+        assert_eq!(merge.conflicts.len(), 1, "exactly one field-level conflict");
         let c = &merge.conflicts[0];
-        assert!(c.is_array_block, "array-of-tables flagged as array block");
-        assert_eq!(c.shape, ConflictValueShape::Block);
+        assert_eq!(c.path, vec!["rules".to_owned(), "a".to_owned(), "pattern".to_owned()]);
+        assert_eq!(c.shape, ConflictValueShape::Leaf, "scalar field is Leaf");
+        assert!(!c.is_array_block, "per-element conflict is not array-block");
     }
 
     #[test]
