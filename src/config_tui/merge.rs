@@ -879,4 +879,32 @@ mod tests {
         let pos_y = s.find("name = \"y\"").expect("y present");
         assert!(pos_a < pos_b && pos_b < pos_x && pos_x < pos_y, "deterministic order");
     }
+
+    #[test]
+    fn merge_array_of_tables_convergent_insertion_no_conflict() {
+        // Spec §3.4 #3. Both sides add same name="z" with same content.
+        let base = doc("[[rules]]\nname = \"a\"\n");
+        let ours = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"z\"\npattern = \"Z\"\n");
+        let theirs = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"z\"\npattern = \"Z\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert!(merge.conflicts.is_empty(), "convergent insertion auto-merges");
+        let s = merge.auto_merged.to_string();
+        assert_eq!(s.matches("name = \"z\"").count(), 1, "single z element");
+    }
+
+    #[test]
+    fn merge_array_of_tables_convergent_insertion_divergent_content_conflicts() {
+        // Spec §3.4 #4. ours adds name="z" pattern="A", theirs adds name="z"
+        // pattern="B" → element-level conflict at path ["rules", "z"].
+        let base = doc("[[rules]]\nname = \"a\"\n");
+        let ours = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"z\"\npattern = \"A\"\n");
+        let theirs = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"z\"\npattern = \"B\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert_eq!(merge.conflicts.len(), 1, "insert-collision yields one conflict");
+        let c = &merge.conflicts[0];
+        assert_eq!(c.path, vec!["rules".to_owned(), "z".to_owned()]);
+        assert_eq!(c.shape, ConflictValueShape::Block, "element-level Block");
+        assert!(!c.is_array_block, "per-element conflict, not array-block");
+        assert_eq!(c.base_value, "(absent)", "base side absent");
+    }
 }
