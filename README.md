@@ -354,6 +354,36 @@ This covers vim, less, htop, neovim, Claude Code, lazygit, k9s, gum,
 bubbletea-based tools, and anything else that follows standard terminal
 conventions. Their output is never altered by `tayf`.
 
+## Known limitations
+
+A few built-in patterns can mis-fire on inputs that are shape-identical to
+their real targets. tayf's regex engine is linear-time (no backtracking, no
+look-around — a deliberate ReDoS-safety choice), so it cannot use the
+surrounding context that would disambiguate these cases. They are rare in real
+terminal output, but if one bothers you, disable the built-in (recipe below):
+
+- **`filename` on dotted prose.** Prose ending in a single-letter source
+  extension — `a.b.c`, `u.v.w` — can be styled as a filename, because real
+  files like `main.c` / `top.v` are suffix-identical and there is no
+  path/command context to tell them apart.
+- **`fqdn` on JWT / base64url tokens.** A 3-segment dotted base64url token
+  (e.g. a JWT, `eyJhbGc.eyJzdWI.signature`) matches `fqdn`. Telling it from a
+  real domain would need a 4000+ entry TLD allowlist.
+- **`ipv4` on 5+-segment versions.** A bare 5-segment dotted version such as
+  `1.2.3.4.5` styles its leading `1.2.3.4` as an IPv4 address.
+
+**Recipe — disable a noisy built-in.** Add an `enabled = false` rule to your
+config (same mechanism as [Disable a built-in by name](#configuration-v02)):
+
+```toml
+# ~/.config/tayf/config.toml
+[[rules]]
+name = "fqdn"
+enabled = false
+```
+
+Use `name = "filename"` or `name = "ipv4"` to disable those instead.
+
 ## Known v0.1 limits
 
 - **Passthrough is mode-based, not full ANSI-aware.** Programs that emit
