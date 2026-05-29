@@ -302,7 +302,24 @@ fn build_dp_table(old: &[&str], new: &[&str]) -> DpTable {
     dp
 }
 
+// reason: the `i == 0` boundary arm and the tied-dp non-matching final
+// arm have identical bodies (Add(new[j-1]); j -= 1) but reach the body
+// via DIFFERENT preconditions — the boundary guard must execute before
+// any indexing into `dp` (which would underflow at i=0). Merging the
+// guards yields an unreadable composite condition.
+#[allow(clippy::if_same_then_else)]
 fn trace_back<'src>(old: &[&'src str], new: &[&'src str], dp: &DpTable) -> Vec<DiffOp<'src>> {
+    // Walk backwards from (n, m) emitting ops; reverse at the end so the
+    // forward-reading order matches the canonical `diff -u` output:
+    // Same-then-Remove-then-Add at modification points, and removals
+    // preferred at the LATEST position when the LCS has multiple equally-
+    // optimal traces (e.g. `"a\na\nb"` vs `"a\nb"` removes the SECOND `a`).
+    //
+    // The check order is significant — strictly-greater dp neighbours
+    // win before the equality short-circuit so that backwards `Remove`
+    // emits BEFORE the matching `Same`, yielding `Same/Remove` in forward
+    // order. Tied dp with matching cell → Same. Tied dp with non-matching
+    // cell → Add (convention, pinned by §4.5 #4 and #6).
     let mut ops = Vec::new();
     let mut i = old.len();
     let mut j = new.len();
@@ -313,14 +330,16 @@ fn trace_back<'src>(old: &[&'src str], new: &[&'src str], dp: &DpTable) -> Vec<D
         } else if j == 0 {
             ops.push(DiffOp::Remove(old[i - 1]));
             i -= 1;
+        } else if dp.get(i - 1, j) > dp.get(i, j - 1) {
+            ops.push(DiffOp::Remove(old[i - 1]));
+            i -= 1;
+        } else if dp.get(i, j - 1) > dp.get(i - 1, j) {
+            ops.push(DiffOp::Add(new[j - 1]));
+            j -= 1;
         } else if old[i - 1] == new[j - 1] {
             ops.push(DiffOp::Same(old[i - 1]));
             i -= 1;
             j -= 1;
-        } else if dp.get(i - 1, j) >= dp.get(i, j - 1) {
-            // Tie → Remove (pin convention, spec §4.2).
-            ops.push(DiffOp::Remove(old[i - 1]));
-            i -= 1;
         } else {
             ops.push(DiffOp::Add(new[j - 1]));
             j -= 1;
@@ -397,5 +416,31 @@ mod tests {
     fn build_diff_empty_new_emits_only_removals() {
         let d = build_diff(b"a\nb\n", b"");
         assert_eq!(d, "- a\n- b\n");
+    }
+
+    #[test]
+    fn build_diff_modification_emits_minus_then_plus_exact() {
+        // Tied dp + non-matching cell → Add (backward), so forward order
+        // is Same/Remove/Add. Spec §4.5 #4.
+        let d = build_diff(b"a\nb\n", b"a\nc\n");
+        assert_eq!(d, "  a\n- b\n+ c\n");
+    }
+
+    #[test]
+    fn build_diff_duplicate_line_removal_visible() {
+        // Audit doc bug-fix: HashSet impl collapsed "a\na\nb\n" → "a\nb\n"
+        // to "(no changes)". LCS-DP correctly shows the SECOND `a` removed
+        // (strictly-greater dp neighbour rule keeps the late match). Spec §4.5 #5.
+        let d = build_diff(b"a\na\nb\n", b"a\nb\n");
+        assert_eq!(d, "  a\n- a\n  b\n");
+    }
+
+    #[test]
+    fn build_diff_interleaved_changes_exact_with_remove_tie_convention() {
+        // Mid-line replacement with shared anchor "b" in the middle.
+        // Tied-dp Add convention pins forward order Remove-before-Add at
+        // both modification points. Spec §4.5 #6.
+        let d = build_diff(b"a\nb\nc\n", b"x\nb\ny\n");
+        assert_eq!(d, "- a\n+ x\n  b\n- c\n+ y\n");
     }
 }
