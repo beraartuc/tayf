@@ -1,0 +1,24 @@
+┌Save Conflicts (2 keys)───────────────────────────────────────────────────────┐
+│▶ [O] rules.log_level.fg    ours:Red  theirs:Blue                             │
+│  [S] rules.http_status    ours:(table)  theirs:(table)                       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+j/k nav · o ours · t theirs · s skip                                            
+Enter apply · Esc cancel                                                        

@@ -1,0 +1,24 @@
+┌Help (press any key to dismiss)───────────────────────────────────────────────┐
+│tayf Config TUI — Keybindings                                                 │
+│─────────────────────────────────────                                         │
+│Navigation                                                                    │
+│  Tab / Shift+Tab  Cycle tabs forward / backward                              │
+│  1..4             Jump to tab by index                                       │
+│  j / k            Move selection down / up                                   │
+│  g / G            First / last entry                                         │
+│  h / l            Toggle list-pane / detail focus                            │
+│  Space            Activate / toggle entry                                    │
+│                                                                              │
+│Editing (Patterns tab)                                                        │
+│  n                New pattern modal                                          │
+│  e                Edit pattern regex source                                  │
+│  c                Open color picker for selected rule                        │
+│  o                Override builtin rule                                      │
+│  r                Reset user override                                        │
+│  d / Delete       Delete user override (confirm)                             │
+│                                                                              │
+│Color Picker (when modal open)                                                │
+│  Tab              Cycle: ANSI16 → 256 → hex → bold → italic → underline      │
+│  Space            Toggle focused boolean axis                                │
+│  c                Clear focused boolean axis (bold/italic/underline only)    │
+└──────────────────────────────────────────────────────────────────────────────┘

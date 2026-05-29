@@ -21,3 +21,17 @@ pub(crate) fn render(frame: &mut Frame, area: Rect) {
     let body = Paragraph::new(HELP_MODAL_CONTENT).block(block);
     frame.render_widget(body, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_tui::app::{App, Modal};
+    use crate::config_tui::test_support::assert_render_snapshot;
+
+    #[test]
+    fn render_modal_help_matches_snapshot() {
+        let mut app = App::default_for_test();
+        app.modal = Some(Modal::Help);
+        assert_render_snapshot(80, 24, &app, |frame, area, _app| render(frame, area), "modal_help");
+    }
+}

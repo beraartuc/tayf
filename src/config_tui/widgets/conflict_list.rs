@@ -93,3 +93,43 @@ pub fn render_conflict_list(
     let help = "j/k nav · o ours · t theirs · s skip\nEnter apply · Esc cancel";
     frame.render_widget(Paragraph::new(help), chunks[1]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_tui::app::App;
+    use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+    use crate::config_tui::test_support::assert_render_snapshot;
+    use crate::config_tui::widgets::save_diff::ConflictChoice;
+
+    #[test]
+    fn render_modal_conflict_list_2_matches_snapshot() {
+        let app = App::default_for_test();
+        let conflicts = vec![
+            KeyConflict {
+                path: vec!["rules".to_owned(), "log_level".to_owned(), "fg".to_owned()],
+                base_value: "(absent)".to_owned(),
+                ours_value: "Red".to_owned(),
+                theirs_value: "Blue".to_owned(),
+                shape: ConflictValueShape::Leaf,
+                is_array_block: false,
+            },
+            KeyConflict {
+                path: vec!["rules".to_owned(), "http_status".to_owned()],
+                base_value: "(table)".to_owned(),
+                ours_value: "(table)".to_owned(),
+                theirs_value: "(table)".to_owned(),
+                shape: ConflictValueShape::Block,
+                is_array_block: false,
+            },
+        ];
+        let selection = vec![ConflictChoice::Ours, ConflictChoice::Skip];
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            |frame, area, _app| render_conflict_list(frame, area, &conflicts, &selection, 0),
+            "modal_conflict_list_2",
+        );
+    }
+}

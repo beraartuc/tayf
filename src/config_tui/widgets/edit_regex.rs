@@ -48,3 +48,30 @@ pub(crate) fn render(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_tui::app::{App, Modal};
+    use crate::config_tui::edit::RuleId;
+    use crate::config_tui::test_support::assert_render_snapshot;
+
+    #[test]
+    fn render_modal_edit_log_level_matches_snapshot() {
+        let mut app = App::default_for_test();
+        let rule_id = RuleId::Builtin("log_level");
+        let buffer = r"(?i)\b(ERROR|WARN|INFO|DEBUG)\b".to_owned();
+        app.modal = Some(Modal::EditRegex {
+            rule_id: rule_id.clone(),
+            buffer: buffer.clone(),
+            error: None,
+        });
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &rule_id, &buffer, None),
+            "modal_edit_log_level",
+        );
+    }
+}

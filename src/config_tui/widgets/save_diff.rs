@@ -491,4 +491,14 @@ mod tests {
         let d = build_diff(b"a\nb", b"a\nb\n");
         assert_eq!(d, "(no changes)\n");
     }
+
+    #[test]
+    fn render_modal_save_diff_clean_matches_snapshot() {
+        use crate::config_tui::app::{App, Modal};
+        use crate::config_tui::test_support::assert_render_snapshot;
+        let mut app = App::default_for_test();
+        app.save_diff = Some(SaveDiffState::Clean { tui_diff: "  a\n- b\n+ c\n".to_owned() });
+        app.modal = Some(Modal::SaveDiff);
+        assert_render_snapshot(80, 24, &app, render, "modal_save_diff_clean");
+    }
 }
