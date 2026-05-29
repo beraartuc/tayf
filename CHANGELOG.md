@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-05-29
+
+Pure cleanup cycle — closes all three IMPORTANT findings (I1 / I2 / I3)
+and three NITs (a / b / c) from the v0.6.2 cross-cutting review. No
+behavior changes outside the I3 fix; the rest is dead-code removal,
+public-API tightening, and test-coverage backfill.
+
+### Changed
+- `config_tui::merge` demoted to `pub(crate)` (I2). The prior `pub mod
+  merge` re-exported `toml_edit::DocumentMut` through the public
+  surface — locking tayf's SemVer to `toml_edit`'s major-version
+  cadence (memory `feedback_toml_edit_025_quirks` documents that we
+  ride 0.25-specific behaviors). The 12-test integration suite
+  (`tests/config_tui_merge_3way.rs`) was moved inline as
+  `#[cfg(test)] mod tests` in `src/config_tui/merge.rs`. Two pure-data
+  types (`ConflictValueShape`, `KeyConflict` — no `toml_edit` types in
+  their fields) are re-exported through the `#[doc(hidden)]`
+  `__test_api` namespace so the conflict-list render test suite can
+  keep fabricating fixtures.
+
+### Fixed
+- `ConflictChoice::Skip` on a `Block`-shape conflict with `base = absent`
+  no longer surfaces the misleading `"merge apply failed: write_to_path
+  at <key>: missing intermediate at <key>"` toast (I3). The default
+  Block-shape selection is `Skip`, so this was the most-likely user
+  path for `[[rules]]` array-of-tables conflicts. New `path_exists`
+  predicate in `merge.rs` short-circuits the write when base also lacks
+  the path; `auto_merged` already carries no value at conflicting keys
+  by construction, so the no-op is correct.
+- The per-row pick → `final_doc` walk extracted from
+  `apply_conflict_selections` into a pure `build_final_doc` helper —
+  no IO, no app-state mutation, directly unit-testable.
+
+### Removed
+- `SaveDiffState::ConflictDiscardConfirm` variant + cascade-dead
+  `SaveDiffOutcome::DiscardAndReload(_)` outcome +
+  `MergePending.disk_now` field + `apply_save_diff_outcome`'s
+  `DiscardAndReload` arm (NIT a). Zero producers in the dispatcher
+  since v0.6.2; deletion makes the conflict-list state machine match
+  what actually runs.
+- Stale `#![allow(dead_code)]` at `src/config_tui/save.rs:14-18` whose
+  reason claimed `ts_for_backup_filename` was unreachable — G8 (v0.6.2)
+  wired it into `commit_bytes`, the canonical save path (I1). Strip
+  surfaced no genuinely-dead items; clippy stays clean.
+
+### Tests
+- 7 new tests in `src/config_tui/merge.rs` and `src/config_tui/events.rs`:
+  `merge_three_way_convergent_deletion_removes_key` (NIT b regression
+  guard), `path_exists_traverses_existing_segments_and_returns_false_on_
+  first_miss`, `build_final_doc_skip_on_absent_base_leaves_auto_merged_
+  untouched_at_that_key` (I3 fix guard),
+  `build_final_doc_skip_on_present_base_copies_base_value_to_final_doc`,
+  `enter_on_conflict_list_modal_invokes_apply_conflict_selections_and_
+  succeeds`, `o_and_t_keystrokes_on_block_shape_row_emit_warn_toast_and_
+  preserve_skip_selection`, and `j_and_k_navigation_wraps_focused_row_
+  modulo_conflict_count` (NIT c dispatcher coverage).
+
 ## [0.6.2] - 2026-05-29
 
 ### Added
