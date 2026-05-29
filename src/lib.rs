@@ -960,6 +960,15 @@ pub mod __test_api {
     pub fn embedded_theme_source(name: &str) -> Option<&'static str> {
         crate::themes::embedded_source(name)
     }
+
+    // -----------------------------------------------------------------------
+    // G8 conflict-list re-exports.
+    // The pub(crate) `widgets` module is not directly reachable from
+    // integration tests, so re-export the two types the render-side
+    // tests need: the per-row choice enum and the render fn itself.
+    // -----------------------------------------------------------------------
+    pub use crate::config_tui::widgets::conflict_list::render_conflict_list;
+    pub use crate::config_tui::widgets::save_diff::ConflictChoice;
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`

@@ -107,6 +107,14 @@ pub(crate) enum Modal {
     /// by `?` or F1; any key dismisses + key is discarded (vim/less
     /// convention). Content lives in `events::HELP_MODAL_CONTENT`.
     Help,
+    /// G8 (§3.6): per-key conflict resolution surface opened when
+    /// [`crate::config_tui::widgets::save_diff::build_initial_state`]
+    /// produces a `SaveDiffState::MergePending`. Keymap:
+    /// `j`/`k` navigate rows; `o`/`t`/`s` toggle the focused row's
+    /// pick (Block-shaped rows can only Skip); Enter applies all
+    /// selections via `commit_bytes`; Esc cancels and resets
+    /// `pending_save_and_quit`.
+    ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState),
 }
 
 /// 3-phase wizard state for the `n` keystroke new-pattern modal

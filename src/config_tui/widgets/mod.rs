@@ -9,6 +9,7 @@ use ratatui::Frame;
 use crate::config_tui::app::{App, Modal};
 
 pub(crate) mod color_picker;
+pub(crate) mod conflict_list;
 pub(crate) mod edit_regex;
 pub(crate) mod help;
 pub(crate) mod new_pattern;
@@ -47,6 +48,23 @@ pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
             edit_regex::render(frame, area, rule_id, buffer.as_str(), error.as_deref());
         }
         Modal::Help => help::render(frame, area),
+        Modal::ConflictList(_) => {
+            if let Some(save_diff::SaveDiffState::MergePending {
+                conflicts,
+                selection,
+                focused_row,
+                ..
+            }) = app.save_diff.as_ref()
+            {
+                conflict_list::render_conflict_list(
+                    frame,
+                    area,
+                    conflicts,
+                    selection,
+                    *focused_row,
+                );
+            }
+        }
     }
 }
 

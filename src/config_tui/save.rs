@@ -166,13 +166,19 @@ pub(crate) fn build_new_content(
     crate::config_tui::reconcile::apply_edits(&snapshot.doc, edits)
 }
 
-/// Commit the staged edits to disk atomically.
+/// Commit a pre-built TOML body to disk atomically — the 8-step
+/// ceremony shared between [`commit_save`] (Clean Confirm path) and the
+/// G8 merge-conflict apply path (`apply_conflict_selections` in
+/// `events.rs`). Centralizing the write ensures every config write
+/// preserves the source mode, rotates backups, and goes through
+/// `sync_all`. Memory `feedback_parallel_call_site_invariant_audit` —
+/// invariants must apply to ALL effectful write paths, not a subset.
 ///
-/// Returns the new `ConfigSnapshot` (`source_hash` updated) on
-/// success; `Err` on any save failure (backup write, tmp create, rename).
-pub(crate) fn commit_save(
+/// Returns the new `ConfigSnapshot` (`source_hash` updated) on success;
+/// `Err` on any save failure (backup write, tmp create, rename).
+pub(crate) fn commit_bytes(
     snapshot: &crate::config_tui::snapshot::ConfigSnapshot,
-    edits: &crate::config_tui::edit::PendingEdits,
+    body: &str,
     now: SystemTime,
 ) -> std::io::Result<crate::config_tui::snapshot::ConfigSnapshot> {
     let cfg_path = snapshot.source_path.as_deref().ok_or_else(|| {
@@ -218,11 +224,7 @@ pub(crate) fn commit_save(
         backup_file.sync_all()?;
     }
 
-    // Step 4: build new content.
-    let new_content = build_new_content(snapshot, edits)
-        .map_err(|e| std::io::Error::other(format!("reconcile failed: {e}")))?;
-
-    // Step 5: tmpfile in parent dir with preserved mode (I-2 fold),
+    // Step 4: tmpfile in parent dir with preserved mode (I-2 fold),
     // write, sync_all (I-1 fold).
     let pid = std::process::id();
     let tmp_ms = now.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis());
@@ -233,20 +235,33 @@ pub(crate) fn commit_save(
         "tmpfile MUST be in target's parent dir (EXDEV safety)"
     );
     let mut tmp = TmpFileGuard::create_in_parent_dir(&tmp_path, preserved_mode)?;
-    tmp.write_all(new_content.as_bytes())?;
+    tmp.write_all(body.as_bytes())?;
     tmp.sync_all()?;
 
-    // Step 6: atomic POSIX rename.
+    // Step 5: atomic POSIX rename.
     tmp.persist(cfg_path)?;
 
-    // Step 7: parent dir sync_all (best-effort; APFS underdocumented).
+    // Step 6: parent dir sync_all (best-effort; APFS underdocumented).
     if let Ok(dir) = fs::File::open(cfg_dir) {
         let _ = dir.sync_all();
     }
 
-    // Step 8: rebuild snapshot.
+    // Step 7: rebuild snapshot.
     crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(cfg_path))
         .map_err(|e| std::io::Error::other(format!("post-save reparse: {e}")))
+}
+
+/// Commit the staged edits to disk atomically. Thin facade over
+/// [`commit_bytes`] — builds the new content from `snapshot.doc + edits`
+/// then delegates the write.
+pub(crate) fn commit_save(
+    snapshot: &crate::config_tui::snapshot::ConfigSnapshot,
+    edits: &crate::config_tui::edit::PendingEdits,
+    now: SystemTime,
+) -> std::io::Result<crate::config_tui::snapshot::ConfigSnapshot> {
+    let body = build_new_content(snapshot, edits)
+        .map_err(|e| std::io::Error::other(format!("reconcile failed: {e}")))?;
+    commit_bytes(snapshot, &body, now)
 }
 
 /// Serialize the built-in default config (12 rules + standard
@@ -745,8 +760,12 @@ mod tests {
     }
 
     #[test]
-    fn integration_commit_save_reconcile_error_propagates_as_io_error_and_leaves_orphan_backup() {
-        // Spec §7.2 I5 (I6 augmented — orphan-backup contract pin).
+    fn integration_commit_save_reconcile_error_propagates_as_io_error_no_backup_written() {
+        // Spec §7.2 I5. G8 refactor: reconcile is now a pre-flight in
+        // commit_save (runs before commit_bytes touches the filesystem),
+        // so a failing reconcile NEVER leaves an orphan backup — strictly
+        // cleaner than the pre-G8 "8-step ceremony writes backup before
+        // reconcile" sequencing which produced orphan files on failure.
         use crate::config_tui::edit::RuleId;
         let tmp = tempfile::tempdir().expect("tmpdir");
         let cfg_path = tmp.path().join("config.toml");
@@ -764,16 +783,18 @@ mod tests {
              other variants are reserved for future work)",
             "full error chain byte-pinned"
         );
-        // Orphan-backup contract (§4.4 amendment): backup file exists post-fail.
+        // G8 invariant: failing reconcile pre-flight writes NO backup.
         let backup_entries: Vec<_> = std::fs::read_dir(tmp.path())
             .unwrap()
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains(".tayf-backup-"))
             .collect();
-        assert_eq!(backup_entries.len(), 1, "exactly one orphan backup");
-        let backup_bytes = std::fs::read(backup_entries[0].path()).unwrap();
-        assert_eq!(backup_bytes, source as &[u8], "backup contains pre-edit bytes");
-        // Source on disk unchanged (commit failed before rename).
+        assert_eq!(
+            backup_entries.len(),
+            0,
+            "no backup file when reconcile fails pre-flight (G8 sequencing)"
+        );
+        // Source on disk unchanged (commit failed before any IO).
         let disk_after = std::fs::read(&cfg_path).unwrap();
         assert_eq!(disk_after, source as &[u8], "source unchanged on reconcile fail");
     }

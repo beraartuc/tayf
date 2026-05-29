@@ -48,6 +48,14 @@ Display
   Shift+P / V      Full preview overlay
   / (forward-slash) Search filter
 
+Save Conflicts (in conflict modal)
+  j / k            Navigate conflict rows
+  o                Take ours (TUI edit)
+  t                Take theirs (disk version)
+  s                Skip (keep base / current disk)
+  Enter            Apply all selections
+  Esc              Cancel merge
+
 Persistence
   Ctrl+S / Ctrl+W  Save
   s (in quit modal)  Save then quit
@@ -192,6 +200,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 }
             }
             Modal::SaveDiff => handle_save_diff_key(app, k),
+            Modal::ConflictList(_) => handle_conflict_list_key(app, k),
             Modal::Search => handle_search_key(app, k),
             Modal::SampleSet => handle_sample_set_key(app, k),
             Modal::NewPattern { .. } => handle_new_pattern_key(app, k),
@@ -237,17 +246,13 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         }
         (KeyCode::Char('s'), m) if m == KeyModifiers::CONTROL => {
             if app.modal.is_none() {
-                app.save_diff =
-                    Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
-                app.modal = Some(Modal::SaveDiff);
+                open_save_modal_for_current_state(app);
             }
         }
         (KeyCode::Char('w'), m) if m == KeyModifiers::CONTROL => {
             // Ctrl+W alt-binding (🔵 #1 fold — XON/XOFF inferno).
             if app.modal.is_none() {
-                app.save_diff =
-                    Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
-                app.modal = Some(Modal::SaveDiff);
+                open_save_modal_for_current_state(app);
             }
         }
         (KeyCode::Char('/'), m) if m.is_empty() => {
@@ -463,8 +468,7 @@ fn handle_quit_confirm_key(app: &mut App, k: KeyEvent) {
             // Save-and-quit: set flag so the commit-success path triggers quit,
             // then open the SaveDiff modal via the same path as Ctrl+S. Spec §3.8.
             app.pending_save_and_quit = true;
-            app.save_diff = Some(crate::config_tui::widgets::save_diff::build_initial_state(app));
-            app.modal = Some(Modal::SaveDiff);
+            open_save_modal_for_current_state(app);
         }
         KeyCode::Char('d') => {
             app.edits.clear();
@@ -635,6 +639,151 @@ pub(crate) fn request_snapshot_reload(app: &mut App) {
             "Override written; snapshot reload failed: {e}"
         )));
     }
+}
+
+/// Compute the initial `SaveDiffState` for the current snapshot+edits
+/// pair and open the matching modal:
+/// - [`SaveDiffState::MergePending`] →
+///   [`Modal::ConflictList`] (the per-key conflict UI);
+/// - everything else → [`Modal::SaveDiff`] (the single-pane diff modal).
+///
+/// Centralized so `Ctrl+S`, `Ctrl+W`, and the `QuitConfirm` `s` path all
+/// reach the same modal selection (G8 §3.6 — pre-G8 they all hard-coded
+/// `Modal::SaveDiff`).
+fn open_save_modal_for_current_state(app: &mut App) {
+    use crate::config_tui::widgets::save_diff::{build_initial_state, SaveDiffState};
+    let state = build_initial_state(app);
+    let modal = if matches!(state, SaveDiffState::MergePending { .. }) {
+        Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState)
+    } else {
+        Modal::SaveDiff
+    };
+    app.save_diff = Some(state);
+    app.modal = Some(modal);
+}
+
+/// Per-key conflict-list dispatcher — `j`/`k` nav, `o`/`t`/`s` toggle
+/// the focused row's pick, Enter applies via [`apply_conflict_selections`],
+/// Esc cancels and resets `pending_save_and_quit` (T-I6 invariant from
+/// G2: every non-commit exit from the `SaveDiff` family must clear the
+/// save-and-quit flag).
+fn handle_conflict_list_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::widgets::save_diff::{ConflictChoice, SaveDiffState};
+
+    let Some(SaveDiffState::MergePending { conflicts, selection, focused_row, .. }) =
+        app.save_diff.as_mut()
+    else {
+        return;
+    };
+    if conflicts.is_empty() {
+        return;
+    }
+    let len = conflicts.len();
+    let is_block_at = |i: usize| -> bool {
+        matches!(
+            conflicts.get(i).map(|c| c.shape),
+            Some(crate::config_tui::merge::ConflictValueShape::Block)
+        )
+    };
+
+    match k.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            *focused_row = (*focused_row + 1) % len;
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            *focused_row = (*focused_row + len - 1) % len;
+        }
+        KeyCode::Char('o') => {
+            let row = *focused_row;
+            if is_block_at(row) {
+                app.toast = Some(crate::config_tui::app::Toast::warn(
+                    "table-shaped conflict — must be resolved manually; press 's' to skip"
+                        .to_owned(),
+                ));
+                return;
+            }
+            selection[row] = ConflictChoice::Ours;
+        }
+        KeyCode::Char('t') => {
+            let row = *focused_row;
+            if is_block_at(row) {
+                app.toast = Some(crate::config_tui::app::Toast::warn(
+                    "table-shaped conflict — must be resolved manually; press 's' to skip"
+                        .to_owned(),
+                ));
+                return;
+            }
+            selection[row] = ConflictChoice::Theirs;
+        }
+        KeyCode::Char('s') => {
+            let row = *focused_row;
+            selection[row] = ConflictChoice::Skip;
+        }
+        KeyCode::Enter => {
+            if let Err(e) = apply_conflict_selections(app) {
+                app.toast =
+                    Some(crate::config_tui::app::Toast::warn(format!("merge apply failed: {e}")));
+            }
+        }
+        KeyCode::Esc => {
+            app.save_diff = None;
+            app.modal = None;
+            app.pending_save_and_quit = false;
+        }
+        _ => {}
+    }
+}
+
+/// Apply the per-row picks on `MergePending` to the auto-merged document,
+/// then commit via [`crate::config_tui::save::commit_bytes`]. On success
+/// clears edits + closes the modal + reloads the snapshot + (if the
+/// save-and-quit flag was set) triggers quit.
+fn apply_conflict_selections(app: &mut App) -> std::io::Result<()> {
+    use crate::config_tui::widgets::save_diff::{ConflictChoice, SaveDiffState};
+
+    let Some(SaveDiffState::MergePending {
+        base,
+        ours,
+        theirs,
+        auto_merged,
+        conflicts,
+        selection,
+        ..
+    }) = app.save_diff.as_ref()
+    else {
+        return Ok(());
+    };
+
+    let mut final_doc = auto_merged.clone();
+    for (i, choice) in selection.iter().enumerate() {
+        let Some(conflict) = conflicts.get(i) else {
+            continue;
+        };
+        let source = match choice {
+            ConflictChoice::Ours => ours,
+            ConflictChoice::Theirs => theirs,
+            ConflictChoice::Skip => base,
+        };
+        crate::config_tui::merge::write_to_path(&mut final_doc, &conflict.path, source).map_err(
+            |e| std::io::Error::other(format!("write_to_path at {}: {e}", conflict.path.join("."))),
+        )?;
+    }
+
+    let body = final_doc.to_string();
+    let new_snapshot =
+        crate::config_tui::save::commit_bytes(&app.snapshot, &body, std::time::SystemTime::now())?;
+    app.snapshot = new_snapshot;
+    app.edits.clear();
+    apply_pending_and_recompile(app);
+
+    app.toast = Some(crate::config_tui::app::Toast::ok("Saved (with manual merge)".to_owned()));
+    app.save_diff = None;
+    app.modal = None;
+    if app.pending_save_and_quit {
+        app.should_quit = true;
+        app.pending_save_and_quit = false;
+    }
+    Ok(())
 }
 
 /// Real impl for `ConfirmAction::InitFromDump` (v0.6.1 §3.3). Writes the
@@ -1542,6 +1691,14 @@ mod tests {
         assert!(
             HELP_MODAL_CONTENT.contains("Shift+P / V"),
             "full preview overlay + V alias listed"
+        );
+        assert!(
+            HELP_MODAL_CONTENT.contains("Save Conflicts (in conflict modal)"),
+            "G8 conflict-list section heading present"
+        );
+        assert!(
+            HELP_MODAL_CONTENT.contains("Enter            Apply all selections"),
+            "G8 conflict-list Enter binding listed"
         );
         assert!(HELP_MODAL_CONTENT.contains("Esc"), "esc listed");
         // v0.6.1 §3.3: Ctrl+R reload + Shift+D init keybindings pinned.

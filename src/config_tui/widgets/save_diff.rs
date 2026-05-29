@@ -12,34 +12,60 @@ use ratatui::Frame;
 
 use crate::config_tui::app::App;
 
-// reason: `disk_now` on ConflictMergedPreview is carried through the
-// state machine for v0.7+ merge reconciliation; v0.5.4 commits the
-// TUI-side content unchanged because build_new_content is still
-// pass-through (save.rs §C1c). Keep the field so the state shape
-// matches the spec §8.4 D flow without a follow-up schema change.
-#[allow(dead_code)]
+// reason: ConflictDiscardConfirm reachable in v0.7+ via the Discard path;
+// MergePending carries four DocumentMut clones and is much larger than
+// the other variants — Box would add an extra heap hop on every state
+// transition for no clarity gain since the only large variant is also
+// the one we mutate most.
+#[allow(dead_code, clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum SaveDiffState {
     Clean {
         tui_diff: String,
     },
-    ConflictPending {
-        tui_diff: String,
-        manual_diff: String,
+    /// G8 §3.6: replaces the legacy `ConflictPending` /
+    /// `ConflictMergedPreview` pair. Built by
+    /// [`build_initial_state`] when the merge module reports per-key
+    /// conflicts; drives the
+    /// [`crate::config_tui::app::Modal::ConflictList`] UI.
+    MergePending {
+        base: toml_edit::DocumentMut,
+        ours: toml_edit::DocumentMut,
+        theirs: toml_edit::DocumentMut,
+        auto_merged: toml_edit::DocumentMut,
+        conflicts: Vec<crate::config_tui::merge::KeyConflict>,
+        selection: Vec<ConflictChoice>,
+        focused_row: usize,
+        /// Raw disk bytes at the moment the save was triggered. The
+        /// `DiscardAndReload` UX hook hands them off to the snapshot
+        /// reload path. Carried for v0.7+ — currently only `Clean` and
+        /// `MergePending` paths produce `SaveDiff` outcomes.
         disk_now: Vec<u8>,
     },
-    ConflictMergedPreview {
-        merged_diff: String,
-        disk_now: Vec<u8>,
-    },
+    /// v0.7+ reachable via a "Discard all TUI edits" affordance from
+    /// `MergePending`. Currently no producer in the dispatcher — kept
+    /// to preserve the state-machine shape from spec §8.4 D.
     ConflictDiscardConfirm {
         disk_now: Vec<u8>,
     },
-    /// v0.5.5: reconcile.rs walk failed; render error message inline in modal.
-    /// Spec §13.2 B2 + I13 fold. Esc dismisses; commit refuses while in this state.
+    /// v0.5.5: reconcile.rs walk failed; render error message inline
+    /// in modal. Spec §13.2 B2 + I13. Esc dismisses; commit refuses
+    /// while in this state.
     ReconcileError {
         message: String,
     },
+}
+
+/// User pick for a single conflicting key — drives the per-row marker
+/// in the conflict-list UI and the source selection in
+/// `apply_conflict_selections`. `Skip` keeps the base value (auto-merged
+/// representation) untouched; `Ours` and `Theirs` overwrite the merged
+/// document via [`crate::config_tui::merge::write_to_path`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictChoice {
+    Ours,
+    Theirs,
+    Skip,
 }
 
 #[derive(Debug)]
@@ -57,13 +83,16 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
         Some(SaveDiffState::Clean { tui_diff }) => {
             ("Save — Clean (y=commit, n/Esc=cancel)".to_owned(), tui_diff.clone())
         }
-        Some(SaveDiffState::ConflictPending { tui_diff, manual_diff, .. }) => (
-            "Save — CONFLICT (y=preview merge, m=discard TUI edits, n/Esc=cancel)".to_owned(),
-            format!("TUI diff:\n{tui_diff}\n\nManual disk diff:\n{manual_diff}"),
+        // MergePending is rendered by Modal::ConflictList (events.rs
+        // routes there); the SaveDiff modal itself does not draw in
+        // that state. If we somehow reach here, show a stub.
+        Some(SaveDiffState::MergePending { conflicts, .. }) => (
+            "Save — CONFLICT (use conflict list modal)".to_owned(),
+            format!(
+                "{} conflict(s) pending — press Enter on the conflict-list modal to apply.",
+                conflicts.len()
+            ),
         ),
-        Some(SaveDiffState::ConflictMergedPreview { merged_diff, .. }) => {
-            ("Save — merged preview (y=commit, n/Esc=cancel)".to_owned(), merged_diff.clone())
-        }
         Some(SaveDiffState::ConflictDiscardConfirm { .. }) => (
             "Discard TUI edits and reload disk? [y/N]".to_owned(),
             "(destructive — default = N)".to_owned(),
@@ -129,33 +158,16 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) -> SaveDiffOutcome {
     };
     match (state, k.code) {
         (SaveDiffState::Clean { .. }, KeyCode::Char('y')) => SaveDiffOutcome::Commit,
-        (SaveDiffState::Clean { .. }, KeyCode::Char('n') | KeyCode::Esc) => {
-            SaveDiffOutcome::CloseModal
-        }
-        (
-            SaveDiffState::ConflictPending { tui_diff, manual_diff, disk_now },
-            KeyCode::Char('y'),
-        ) => {
-            let merged_diff = format!(
-                "(merged preview placeholder — TUI diff + manual disk diff reconciled)\n{tui_diff}\n---\n{manual_diff}"
-            );
-            app.save_diff = Some(SaveDiffState::ConflictMergedPreview { merged_diff, disk_now });
+        // G8: MergePending dispatch lives in `handle_conflict_list_key`
+        // (events.rs) because the conflict-list modal owns its own
+        // keymap. The SaveDiff modal sees no keys while we are in the
+        // MergePending state — preserve and stay open.
+        (state @ SaveDiffState::MergePending { .. }, _) => {
+            app.save_diff = Some(state);
             SaveDiffOutcome::StayOpen
-        }
-        (SaveDiffState::ConflictPending { disk_now, .. }, KeyCode::Char('m')) => {
-            app.save_diff = Some(SaveDiffState::ConflictDiscardConfirm { disk_now });
-            SaveDiffOutcome::StayOpen
-        }
-        (SaveDiffState::ConflictMergedPreview { .. }, KeyCode::Char('y')) => {
-            SaveDiffOutcome::Commit
         }
         (SaveDiffState::ConflictDiscardConfirm { disk_now }, KeyCode::Char('y')) => {
             SaveDiffOutcome::DiscardAndReload(disk_now)
-        }
-        (SaveDiffState::ConflictDiscardConfirm { .. }, KeyCode::Char('n') | KeyCode::Esc) => {
-            // For v0.5.4 we close the modal in this case. v0.7+ may preserve
-            // and bounce back to ConflictPending with the original diffs.
-            SaveDiffOutcome::CloseModal
         }
         (_, KeyCode::Char('n') | KeyCode::Esc) => SaveDiffOutcome::CloseModal,
         (state, _) => {
@@ -166,6 +178,12 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) -> SaveDiffOutcome {
 }
 
 /// Build the initial `SaveDiffState` from snapshot + edits — triggered by Ctrl+S.
+///
+/// G8 (§3.5 + §3.6): when the disk file diverged from the snapshot, run
+/// the 3-way merge and produce [`SaveDiffState::MergePending`] (which
+/// in turn opens `Modal::ConflictList`) instead of the pre-G8
+/// `ConflictPending` two-pane diff. Reconcile / disk-parse failures
+/// short-circuit to `ReconcileError`.
 pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
     let Some(cfg_path) = app.snapshot.source_path.as_deref() else {
         return SaveDiffState::Clean {
@@ -174,16 +192,62 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
     };
     let disk_now = std::fs::read(cfg_path).unwrap_or_default();
     let disk_hash = crate::config_tui::snapshot::sha256(&disk_now);
-    let new_content = match crate::config_tui::save::build_new_content(&app.snapshot, &app.edits) {
+
+    let ours_str = match crate::config_tui::save::build_new_content(&app.snapshot, &app.edits) {
         Ok(s) => s,
         Err(e) => return SaveDiffState::ReconcileError { message: format!("{e}") },
     };
-    let tui_diff = build_diff(&app.snapshot.raw_bytes, new_content.as_bytes());
+    let tui_diff = build_diff(&app.snapshot.raw_bytes, ours_str.as_bytes());
+
     if disk_hash == app.snapshot.source_hash {
-        SaveDiffState::Clean { tui_diff }
-    } else {
-        let manual_diff = build_diff(&app.snapshot.raw_bytes, &disk_now);
-        SaveDiffState::ConflictPending { tui_diff, manual_diff, disk_now }
+        return SaveDiffState::Clean { tui_diff };
+    }
+
+    // Disk diverged from the snapshot — run a structural 3-way merge.
+    let base = app.snapshot.doc.clone();
+    let ours = match std::str::FromStr::from_str(&ours_str) {
+        Ok(d) => d,
+        Err(e) => {
+            return SaveDiffState::ReconcileError {
+                message: format!("reparse of pending edits failed: {e}"),
+            };
+        }
+    };
+    let disk_str = String::from_utf8_lossy(&disk_now).to_string();
+    let theirs = match std::str::FromStr::from_str(&disk_str) {
+        Ok(d) => d,
+        Err(e) => {
+            return SaveDiffState::ReconcileError {
+                message: format!("disk file no longer parses ({e}); fix and retry"),
+            };
+        }
+    };
+
+    let merge = crate::config_tui::merge::merge_three_way(&base, &ours, &theirs);
+
+    if merge.conflicts.is_empty() {
+        // Auto-merge resolved everything — single-pane Clean diff.
+        return SaveDiffState::Clean { tui_diff };
+    }
+
+    let selection: Vec<ConflictChoice> = merge
+        .conflicts
+        .iter()
+        .map(|c| match c.shape {
+            crate::config_tui::merge::ConflictValueShape::Leaf => ConflictChoice::Ours,
+            crate::config_tui::merge::ConflictValueShape::Block => ConflictChoice::Skip,
+        })
+        .collect();
+
+    SaveDiffState::MergePending {
+        base,
+        ours,
+        theirs,
+        auto_merged: merge.auto_merged,
+        conflicts: merge.conflicts,
+        selection,
+        focused_row: 0,
+        disk_now,
     }
 }
 
