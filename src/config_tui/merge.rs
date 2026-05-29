@@ -907,4 +907,30 @@ mod tests {
         assert!(!c.is_array_block, "per-element conflict, not array-block");
         assert_eq!(c.base_value, "(absent)", "base side absent");
     }
+
+    #[test]
+    fn merge_array_of_tables_element_field_recursion_path_pinned() {
+        // Spec §3.4 #8. base/ours/theirs all have "x" but the
+        // styles sub-table differs → conflict path descends one more level.
+        let base =
+            doc("[[rules]]\nname = \"x\"\npattern = \"A\"\n[rules.styles.\"1\"]\nfg = \"red\"\n");
+        let ours =
+            doc("[[rules]]\nname = \"x\"\npattern = \"A\"\n[rules.styles.\"1\"]\nfg = \"blue\"\n");
+        let theirs =
+            doc("[[rules]]\nname = \"x\"\npattern = \"A\"\n[rules.styles.\"1\"]\nfg = \"green\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert_eq!(merge.conflicts.len(), 1, "single field-deep conflict");
+        let c = &merge.conflicts[0];
+        assert_eq!(
+            c.path,
+            vec![
+                "rules".to_owned(),
+                "x".to_owned(),
+                "styles".to_owned(),
+                "1".to_owned(),
+                "fg".to_owned()
+            ],
+        );
+        assert_eq!(c.shape, ConflictValueShape::Leaf, "leaf scalar");
+    }
 }
