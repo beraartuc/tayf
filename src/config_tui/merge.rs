@@ -377,6 +377,30 @@ pub fn write_to_path(
     Ok(())
 }
 
+/// Return `true` if `doc` has a value at `path`. Read-only mirror of the
+/// dest-side descent in [`write_to_path`].
+///
+/// Used by `events::build_final_doc` to short-circuit the `Skip`-on-
+/// `Block`-shape conflict arm when the base side also has no value at
+/// the path: calling [`write_to_path`] in that case would surface a
+/// misleading "missing intermediate at <key>" toast (v0.6.2 cross-
+/// cutting review I3). `auto_merged` already carries no value at
+/// conflicting keys by construction in [`merge_three_way`], so skipping
+/// the write is the correct no-op.
+#[must_use]
+pub(crate) fn path_exists(doc: &DocumentMut, path: &[String]) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let mut cur: &Item = doc.as_item();
+    for seg in path {
+        let Some(t) = cur.as_table() else { return false };
+        let Some(next) = t.get(seg) else { return false };
+        cur = next;
+    }
+    true
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
@@ -521,6 +545,38 @@ mod tests {
         let c = &merge.conflicts[0];
         assert!(c.is_array_block, "array-of-tables flagged as array block");
         assert_eq!(c.shape, ConflictValueShape::Block);
+    }
+
+    #[test]
+    fn merge_three_way_convergent_deletion_removes_key() {
+        // v0.6.2 cross-cutting review NIT b: both sides converge on
+        // "remove key" (bv = Some, ov = None, tv = None → ov_eq_tv = true
+        // → set_or_remove(out, &k, None)). Pins the contract so a future
+        // merge_table refactor can't silently regress.
+        let base = doc("[general]\ntheme = \"dark\"\nverbose = true\n");
+        let ours = doc("[general]\ntheme = \"dark\"\n");
+        let theirs = doc("[general]\ntheme = \"dark\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert!(merge.conflicts.is_empty(), "convergent deletion is no-conflict");
+        let merged = merge.auto_merged.to_string();
+        assert!(
+            !merged.contains("verbose"),
+            "convergent-deleted key removed from auto_merged; got: {merged:?}"
+        );
+        assert!(merged.contains("theme = \"dark\""), "unchanged key kept; got: {merged:?}");
+    }
+
+    #[test]
+    fn path_exists_traverses_existing_segments_and_returns_false_on_first_miss() {
+        // v0.6.3 I3 helper — companion to the Skip+absent-base fix in
+        // events::build_final_doc.
+        let d = doc("[general]\ntheme = \"dark\"\n[a.b]\nc = 1\n");
+        assert!(super::path_exists(&d, &["general".to_owned()]));
+        assert!(super::path_exists(&d, &["general".to_owned(), "theme".to_owned()]));
+        assert!(super::path_exists(&d, &["a".to_owned(), "b".to_owned(), "c".to_owned()]));
+        assert!(!super::path_exists(&d, &["general".to_owned(), "missing".to_owned()]));
+        assert!(!super::path_exists(&d, &["rules".to_owned()]));
+        assert!(!super::path_exists(&d, &[]), "empty path returns false (no key to test)");
     }
 
     #[test]

@@ -751,7 +751,7 @@ fn handle_conflict_list_key(app: &mut App, k: KeyEvent) {
 /// clears edits + closes the modal + reloads the snapshot + (if the
 /// save-and-quit flag was set) triggers quit.
 fn apply_conflict_selections(app: &mut App) -> std::io::Result<()> {
-    use crate::config_tui::widgets::save_diff::{ConflictChoice, SaveDiffState};
+    use crate::config_tui::widgets::save_diff::SaveDiffState;
 
     let Some(SaveDiffState::MergePending {
         base,
@@ -766,20 +766,8 @@ fn apply_conflict_selections(app: &mut App) -> std::io::Result<()> {
         return Ok(());
     };
 
-    let mut final_doc = auto_merged.clone();
-    for (i, choice) in selection.iter().enumerate() {
-        let Some(conflict) = conflicts.get(i) else {
-            continue;
-        };
-        let source = match choice {
-            ConflictChoice::Ours => ours,
-            ConflictChoice::Theirs => theirs,
-            ConflictChoice::Skip => base,
-        };
-        crate::config_tui::merge::write_to_path(&mut final_doc, &conflict.path, source).map_err(
-            |e| std::io::Error::other(format!("write_to_path at {}: {e}", conflict.path.join("."))),
-        )?;
-    }
+    let final_doc = build_final_doc(base, ours, theirs, auto_merged, conflicts, selection)
+        .map_err(|e| std::io::Error::other(format!("merge apply failed: {e}")))?;
 
     let body = final_doc.to_string();
     let new_snapshot =
@@ -796,6 +784,47 @@ fn apply_conflict_selections(app: &mut App) -> std::io::Result<()> {
         app.pending_save_and_quit = false;
     }
     Ok(())
+}
+
+/// Walk per-row picks against `auto_merged` and produce the final document
+/// body. Pure — no IO, no app-state mutation — so testable in isolation.
+///
+/// `Skip` semantics: copy the base value at the conflicting key into
+/// `auto_merged` (which carries no value at conflicting keys by construction
+/// in [`crate::config_tui::merge::merge_three_way`]'s conflict arm). When the
+/// base side ALSO has no value at the path (the conflict arose because
+/// ours/theirs disagree and base was absent), the function skips writing —
+/// without this guard the default `Skip` on a `Block`-shape `[[array-of-
+/// tables]]` conflict surfaces a misleading
+/// `"merge apply failed: ... missing intermediate at <key>"` toast. v0.6.2
+/// cross-cutting review I3.
+fn build_final_doc(
+    base: &toml_edit::DocumentMut,
+    ours: &toml_edit::DocumentMut,
+    theirs: &toml_edit::DocumentMut,
+    auto_merged: &toml_edit::DocumentMut,
+    conflicts: &[crate::config_tui::merge::KeyConflict],
+    selection: &[crate::config_tui::widgets::save_diff::ConflictChoice],
+) -> Result<toml_edit::DocumentMut, crate::config_tui::merge::WriteToPathError> {
+    use crate::config_tui::widgets::save_diff::ConflictChoice;
+    let mut final_doc = auto_merged.clone();
+    for (i, choice) in selection.iter().enumerate() {
+        let Some(conflict) = conflicts.get(i) else {
+            continue;
+        };
+        let source = match choice {
+            ConflictChoice::Ours => ours,
+            ConflictChoice::Theirs => theirs,
+            ConflictChoice::Skip => {
+                if !crate::config_tui::merge::path_exists(base, &conflict.path) {
+                    continue;
+                }
+                base
+            }
+        };
+        crate::config_tui::merge::write_to_path(&mut final_doc, &conflict.path, source)?;
+    }
+    Ok(final_doc)
 }
 
 /// Real impl for `ConfirmAction::InitFromDump` (v0.6.1 §3.3). Writes the
@@ -1328,6 +1357,91 @@ mod tests {
             "Esc on ConflictList must clear pending_save_and_quit (T-I6 invariant)"
         );
         assert_eq!(app.save_diff_scroll, 0, "Esc must reset save_diff_scroll");
+    }
+
+    #[test]
+    fn build_final_doc_skip_on_absent_base_leaves_auto_merged_untouched_at_that_key() {
+        // v0.6.2 cross-cutting review I3 regression guard: the default
+        // Block-shape selection in `build_initial_state`
+        // (widgets/save_diff.rs:236-239) is Skip, so the most likely user
+        // path for `[[rules]]` array-of-tables conflicts surfaced the
+        // misleading "merge apply failed: write_to_path at <key>: missing
+        // intermediate at <key>" toast. Fix: Skip + base-absent-at-path =
+        // continue without writing — `auto_merged` already carries no
+        // value at conflicting keys by construction in
+        // `merge_three_way`'s conflict arm.
+        use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+        use crate::config_tui::widgets::save_diff::ConflictChoice;
+
+        let base: toml_edit::DocumentMut =
+            "[general]\ntheme = \"dark\"\n".parse().expect("base TOML parses");
+        let ours: toml_edit::DocumentMut = "[general]\ntheme = \"dark\"\n[[rules]]\nname = \"a\"\n"
+            .parse()
+            .expect("ours TOML parses");
+        let theirs: toml_edit::DocumentMut =
+            "[general]\ntheme = \"dark\"\n[[rules]]\nname = \"b\"\n"
+                .parse()
+                .expect("theirs TOML parses");
+        // merge_three_way leaves `rules` unset on auto_merged in the conflict arm.
+        let auto_merged: toml_edit::DocumentMut =
+            "[general]\ntheme = \"dark\"\n".parse().expect("auto_merged TOML parses");
+
+        let conflicts = vec![KeyConflict {
+            path: vec!["rules".to_owned()],
+            base_value: "(absent)".to_owned(),
+            ours_value: "[ours-only]".to_owned(),
+            theirs_value: "[theirs-only]".to_owned(),
+            shape: ConflictValueShape::Block,
+            is_array_block: true,
+        }];
+        let selection = vec![ConflictChoice::Skip];
+
+        let result = build_final_doc(&base, &ours, &theirs, &auto_merged, &conflicts, &selection)
+            .expect("Skip + base-absent must not error");
+
+        assert_eq!(
+            result.to_string(),
+            "[general]\ntheme = \"dark\"\n",
+            "auto_merged unchanged when Skip on absent-base conflict",
+        );
+    }
+
+    #[test]
+    fn build_final_doc_skip_on_present_base_copies_base_value_to_final_doc() {
+        // Companion to the I3 fix: when base DOES have a value at the
+        // conflicting path, Skip still means "use base" — `write_to_path`
+        // copies the leaf in. Pinning the Skip-present arm so a future
+        // "always continue on Skip" regression breaks this test loudly.
+        use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+        use crate::config_tui::widgets::save_diff::ConflictChoice;
+
+        let base: toml_edit::DocumentMut = "[general]\ntheme = \"dark\"\n".parse().expect("base");
+        let ours: toml_edit::DocumentMut = "[general]\ntheme = \"tokyo\"\n".parse().expect("ours");
+        let theirs: toml_edit::DocumentMut =
+            "[general]\ntheme = \"light\"\n".parse().expect("theirs");
+        // auto_merged starts WITHOUT theme (conflict arm leaves the key unset).
+        let auto_merged: toml_edit::DocumentMut = "[general]\n".parse().expect("auto_merged");
+
+        let conflicts = vec![KeyConflict {
+            path: vec!["general".to_owned(), "theme".to_owned()],
+            base_value: "dark".to_owned(),
+            ours_value: "tokyo".to_owned(),
+            theirs_value: "light".to_owned(),
+            shape: ConflictValueShape::Leaf,
+            is_array_block: false,
+        }];
+        let selection = vec![ConflictChoice::Skip];
+
+        let result = build_final_doc(&base, &ours, &theirs, &auto_merged, &conflicts, &selection)
+            .expect("Skip + base-present must succeed");
+
+        let rendered = result.to_string();
+        assert!(
+            rendered.contains("theme = \"dark\""),
+            "Skip + base-present copies base value into final_doc; got: {rendered:?}",
+        );
+        assert!(!rendered.contains("tokyo"), "ours value must NOT propagate on Skip");
+        assert!(!rendered.contains("light"), "theirs value must NOT propagate on Skip");
     }
 
     #[test]
