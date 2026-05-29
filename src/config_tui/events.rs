@@ -358,20 +358,6 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
                 app.save_diff_scroll = 0;
             }
         },
-        SaveDiffOutcome::DiscardAndReload(_disk_now) => {
-            if let Ok(snap) = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(
-                app.snapshot.source_path.as_deref(),
-            ) {
-                app.snapshot = snap;
-            }
-            app.edits.clear();
-            app.modal = None;
-            app.pending_save_and_quit = false;
-            app.save_diff = None;
-            app.save_diff_scroll = 0;
-            app.toast =
-                Some(crate::config_tui::app::Toast::ok("Reloaded from disk; TUI edits discarded."));
-        }
         SaveDiffOutcome::CloseModal => {
             app.pending_save_and_quit = false;
             app.modal = None;
@@ -1338,7 +1324,6 @@ mod tests {
             conflicts: Vec::new(),
             selection: Vec::new(),
             focused_row: 0,
-            disk_now: Vec::new(),
         });
         app.modal =
             Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
@@ -1442,6 +1427,195 @@ mod tests {
         );
         assert!(!rendered.contains("tokyo"), "ours value must NOT propagate on Skip");
         assert!(!rendered.contains("light"), "theirs value must NOT propagate on Skip");
+    }
+
+    // -----------------------------------------------------------------------
+    // v0.6.3 NIT c — dispatcher coverage for handle_conflict_list_key.
+    // Render-side is exercised by `tests/config_tui_conflict_list.rs`; the
+    // build_final_doc helper has its own pure-logic tests above. The
+    // dispatcher path that wires keystrokes → state mutations was the
+    // gap the v0.6.2 cross-cutting review flagged.
+    // -----------------------------------------------------------------------
+
+    /// Helper — fabricate a `MergePending` `SaveDiffState` with the supplied
+    /// conflict list + Skip-defaulted selection + focus at row 0.
+    fn make_merge_pending_state(
+        conflicts: Vec<crate::config_tui::merge::KeyConflict>,
+    ) -> crate::config_tui::widgets::save_diff::SaveDiffState {
+        use crate::config_tui::widgets::save_diff::{ConflictChoice, SaveDiffState};
+        let selection = vec![ConflictChoice::Skip; conflicts.len()];
+        let empty_doc = toml_edit::DocumentMut::new();
+        SaveDiffState::MergePending {
+            base: empty_doc.clone(),
+            ours: empty_doc.clone(),
+            theirs: empty_doc.clone(),
+            auto_merged: empty_doc,
+            conflicts,
+            selection,
+            focused_row: 0,
+        }
+    }
+
+    #[test]
+    fn enter_on_conflict_list_modal_invokes_apply_conflict_selections_and_succeeds() {
+        // Drives the full Enter dispatch path:
+        // dispatch_key → Modal::ConflictList branch → handle_conflict_list_key
+        // → apply_conflict_selections → build_final_doc → commit_bytes.
+        // Setup: tempfile-bound snapshot + a Leaf conflict at `general.theme`
+        // with Skip selection on a present-base value (so build_final_doc
+        // copies base → final_doc and commit_bytes writes the file).
+        use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+        use crate::config_tui::widgets::save_diff::SaveDiffState;
+
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\ntheme = \"dark\"\n").expect("seed cfg");
+        let snap = ConfigSnapshot::read_from_disk(Some(&cfg_path)).expect("read snapshot");
+        let mut app = App::from_snapshot(snap);
+
+        let base: toml_edit::DocumentMut = "[general]\ntheme = \"dark\"\n".parse().expect("base");
+        let ours: toml_edit::DocumentMut = "[general]\ntheme = \"tokyo\"\n".parse().expect("ours");
+        let theirs: toml_edit::DocumentMut =
+            "[general]\ntheme = \"light\"\n".parse().expect("theirs");
+        let auto_merged: toml_edit::DocumentMut = "[general]\n".parse().expect("auto_merged");
+        let conflicts = vec![KeyConflict {
+            path: vec!["general".to_owned(), "theme".to_owned()],
+            base_value: "dark".to_owned(),
+            ours_value: "tokyo".to_owned(),
+            theirs_value: "light".to_owned(),
+            shape: ConflictValueShape::Leaf,
+            is_array_block: false,
+        }];
+        app.save_diff = Some(SaveDiffState::MergePending {
+            base,
+            ours,
+            theirs,
+            auto_merged,
+            conflicts,
+            selection: vec![crate::config_tui::widgets::save_diff::ConflictChoice::Skip],
+            focused_row: 0,
+        });
+        app.modal =
+            Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
+
+        dispatch_key(&mut app, mk(KeyCode::Enter));
+
+        assert!(app.modal.is_none(), "Enter on ConflictList must close modal after apply succeeds");
+        assert!(app.save_diff.is_none(), "save_diff side-channel cleared after successful apply");
+        let toast =
+            app.toast.as_ref().expect("expected success toast after Enter triggers apply path");
+        assert_eq!(
+            toast.text, "Saved (with manual merge)",
+            "byte-pinned success toast wording — memory feedback_test_assertion_specificity",
+        );
+        let disk_after = std::fs::read_to_string(&cfg_path).expect("re-read cfg");
+        assert!(
+            disk_after.contains("theme = \"dark\""),
+            "Skip + base-present writes base value to disk; got: {disk_after:?}",
+        );
+    }
+
+    #[test]
+    fn o_and_t_keystrokes_on_block_shape_row_emit_warn_toast_and_preserve_skip_selection() {
+        // v0.6.2 review NIT c: handle_conflict_list_key reject path for
+        // Block-shape rows. Both 'o' (Ours) and 't' (Theirs) must surface
+        // the "table-shaped conflict" warn toast and leave the focused row's
+        // selection unchanged at the default Skip. Pins the exact wording
+        // per memory feedback_test_assertion_specificity.
+        use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+        use crate::config_tui::widgets::save_diff::{ConflictChoice, SaveDiffState};
+
+        let conflicts = vec![KeyConflict {
+            path: vec!["rules".to_owned()],
+            base_value: "(table)".to_owned(),
+            ours_value: "(table)".to_owned(),
+            theirs_value: "(table)".to_owned(),
+            shape: ConflictValueShape::Block,
+            is_array_block: false,
+        }];
+        let mut app = App::from_snapshot(ConfigSnapshot::empty());
+        app.save_diff = Some(make_merge_pending_state(conflicts));
+        app.modal =
+            Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
+
+        let expected_toast = "table-shaped conflict — must be resolved manually; press 's' to skip";
+
+        // 'o' arm
+        dispatch_key(&mut app, mk(KeyCode::Char('o')));
+        let toast = app.toast.as_ref().expect("'o' on Block must set warn toast");
+        assert_eq!(toast.text, expected_toast, "'o' warn wording byte-pinned");
+        let Some(SaveDiffState::MergePending { selection, .. }) = app.save_diff.as_ref() else {
+            panic!("save_diff still MergePending after 'o' on Block");
+        };
+        assert_eq!(
+            selection[0],
+            ConflictChoice::Skip,
+            "Block-shape Skip default preserved on rejected 'o'",
+        );
+
+        // 't' arm
+        app.toast = None;
+        dispatch_key(&mut app, mk(KeyCode::Char('t')));
+        let toast = app.toast.as_ref().expect("'t' on Block must set warn toast");
+        assert_eq!(toast.text, expected_toast, "'t' warn wording byte-pinned");
+        let Some(SaveDiffState::MergePending { selection, .. }) = app.save_diff.as_ref() else {
+            panic!("save_diff still MergePending after 't' on Block");
+        };
+        assert_eq!(
+            selection[0],
+            ConflictChoice::Skip,
+            "Block-shape Skip default preserved on rejected 't'",
+        );
+    }
+
+    #[test]
+    fn j_and_k_navigation_wraps_focused_row_modulo_conflict_count() {
+        // v0.6.2 review NIT c: handle_conflict_list_key nav. j moves
+        // forward, k moves backward, both wrap modulo len. Pins the
+        // arithmetic so a future "saturating_sub on k" or "no wrap on j"
+        // refactor breaks loudly.
+        use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+        use crate::config_tui::widgets::save_diff::SaveDiffState;
+
+        let conflicts = vec![
+            KeyConflict {
+                path: vec!["a".to_owned()],
+                base_value: "0".to_owned(),
+                ours_value: "1".to_owned(),
+                theirs_value: "2".to_owned(),
+                shape: ConflictValueShape::Leaf,
+                is_array_block: false,
+            },
+            KeyConflict {
+                path: vec!["b".to_owned()],
+                base_value: "0".to_owned(),
+                ours_value: "1".to_owned(),
+                theirs_value: "2".to_owned(),
+                shape: ConflictValueShape::Leaf,
+                is_array_block: false,
+            },
+        ];
+        let mut app = App::from_snapshot(ConfigSnapshot::empty());
+        app.save_diff = Some(make_merge_pending_state(conflicts));
+        app.modal =
+            Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
+
+        let read_focus = |app: &App| -> usize {
+            match app.save_diff.as_ref() {
+                Some(SaveDiffState::MergePending { focused_row, .. }) => *focused_row,
+                _ => panic!("save_diff must remain MergePending across nav"),
+            }
+        };
+
+        assert_eq!(read_focus(&app), 0, "starts at row 0");
+        dispatch_key(&mut app, mk(KeyCode::Char('j')));
+        assert_eq!(read_focus(&app), 1, "j: 0 → 1");
+        dispatch_key(&mut app, mk(KeyCode::Char('j')));
+        assert_eq!(read_focus(&app), 0, "j wraps: 1 → 0 modulo 2");
+        dispatch_key(&mut app, mk(KeyCode::Char('k')));
+        assert_eq!(read_focus(&app), 1, "k wraps: 0 → 1 modulo 2");
+        dispatch_key(&mut app, mk(KeyCode::Char('k')));
+        assert_eq!(read_focus(&app), 0, "k: 1 → 0");
     }
 
     #[test]

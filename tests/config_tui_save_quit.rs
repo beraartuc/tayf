@@ -89,13 +89,13 @@ fn save_esc_on_clean_resets_pending_save_and_quit_flag() {
 /// state in a single assertion sweep:
 ///
 /// * Path 1 — `CloseModal` (`n` on Clean SaveDiff)
-/// * Path 3 — SaveDiff Esc tier-2 (`handle_esc` → `Modal::SaveDiff` branch)
-/// * Path 4 — commit-error (`y` when `source_path` is `None` → `Err`)
+/// * Path 2 — SaveDiff Esc tier-2 (`handle_esc` → `Modal::SaveDiff` branch)
+/// * Path 3 — commit-error (`y` when `source_path` is `None` → `Err`)
 ///
-/// Path 2 (`DiscardAndReload`, reachable only via `ConflictDiscardConfirm`)
-/// requires a disk file with a hash mismatch to enter Conflict state; it is
-/// out-of-scope for this integration test. The reset at
-/// `events.rs:SaveDiffOutcome::DiscardAndReload` is the direct enforcement.
+/// The Conflict-list family (`Modal::ConflictList` + `MergePending`)
+/// shares the same `save_diff` side-channel and is guarded by
+/// `esc_on_conflict_list_modal_clears_side_channel_and_pending_save_and_quit`
+/// in `src/config_tui/events.rs::tests`.
 ///
 /// Pinned by the doc-comment on `App::pending_save_and_quit` in `app.rs`.
 #[test]

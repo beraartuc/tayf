@@ -12,12 +12,11 @@ use ratatui::Frame;
 
 use crate::config_tui::app::App;
 
-// reason: ConflictDiscardConfirm reachable in v0.7+ via the Discard path;
-// MergePending carries four DocumentMut clones and is much larger than
-// the other variants — Box would add an extra heap hop on every state
-// transition for no clarity gain since the only large variant is also
-// the one we mutate most.
-#[allow(dead_code, clippy::large_enum_variant)]
+// reason: MergePending carries four DocumentMut clones and is much
+// larger than the other variants — Box would add an extra heap hop on
+// every state transition for no clarity gain since the only large
+// variant is also the one we mutate most.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum SaveDiffState {
     Clean {
@@ -36,17 +35,6 @@ pub(crate) enum SaveDiffState {
         conflicts: Vec<crate::config_tui::merge::KeyConflict>,
         selection: Vec<ConflictChoice>,
         focused_row: usize,
-        /// Raw disk bytes at the moment the save was triggered. The
-        /// `DiscardAndReload` UX hook hands them off to the snapshot
-        /// reload path. Carried for v0.7+ — currently only `Clean` and
-        /// `MergePending` paths produce `SaveDiff` outcomes.
-        disk_now: Vec<u8>,
-    },
-    /// v0.7+ reachable via a "Discard all TUI edits" affordance from
-    /// `MergePending`. Currently no producer in the dispatcher — kept
-    /// to preserve the state-machine shape from spec §8.4 D.
-    ConflictDiscardConfirm {
-        disk_now: Vec<u8>,
     },
     /// v0.5.5: reconcile.rs walk failed; render error message inline
     /// in modal. Spec §13.2 B2 + I13. Esc dismisses; commit refuses
@@ -73,7 +61,6 @@ pub(crate) enum SaveDiffOutcome {
     StayOpen,
     CloseModal,
     Commit,
-    DiscardAndReload(Vec<u8>),
 }
 
 /// Render the modal — `area` is the centered overlay rect.
@@ -92,10 +79,6 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
                 "{} conflict(s) pending — press Enter on the conflict-list modal to apply.",
                 conflicts.len()
             ),
-        ),
-        Some(SaveDiffState::ConflictDiscardConfirm { .. }) => (
-            "Discard TUI edits and reload disk? [y/N]".to_owned(),
-            "(destructive — default = N)".to_owned(),
         ),
         None => ("Save".to_owned(), "(no save state)".to_owned()),
         Some(SaveDiffState::ReconcileError { message }) => {
@@ -165,9 +148,6 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) -> SaveDiffOutcome {
         (state @ SaveDiffState::MergePending { .. }, _) => {
             app.save_diff = Some(state);
             SaveDiffOutcome::StayOpen
-        }
-        (SaveDiffState::ConflictDiscardConfirm { disk_now }, KeyCode::Char('y')) => {
-            SaveDiffOutcome::DiscardAndReload(disk_now)
         }
         (_, KeyCode::Char('n') | KeyCode::Esc) => SaveDiffOutcome::CloseModal,
         (state, _) => {
@@ -247,7 +227,6 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
         conflicts: merge.conflicts,
         selection,
         focused_row: 0,
-        disk_now,
     }
 }
 
