@@ -230,15 +230,18 @@ pub(crate) fn build_initial_state(app: &App) -> SaveDiffState {
     }
 }
 
+const MAX_DP_CELLS: usize = 100_000;
+
 /// Line-diff over `&[u8]` inputs, output is +/- prefixed text used by the
 /// save-diff modal. Hunt-McIlroy LCS-DP algorithm. v0.7 spec §4.
 ///
 /// Returns `"(no changes)\n"` literal when inputs are line-equal.
 /// Falls back to a literal removal+addition list when the DP table would
-/// exceed `MAX_DP_CELLS` cells (defensive bound for adversarial inputs).
+/// exceed `MAX_DP_CELLS` cells — defensive bound for accidentally-pathological
+/// config sizes.
 pub(crate) fn build_diff(old: &[u8], new: &[u8]) -> String {
-    let old_str = std::str::from_utf8(old).unwrap_or("");
-    let new_str = std::str::from_utf8(new).unwrap_or("");
+    let old_str = String::from_utf8_lossy(old);
+    let new_str = String::from_utf8_lossy(new);
     let old_lines: Vec<&str> = old_str.lines().collect();
     let new_lines: Vec<&str> = new_str.lines().collect();
     let n = old_lines.len();
@@ -252,8 +255,6 @@ pub(crate) fn build_diff(old: &[u8], new: &[u8]) -> String {
     let ops = trace_back(&old_lines, &new_lines, &dp);
     render_ops(&ops)
 }
-
-const MAX_DP_CELLS: usize = 100_000;
 
 #[derive(Debug)]
 enum DiffOp<'src> {
