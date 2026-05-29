@@ -581,6 +581,11 @@ mod builtin_names_test {
 pub(crate) struct Compiled {
     pub(crate) set: RegexSet,
     pub(crate) individuals: Vec<Regex>,
+    /// Rule name parallel to `individuals` (same index). Populated at
+    /// [`Self::build_from_loaded`] time; used by the corpus harness via
+    /// `crate::pipeline::select_runs_named` to map accepted spans back to
+    /// the originating rule without re-scanning the rule list.
+    pub(crate) names: Vec<String>,
     pub(crate) styles: Vec<Style>,
     /// Per-rule capture-group style overlay. `group_styles[i]` is the overlay
     /// for `individuals[i]` (vector length = `individuals[i].captures_len() - 1`,
@@ -625,6 +630,7 @@ impl Compiled {
         Self {
             set: RegexSet::empty(),
             individuals: Vec::new(),
+            names: Vec::new(),
             styles: Vec::new(),
             group_styles: Vec::new(),
             uses_capture_styling: Vec::new(),
@@ -827,6 +833,7 @@ impl Compiled {
         let mut compiled = Compiled {
             set: compiled_rules.set,
             individuals: compiled_rules.individuals,
+            names: compiled_rules.names,
             styles: compiled_rules.styles,
             group_styles: compiled_rules.group_styles,
             uses_capture_styling: compiled_rules.uses_capture_styling,
@@ -982,6 +989,7 @@ fn compile_error_for(
 struct CompiledRules {
     set: RegexSet,
     individuals: Vec<Regex>,
+    names: Vec<String>,
     styles: Vec<Style>,
     group_styles: Vec<Vec<Option<Style>>>,
     uses_capture_styling: Vec<bool>,
@@ -1012,6 +1020,7 @@ fn compile_merged_rules(
     profile_path: Option<&str>,
 ) -> Result<CompiledRules> {
     let mut individuals: Vec<Regex> = Vec::with_capacity(rules.len());
+    let mut names: Vec<String> = Vec::with_capacity(rules.len());
     let mut styles: Vec<Style> = Vec::with_capacity(rules.len());
     let mut sources: Vec<String> = Vec::with_capacity(rules.len());
     let mut group_styles: Vec<Vec<Option<Style>>> = Vec::with_capacity(rules.len());
@@ -1034,6 +1043,7 @@ fn compile_merged_rules(
             &mut theme_errors,
             &mut profile_errors,
         )?;
+        names.push(rule.name.clone());
         sources.push(rule.pattern.clone());
         individuals.push(regex);
         styles.push(rule.style);
@@ -1067,7 +1077,15 @@ fn compile_merged_rules(
     let uses_capture_styling: Vec<bool> =
         group_styles.iter().map(|gs| gs.iter().any(Option::is_some)).collect();
 
-    Ok(CompiledRules { set, individuals, styles, group_styles, uses_capture_styling, priorities })
+    Ok(CompiledRules {
+        set,
+        individuals,
+        names,
+        styles,
+        group_styles,
+        uses_capture_styling,
+        priorities,
+    })
 }
 
 /// Resolve the per-capture-group style overlay vector for a single rule,
@@ -1402,6 +1420,72 @@ fn resolve_group_styles_for_rule(
         assigned_by[slot_idx] = Some(key.to_owned());
     }
     Ok(vec)
+}
+
+// ---------------------------------------------------------------------------
+// Corpus-harness shims — delegated to by `__test_api` in `src/lib.rs`.
+// Not part of the production path; only compiled when the lib target is built.
+// ---------------------------------------------------------------------------
+
+/// Per-rule isolation helper for the corpus harness. Compiles the built-in
+/// rule named `rule_name`, runs it against `input`, and returns the leftmost
+/// match span as a `String`. Returns `None` when `rule_name` is not a known
+/// built-in or the pattern does not match.
+///
+/// Builds a fresh `Regex` per call — only for use in test/harness code.
+/// Production code uses `Compiled::load_builtins` + `apply_rules`.
+#[doc(hidden)]
+#[must_use]
+pub(crate) fn testing_match_named_rule(rule_name: &str, input: &str) -> Option<String> {
+    let pattern = builtin_rules().into_iter().find(|r| r.name == rule_name)?.pattern;
+    // Patterns are always valid (tested by the built-in compile tests); unwrap
+    // is safe here — this is test-only code.
+    #[allow(clippy::expect_used)] // reason: test-only shim; patterns are pre-validated built-ins
+    let re = regex::bytes::Regex::new(&pattern)
+        .expect("built-in pattern must compile — pre-validated by compile tests");
+    re.find(input.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned())
+}
+
+/// Full-pipeline span helper for the corpus harness. Builds a `Compiled`
+/// with built-ins only (when `profile` is `None`) or with the named embedded
+/// profile active, runs `select_runs_named` against `input`, and returns
+/// `Vec<(rule_name, matched_span)>` in start-ascending (accepted) order.
+///
+/// Applies the full production pipeline: priority sort + overlap suppression
+/// + profile gating (whitelist + append_rules). Used for corpus karar
+/// measurement (spec §5.3, §5.4).
+///
+/// Builds a fresh `Compiled` per call — only for use in test/harness code.
+/// Returns an empty `Vec` on compile error (unknown profile, etc.).
+#[doc(hidden)]
+#[must_use]
+pub(crate) fn testing_pipeline_spans(input: &str, profile: Option<&str>) -> Vec<(String, String)> {
+    let compiled = if let Some(name) = profile {
+        match crate::profiles::load(name) {
+            Ok(lp) => Compiled::load_with_theme(
+                None,
+                None,
+                None,
+                Some(&lp.profile),
+                Some(lp.path_label.as_str()),
+                crate::terminfo::ColorDepth::Truecolor,
+            ),
+            Err(_) => return Vec::new(),
+        }
+    } else {
+        Compiled::load_builtins()
+    };
+
+    let Ok(compiled) = compiled else { return Vec::new() };
+
+    let mut scratch = crate::pipeline::PipelineScratch::default();
+    let named_runs = crate::pipeline::select_runs_named(input.as_bytes(), &compiled, &mut scratch);
+    named_runs
+        .into_iter()
+        .map(|(name, start, end)| {
+            (name, String::from_utf8_lossy(&input.as_bytes()[start..end]).into_owned())
+        })
+        .collect()
 }
 
 #[cfg(test)]

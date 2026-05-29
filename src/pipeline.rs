@@ -199,6 +199,91 @@ pub(crate) fn apply_rules_spans(
     runs.iter().map(|&(start, end, style)| StyleSpan { start, end, style }).collect()
 }
 
+/// Named-span variant of [`apply_rules_spans`] for the corpus harness.
+/// Applies the full production pipeline (priority sort + overlap suppression)
+/// and returns `Vec<(rule_name, start, end)>` in start-ascending order.
+///
+/// `Compiled::names[i]` is parallel to `Compiled::individuals[i]`; each
+/// accepted run is tagged with the originating rule name. Capture-group
+/// styling rules (`uses_capture_styling[i] = true`) produce 1..=N sub-spans
+/// per match — all are tagged with the same rule name (the full match owner).
+///
+/// Spec §5.3: corpus harness measurement primitive. Not part of the
+/// production byte-emit path — used only by `crate::rules::testing_pipeline_spans`.
+#[doc(hidden)]
+pub(crate) fn select_runs_named(
+    line: &[u8],
+    compiled: &Compiled,
+    scratch: &mut PipelineScratch,
+) -> Vec<(String, usize, usize)> {
+    scratch.accepted_spans.clear();
+    scratch.runs.clear();
+    scratch.event_scratch.clear();
+    scratch.active_scratch.clear();
+    scratch.set_match_scratch.clear();
+
+    scratch.set_match_scratch.extend(compiled.set.matches(line).iter());
+
+    {
+        use std::cmp::Reverse;
+        let priorities = &compiled.priorities;
+        scratch.set_match_scratch.sort_by(|&a, &b| {
+            Reverse(priorities[a]).cmp(&Reverse(priorities[b])).then_with(|| a.cmp(&b))
+        });
+    }
+
+    // name_runs tracks (name_idx, start, end) parallel to scratch.runs so
+    // we can re-sort by start and emit names in final order. A `usize` index
+    // into `compiled.names` avoids cloning until the final collect.
+    let mut name_runs: Vec<(usize, usize, usize)> = Vec::new();
+
+    for &i in &scratch.set_match_scratch {
+        let re = &compiled.individuals[i];
+        if compiled.uses_capture_styling[i] {
+            for caps in re.captures_iter(line) {
+                let m = caps.get(0).expect("capture 0 is always the full match");
+                let (start, end) = (m.start(), m.end());
+                if overlaps_accepted(&scratch.accepted_spans, start, end) {
+                    continue;
+                }
+                // Each sub-span from emit_capture_runs is tagged with rule i's
+                // name; record the current runs length before emission so we can
+                // tag the newly appended entries.
+                let before = scratch.runs.len();
+                emit_capture_runs(
+                    &caps,
+                    start,
+                    end,
+                    compiled.styles[i],
+                    &compiled.group_styles[i],
+                    &mut scratch.event_scratch,
+                    &mut scratch.active_scratch,
+                    &mut scratch.runs,
+                );
+                for run in &scratch.runs[before..] {
+                    name_runs.push((i, run.0, run.1));
+                }
+                insert_accepted(&mut scratch.accepted_spans, start, end);
+            }
+        } else {
+            for m in re.find_iter(line) {
+                let (start, end) = (m.start(), m.end());
+                if overlaps_accepted(&scratch.accepted_spans, start, end) {
+                    continue;
+                }
+                scratch.runs.push((start, end, compiled.styles[i]));
+                name_runs.push((i, start, end));
+                insert_accepted(&mut scratch.accepted_spans, start, end);
+            }
+        }
+    }
+
+    // Sort by start to match the production apply_rules emit order.
+    name_runs.sort_by_key(|&(_, s, _)| s);
+
+    name_runs.into_iter().map(|(i, start, end)| (compiled.names[i].clone(), start, end)).collect()
+}
+
 /// O(log N) overlap check against sorted-by-start `accepted_spans`. Two
 /// half-open intervals `[a_start, a_end)` and `[b_start, b_end)` overlap
 /// iff `a_start < b_end AND b_start < a_end`. With `accepted_spans`
@@ -711,6 +796,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new([r"(\d+)-(\d+)"]).unwrap(),
             individuals: vec![re],
+            names: vec!["test_capture".to_owned()],
             styles: vec![default],
             group_styles: vec![vec![Some(red), Some(blue)]],
             uses_capture_styling: vec![true],
@@ -1018,6 +1104,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new([interior_pat, envelope_pat]).unwrap(),
             individuals: vec![Regex::new(interior_pat).unwrap(), Regex::new(envelope_pat).unwrap()],
+            names: vec!["interior".to_owned(), "envelope".to_owned()],
             styles: vec![
                 Style { fg: Some(Color::Green), ..Style::DEFAULT }, // rule 0 = interior
                 Style { fg: Some(Color::Red), ..Style::DEFAULT },   // rule 1 = envelope
@@ -1051,6 +1138,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new([r"\d{3,5}", r"\d{2}"]).unwrap(),
             individuals: vec![Regex::new(r"\d{3,5}").unwrap(), Regex::new(r"\d{2}").unwrap()],
+            names: vec!["long_digits".to_owned(), "short_digits".to_owned()],
             styles: vec![red, blue],
             group_styles: vec![vec![], vec![]],
             uses_capture_styling: vec![false, false],
@@ -1080,6 +1168,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new(pats).unwrap(),
             individuals: pats.iter().map(|p| Regex::new(p).unwrap()).collect(),
+            names: pats.iter().map(|p| (*p).to_owned()).collect(),
             styles: vec![Style::DEFAULT; 3],
             group_styles: vec![vec![]; 3],
             uses_capture_styling: vec![false; 3],
@@ -1102,6 +1191,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new([r"\d{3,5}", r"\d{2}"]).unwrap(),
             individuals: vec![Regex::new(r"\d{3,5}").unwrap(), Regex::new(r"\d{2}").unwrap()],
+            names: vec!["long_match".to_owned(), "short_match".to_owned()],
             styles: vec![
                 Style { fg: Some(Color::Red), ..Style::DEFAULT }, // rule 0 — longer match
                 Style { fg: Some(Color::Green), ..Style::DEFAULT }, // rule 1 — shorter
@@ -1132,6 +1222,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new([r"abc", r"a"]).unwrap(),
             individuals: vec![Regex::new(r"abc").unwrap(), Regex::new(r"a").unwrap()],
+            names: vec!["neg_priority_outer".to_owned(), "default_priority_inner".to_owned()],
             styles: vec![
                 Style { fg: Some(Color::Red), ..Style::DEFAULT },
                 Style { fg: Some(Color::Green), ..Style::DEFAULT },
@@ -1163,6 +1254,7 @@ mod rule_tests {
         let compiled = Compiled {
             set: RegexSet::new([r"foo", r"bar"]).unwrap(),
             individuals: vec![Regex::new(r"foo").unwrap(), Regex::new(r"bar").unwrap()],
+            names: vec!["extreme_max".to_owned(), "extreme_min".to_owned()],
             styles: vec![Style::DEFAULT; 2],
             group_styles: vec![vec![]; 2],
             uses_capture_styling: vec![false; 2],
@@ -1266,6 +1358,7 @@ mod rule_tests {
         let compiled = Arc::new(Compiled {
             set: RegexSet::new([r"(\d+)-(\d+)"]).unwrap(),
             individuals: vec![re],
+            names: vec!["capture_range".to_owned()],
             styles: vec![Style::default()],
             group_styles: vec![vec![Some(red), Some(blue)]],
             uses_capture_styling: vec![true],
@@ -1354,6 +1447,7 @@ mod rule_tests {
         let compiled = Arc::new(Compiled {
             set: RegexSet::new([r"a", r"b"]).unwrap(),
             individuals: vec![Regex::new(r"a").unwrap(), Regex::new(r"b").unwrap()],
+            names: vec!["extreme_max_spans".to_owned(), "extreme_min_spans".to_owned()],
             styles: vec![Style::default(), Style::default()],
             group_styles: vec![vec![], vec![]],
             uses_capture_styling: vec![false, false],

@@ -979,6 +979,68 @@ pub mod __test_api {
     // fixtures for the conflict-list render suite.
     // -----------------------------------------------------------------------
     pub use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
+
+    // -----------------------------------------------------------------------
+    // Corpus-harness helpers (spec §5.3 + §5.4). Delegate to
+    // `crate::rules::testing_*` shims so no logic lives here.
+    // -----------------------------------------------------------------------
+
+    /// Run a single built-in rule by name against `input`; return the leftmost
+    /// match span as `String` if any. Per-rule isolation: no priority sort,
+    /// no overlap suppression, no profile gating. Used for the corpus harness
+    /// debugging primitive — production-level FP measurement uses
+    /// `pipeline_spans` (spec §5.3, audit §0.2).
+    ///
+    /// Returns `None` when `rule_name` is not a known built-in or the pattern
+    /// does not match.
+    ///
+    /// `SemVer` note: this lives in `__test_api` with "no stability guarantees"
+    /// — signature may change without bump.
+    #[must_use]
+    pub fn match_named_rule(rule_name: &str, input: &str) -> Option<String> {
+        crate::rules::testing_match_named_rule(rule_name, input)
+    }
+
+    /// Run the full production pipeline against `input` with optional
+    /// `profile` activation. Returns post-priority post-overlap
+    /// `(rule_name, matched_span)` pairs — exactly what tayf would color
+    /// in production output. Used for corpus harness karar measurement
+    /// (spec §5.3, §5.4).
+    ///
+    /// `profile` is the name of an embedded profile (e.g. `"aws"`, `"k8s"`).
+    /// Pass `None` for built-ins only. Returns an empty `Vec` when the
+    /// profile name is unknown or compilation fails.
+    ///
+    /// `SemVer` note: see [`match_named_rule`].
+    #[must_use]
+    pub fn pipeline_spans(input: &str, profile: Option<&str>) -> Vec<(String, String)> {
+        crate::rules::testing_pipeline_spans(input, profile)
+    }
+}
+
+/// Smoke tests for the two `__test_api` corpus-harness helpers added in
+/// Task 16. Kept separate from the existing `__test_api` module tests so
+/// they are easy to filter via `cargo test --lib __test_api_smoke`.
+#[cfg(test)]
+mod __test_api_smoke {
+    #[test]
+    fn match_named_rule_returns_some_for_builtin_ipv4_hit() {
+        let r = super::__test_api::match_named_rule("ipv4", "see 192.168.1.1 here");
+        assert_eq!(r, Some("192.168.1.1".to_owned()));
+    }
+
+    #[test]
+    fn match_named_rule_returns_none_for_unknown_rule_name() {
+        let r = super::__test_api::match_named_rule("nonexistent", "anything");
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn pipeline_spans_returns_priority_resolved_spans() {
+        let spans = super::__test_api::pipeline_spans("192.168.1.1", None);
+        let rules: Vec<&str> = spans.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(rules.contains(&"ipv4"), "ipv4 fires; got {rules:?}");
+    }
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`
