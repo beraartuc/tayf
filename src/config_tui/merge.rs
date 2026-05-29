@@ -829,4 +829,54 @@ mod tests {
             "writing into a non-table dest is a clean error, not a panic; got: {res:?}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // AoT positive-path pins (v0.7 spec §3.4 #2, #5, #9)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn merge_array_of_tables_disjoint_insertions_auto_merge() {
+        // Spec §3.4 #2. ours appends name="x", theirs appends name="y" →
+        // both auto-merge; deterministic order = base + ours-only + theirs-only.
+        let base = doc("[[rules]]\nname = \"a\"\n");
+        let ours = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"x\"\n");
+        let theirs = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"y\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert!(merge.conflicts.is_empty(), "disjoint inserts must not conflict");
+        let s = merge.auto_merged.to_string();
+        assert!(s.contains("name = \"a\""));
+        assert!(s.contains("name = \"x\""));
+        assert!(s.contains("name = \"y\""));
+    }
+
+    #[test]
+    fn merge_array_of_tables_convergent_deletion_drops_element() {
+        // Spec §3.4 #5. base has "a" + "b", ours drops "b", theirs drops "b".
+        let base = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"b\"\n");
+        let ours = doc("[[rules]]\nname = \"a\"\n");
+        let theirs = doc("[[rules]]\nname = \"a\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert!(merge.conflicts.is_empty(), "convergent deletion = auto-merge");
+        let s = merge.auto_merged.to_string();
+        assert!(s.contains("name = \"a\""), "kept");
+        assert!(!s.contains("name = \"b\""), "dropped");
+    }
+
+    #[test]
+    fn merge_array_of_tables_order_preserves_base_then_appends_ours_then_theirs() {
+        // Spec §3.4 #9. base [a,b], ours [a,b,x], theirs [a,b,y] → [a,b,x,y].
+        let base = doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"b\"\n");
+        let ours =
+            doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"b\"\n[[rules]]\nname = \"x\"\n");
+        let theirs =
+            doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"b\"\n[[rules]]\nname = \"y\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert!(merge.conflicts.is_empty());
+        let s = merge.auto_merged.to_string();
+        let pos_a = s.find("name = \"a\"").expect("a present");
+        let pos_b = s.find("name = \"b\"").expect("b present");
+        let pos_x = s.find("name = \"x\"").expect("x present");
+        let pos_y = s.find("name = \"y\"").expect("y present");
+        assert!(pos_a < pos_b && pos_b < pos_x && pos_x < pos_y, "deterministic order");
+    }
 }
