@@ -1,0 +1,8 @@
+the quick brown fox jumps over the lazy dog again and again
+a measured sentence with ordinary words and nothing notable here
+prose lines like this exercise the regexset miss fast path only
+no addresses no timestamps no file names no urls appear in this text
+just words arranged into harmless human readable english sentences
+the colorizer should find nothing to style on any of these lines
+buffering and tty discipline dominate the cost of streaming prose
+this is the low match denominator shape for the overhead harness

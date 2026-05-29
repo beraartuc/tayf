@@ -1,0 +1,4 @@
+[1;32mok[0m   build finished in [33m1.2s[0m for target [36mrelease[0m
+[1;31mfail[0m unit test [36mparser::edge[0m panicked at [33mline 42[0m
+[34minfo[0m  linking [36mlibcore[0m and [36mlibstd[0m into [32mtayf[0m
+[1;33mwarn[0m unused import [36mstd::io::Write[0m in module [36mcli[0m
