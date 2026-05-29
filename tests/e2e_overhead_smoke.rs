@@ -60,11 +60,14 @@ fn bare_shell_elapsed(path: &str) -> Duration {
         PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
     );
     std::thread::sleep(Duration::from_millis(200));
-    let start = Instant::now();
+    // Mirror the bench's `timed_run` shape exactly: acquire writer + reader
+    // before the clock starts, and drain remaining buffered bytes after the
+    // child exits, so this baseline faithfully matches the harness it models.
     let mut writer = master.take_writer().expect("take writer");
+    let mut reader = master.try_clone_reader().expect("clone reader");
+    let start = Instant::now();
     writer.write_all(format!("cat {path}\nexit\n").as_bytes()).expect("write");
     drop(writer);
-    let mut reader = master.try_clone_reader().expect("clone reader");
     let mut buf = [0u8; 65536];
     while start.elapsed() < Duration::from_secs(20) {
         match reader.read(&mut buf) {
@@ -73,6 +76,11 @@ fn bare_shell_elapsed(path: &str) -> Duration {
             Err(_) => break,
         }
         if let Ok(Some(_)) = child.try_wait() {
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+            }
             break;
         }
     }

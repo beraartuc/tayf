@@ -12,6 +12,7 @@
 /// Median of a non-empty slice of sample times (milliseconds). Sorts a copy;
 /// inputs are finite positive durations, so `partial_cmp` never sees NaN.
 pub(crate) fn median(samples: &[f64]) -> f64 {
+    assert!(!samples.is_empty(), "median requires a non-empty slice of samples");
     let mut v = samples.to_vec();
     v.sort_by(|a, b| a.partial_cmp(b).expect("sample times are finite"));
     let n = v.len();

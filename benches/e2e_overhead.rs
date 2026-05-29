@@ -122,7 +122,7 @@ fn env_usize(key: &str, default: usize) -> usize {
 
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)] // reason: byte counts and ms fit f64/u64 for display
 fn main() {
-    let samples = env_usize("TAYF_E2E_SAMPLES", 10);
+    let samples = env_usize("TAYF_E2E_SAMPLES", 10).max(1);
     let warmup = env_usize("TAYF_E2E_WARMUP", 3);
     let target = env_usize("TAYF_E2E_BYTES", 16 * 1024 * 1024);
     let tayf = env!("CARGO_BIN_EXE_tayf");
@@ -146,6 +146,8 @@ fn main() {
     for shape in SHAPES {
         let corpus = write_corpus(shape.template, target);
         let bytes = std::fs::metadata(corpus.path()).expect("stat corpus").len() as f64;
+        // NamedTempFile paths are alphanumeric under the temp dir (no spaces
+        // or shell metacharacters), so the path needs no shell quoting here.
         let stdin = format!("cat {}\nexit\n", corpus.path().display());
 
         let cat_args: &[&str] = &[];

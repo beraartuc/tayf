@@ -36,6 +36,12 @@ fn median_unsorted_input() {
 }
 
 #[test]
+#[should_panic(expected = "non-empty")]
+fn median_empty_panics() {
+    let _ = median(&[]);
+}
+
+#[test]
 fn min_and_max() {
     let s = [3.0, 1.0, 2.0];
     assert!(close(min_sample(&s), 1.0));
