@@ -1,0 +1,24 @@
+# Audit item: E-1, E-2
+# Rule under test: ipv4
+# Measurement mode: PIPELINE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §E-1, §E-2
+# Decision: TBD
+
+POS: ip 192.168.1.1 down => 192.168.1.1
+POS: see 10.0.0.1 hit => 10.0.0.1
+POS: 4.5.6.7 was loaded => 4.5.6.7
+POS: ip 8.8.8.8 dns => 8.8.8.8
+POS: addr 127.0.0.1 ok => 127.0.0.1
+POS: route 172.16.0.1 ok => 172.16.0.1
+POS: lan 192.168.0.254 hit => 192.168.0.254
+POS: see 0.0.0.0 trace => 0.0.0.0
+
+NEG: ver v10.20.30.40
+NEG: tag 1.01.30.4
+NEG: out 256.0.0.0
+NEG: bad 999.0.0.0
+NEG: id v1.2.3.4
+NEG: build 1.2.3 short
+NEG: 1.2 too short
+NEG: 1.2.3.4.5 long

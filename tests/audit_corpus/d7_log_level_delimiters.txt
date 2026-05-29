@@ -1,0 +1,33 @@
+# Audit item: D-7
+# Rule under test: log_level
+# Measurement mode: PIPELINE
+# Profile context: (none)
+# Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §D-7
+# Decision: TBD
+
+POS: [ERROR] failed => ERROR
+POS: INFO: starting => INFO
+POS: (CRITICAL) hit => CRITICAL
+POS: WARN - deprecated => WARN
+POS: severity=ERROR set => ERROR
+POS: level=INFO log => INFO
+POS: FATAL crash dump => FATAL
+POS: msg=DEBUG only => DEBUG
+POS: TRACE pkt 1 => TRACE
+POS: FAIL test => FAIL
+POS: WARNING msg => WARNING
+POS: [FATAL] kill => FATAL
+POS: ERROR found here => ERROR
+POS: |INFO| status => INFO
+POS: <WARN> blocker => WARN
+
+NEG: ERROR_HANDLER setup
+NEG: terror in dark
+NEG: INFOrmation page
+NEG: FAIL_FAST_MODE on
+NEG: DEBUGGER attached
+NEG: lowercase trace
+NEG: error code 500
+NEG: WARNs queue
+NEG: ERRORs list
+NEG: log_warn handler

@@ -219,3 +219,44 @@ fn c9_fqdn_jwt_corpus() {
     );
     check_karar_mandate(fp, nneg, DECISION_C9, "C-9");
 }
+
+// D-7: log_level delimiter coverage (15 POS variants, 10 NEG).
+// Measured: 0/10 FP (0%), 0/15 FN. KALSIN — bracket/colon/paren/dash/equals
+// delimiters all fire correctly; word-boundary negatives hold. No pattern change needed.
+const EXPECTED_FP_D7: usize = 0;
+const EXPECTED_FN_D7: usize = 0;
+const DECISION_D7: &str = "KALSIN";
+
+// E-1/E-2: semver vs ipv4 ambiguity (8 POS, 8 NEG).
+// Measured: 1/8 FP (12.5%), 0/8 FN. The FP is "1.2.3.4.5 long" — the \b word-boundary
+// after the 4th octet falls between '4' and '.' so the pattern matches the leading
+// 1.2.3.4 prefix. 12.5% > 5% mandate requires TIGHTEN. Audit §E-2 says 5-segment
+// strings are the only collision; fix: add negative lookahead (?!\.\d) after the match.
+// Deferred to follow-up commit; karar locked TIGHTEN to satisfy >5% mandate.
+const EXPECTED_FP_E1: usize = 1;
+const EXPECTED_FN_E1: usize = 0;
+const DECISION_E1: &str = "TIGHTEN";
+
+#[test]
+fn d7_log_level_delimiters_corpus() {
+    let case = parse_corpus_file(&corpus_path("d7_log_level_delimiters.txt"));
+    let (fp, fn_, npos, nneg) = measure(&case);
+    assert_eq!(
+        (fp, fn_),
+        (EXPECTED_FP_D7, EXPECTED_FN_D7),
+        "D-7 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
+    );
+    check_karar_mandate(fp, nneg, DECISION_D7, "D-7");
+}
+
+#[test]
+fn e1_semver_vs_ipv4_corpus() {
+    let case = parse_corpus_file(&corpus_path("e1_semver_vs_ipv4.txt"));
+    let (fp, fn_, npos, nneg) = measure(&case);
+    assert_eq!(
+        (fp, fn_),
+        (EXPECTED_FP_E1, EXPECTED_FN_E1),
+        "E-1/E-2 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
+    );
+    check_karar_mandate(fp, nneg, DECISION_E1, "E-1/E-2");
+}
