@@ -3,7 +3,7 @@
 # Measurement mode: PIPELINE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §D-7
-# Decision: KALSIN (FP 0%, no pattern change)
+# Decision: KEEP (FP 0%, no pattern change)
 
 POS: [ERROR] failed => ERROR
 POS: INFO: starting => INFO

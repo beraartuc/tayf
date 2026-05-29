@@ -3,7 +3,7 @@
 # Measurement mode: PIPELINE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §F-3
-# Decision: KALSIN (FP 0%, no pattern change)
+# Decision: KEEP (FP 0%, no pattern change)
 
 POS: latency 200μs ok => 200μs
 POS: time 1.5μs span => 1.5μs

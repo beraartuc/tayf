@@ -3,7 +3,7 @@
 # Measurement mode: PIPELINE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §C-8
-# Decision: KALSIN (FP 0%; v0.7.1 dropped go ext)
+# Decision: KEEP (FP 0%; v0.7.1 dropped go ext)
 
 POS: open config.json please => config.json
 POS: edit foo.yaml bar => foo.yaml

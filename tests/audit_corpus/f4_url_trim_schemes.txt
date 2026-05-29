@@ -3,7 +3,7 @@
 # Measurement mode: RULE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §F-4
-# Decision: KALSIN (FP 0%, no pattern change)
+# Decision: KEEP (FP 0%, no pattern change)
 
 POS: get https://example.com here => https://example.com
 POS: see ssh://host.example/repo path => ssh://host.example/repo

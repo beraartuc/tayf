@@ -125,7 +125,7 @@ fn measure(case: &AuditCase) -> (usize, usize, usize, usize) {
     (fp, fn_, case.positives.len(), case.negatives.len())
 }
 
-fn check_karar_mandate(fp: usize, nneg: usize, decision: &str, item: &str) {
+fn check_decision_mandate(fp: usize, nneg: usize, decision: &str, item: &str) {
     if nneg == 0 {
         return;
     }
@@ -133,17 +133,17 @@ fn check_karar_mandate(fp: usize, nneg: usize, decision: &str, item: &str) {
     if fp_rate > 0.05 {
         let fp_pct = fp_rate * 100.0;
         assert_ne!(
-            decision, "KALSIN",
-            "{item}: FP rate {fp_pct:.1}% > 5% threshold; karar must be TIGHTEN, DEMOTE, or ACCEPT-DOCUMENTED",
+            decision, "KEEP",
+            "{item}: FP rate {fp_pct:.1}% > 5% threshold; decision must be TIGHTEN, DEMOTE, or ACCEPT-DOCUMENTED",
         );
     }
     // ACCEPT-DOCUMENTED is reserved for genuinely high-FP items that have no
     // clean fix under the regex crate's no-look-around constraint. A clean rule
-    // must use KALSIN — this guards against masking a fixable pattern.
+    // must use KEEP — this guards against masking a fixable pattern.
     if decision == "ACCEPT-DOCUMENTED" {
         assert!(
             fp_rate > 0.05,
-            "{item}: ACCEPT-DOCUMENTED reserved for >5% FP (got {:.1}%); use KALSIN if clean",
+            "{item}: ACCEPT-DOCUMENTED reserved for >5% FP (got {:.1}%); use KEEP if clean",
             fp_rate * 100.0,
         );
     }
@@ -164,17 +164,17 @@ fn corpus_parser_rejects_empty_case() {
 }
 
 #[test]
-fn check_karar_mandate_rejects_accept_documented_below_threshold() {
+fn check_decision_mandate_rejects_accept_documented_below_threshold() {
     // ACCEPT-DOCUMENTED with FP <= 5% must panic — it would mask a rule that
-    // should be KALSIN. 0/20 = 0% is well below the 5% floor.
+    // should be KEEP. 0/20 = 0% is well below the 5% floor.
     let r = std::panic::catch_unwind(|| {
-        check_karar_mandate(0, 20, "ACCEPT-DOCUMENTED", "fake");
+        check_decision_mandate(0, 20, "ACCEPT-DOCUMENTED", "fake");
     });
     assert!(r.is_err(), "ACCEPT-DOCUMENTED below 5% FP must fail the mandate");
 }
 
 // Decision constants — implementer fills based on measurement.
-// Per spec §5.4: high-FP (>5%) requires non-KALSIN karar (test enforced).
+// Per spec §5.4: high-FP (>5%) requires non-KEEP decision (test enforced).
 
 // C-4: filename single-letter-ext prose collision (a.b.c).
 // Measured: 5/15 FP (33.3%) — 4x `.c` (a.b.c) + 1x `.v` (u.v.w). No clean fix:
@@ -189,10 +189,10 @@ const DECISION_C4: &str = "ACCEPT-DOCUMENTED";
 // C-8: filename vs fqdn Go pkg path (pkg.go.dev/foo).
 // v0.7.1: dropped `go` from FILENAME_EXTENSIONS — FP 1/10 (10%) -> 0/10 (0%).
 // `pkg.go.dev/foo` no longer matches the filename rule (go ext removed);
-// `main.go` now styles as fqdn (accepted trade-off); karar KALSIN, EXPECTED_FP_C8 pinned at 0 guards future drift.
+// `main.go` now styles as fqdn (accepted trade-off); decision KEEP, EXPECTED_FP_C8 pinned at 0 guards future drift.
 const EXPECTED_FP_C8: usize = 0;
 const EXPECTED_FN_C8: usize = 0;
-const DECISION_C8: &str = "KALSIN";
+const DECISION_C8: &str = "KEEP";
 
 // C-9: fqdn matches JWT 3-segment dotted tokens.
 // Measured: 6/10 FP (60%). fqdn fires on base64url labels ending in alpha
@@ -213,7 +213,7 @@ fn c4_filename_single_letter_corpus() {
         (EXPECTED_FP_C4, EXPECTED_FN_C4),
         "C-4 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_C4, "C-4");
+    check_decision_mandate(fp, nneg, DECISION_C4, "C-4");
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn c8_filename_vs_fqdn_pkgpath_corpus() {
         (EXPECTED_FP_C8, EXPECTED_FN_C8),
         "C-8 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_C8, "C-8");
+    check_decision_mandate(fp, nneg, DECISION_C8, "C-8");
 }
 
 #[test]
@@ -237,15 +237,15 @@ fn c9_fqdn_jwt_corpus() {
         (EXPECTED_FP_C9, EXPECTED_FN_C9),
         "C-9 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_C9, "C-9");
+    check_decision_mandate(fp, nneg, DECISION_C9, "C-9");
 }
 
 // D-7: log_level delimiter coverage (15 POS variants, 10 NEG).
-// Measured: 0/10 FP (0%), 0/15 FN. KALSIN — bracket/colon/paren/dash/equals
+// Measured: 0/10 FP (0%), 0/15 FN. KEEP — bracket/colon/paren/dash/equals
 // delimiters all fire correctly; word-boundary negatives hold. No pattern change needed.
 const EXPECTED_FP_D7: usize = 0;
 const EXPECTED_FN_D7: usize = 0;
-const DECISION_D7: &str = "KALSIN";
+const DECISION_D7: &str = "KEEP";
 
 // E-1/E-2: semver vs ipv4 ambiguity (8 POS, 8 NEG).
 // Measured: 1/8 FP (12.5%), 0/8 FN. The FP is "1.2.3.4.5 long" — the \b after
@@ -267,7 +267,7 @@ fn d7_log_level_delimiters_corpus() {
         (EXPECTED_FP_D7, EXPECTED_FN_D7),
         "D-7 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_D7, "D-7");
+    check_decision_mandate(fp, nneg, DECISION_D7, "D-7");
 }
 
 #[test]
@@ -279,19 +279,19 @@ fn e1_semver_vs_ipv4_corpus() {
         (EXPECTED_FP_E1, EXPECTED_FN_E1),
         "E-1/E-2 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_E1, "E-1/E-2");
+    check_decision_mandate(fp, nneg, DECISION_E1, "E-1/E-2");
 }
 
 // F-3: duration μs UTF-8 coverage — bare 200μs / 1.5μs forms (6 POS, 5 NEG).
-// Measured: 0/5 FP (0%), 0/6 FN. KALSIN — \b\d+(?:\.\d+)?(?:\s?μs) fires on all
+// Measured: 0/5 FP (0%), 0/6 FN. KEEP — \b\d+(?:\.\d+)?(?:\s?μs) fires on all
 // numeric-prefix forms; word-boundary after μs (multi-byte UTF-8) rejects
 // `200μsec` (continuation `ec`) and bare `μs alone` (no digit prefix). No change needed.
 const EXPECTED_FP_F3: usize = 0;
 const EXPECTED_FN_F3: usize = 0;
-const DECISION_F3: &str = "KALSIN";
+const DECISION_F3: &str = "KEEP";
 
 // F-4: url trailing-punct trim across ssh/ftp/git@ schemes (12 POS, 8 NEG).
-// Measured (RULE mode): 0/8 FP (0%), 0/12 FN. KALSIN — sentence-punct trim set
+// Measured (RULE mode): 0/8 FP (0%), 0/12 FN. KEEP — sentence-punct trim set
 // (.,;:!?) correctly strips trailing punct for https/ssh/ftp/git@ URLs; unknown
 // schemes (foo://, ws://, file://) and schemeless patterns correctly rejected.
 // RULE mode used because url uses named capture groups → pipeline_spans returns
@@ -299,7 +299,7 @@ const DECISION_F3: &str = "KALSIN";
 // audit vehicle for trailing-trim and scheme-gate behavior.
 const EXPECTED_FP_F4: usize = 0;
 const EXPECTED_FN_F4: usize = 0;
-const DECISION_F4: &str = "KALSIN";
+const DECISION_F4: &str = "KEEP";
 
 #[test]
 fn f3_duration_microsec_corpus() {
@@ -310,7 +310,7 @@ fn f3_duration_microsec_corpus() {
         (EXPECTED_FP_F3, EXPECTED_FN_F3),
         "F-3 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_F3, "F-3");
+    check_decision_mandate(fp, nneg, DECISION_F3, "F-3");
 }
 
 #[test]
@@ -322,5 +322,5 @@ fn f4_url_trim_schemes_corpus() {
         (EXPECTED_FP_F4, EXPECTED_FN_F4),
         "F-4 FP/FN drift — corpus: {npos} pos, {nneg} neg; got (fp={fp}, fn={fn_})",
     );
-    check_karar_mandate(fp, nneg, DECISION_F4, "F-4");
+    check_decision_mandate(fp, nneg, DECISION_F4, "F-4");
 }
