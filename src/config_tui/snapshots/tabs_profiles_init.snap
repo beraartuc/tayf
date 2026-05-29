@@ -1,0 +1,24 @@
+┌Profiles (embedded)───────────┐┌Detail────────────────────────────────────────┐
+│  aws                         ││Profile: aws                                  │
+│  k8s                         ││                                              │
+│  docker                      ││Source: embedded                              │
+│  gcp                         ││                                              │
+│  network                     ││Press Space to set as active                  │
+│                              ││Press 'o' to copy to disk for editing         │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+└──────────────────────────────┘└──────────────────────────────────────────────┘

@@ -53,6 +53,9 @@ pub(crate) mod style_ratatui;
 pub(crate) mod tabs;
 pub(crate) mod widgets;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use std::io::stdout;
 use std::process::ExitCode;
 

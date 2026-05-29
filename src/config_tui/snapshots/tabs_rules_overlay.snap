@@ -1,0 +1,24 @@
+┌Patterns──────────────────────┐┌Detail────────────────────────────────────────┐
+│── Builtin ──                 ││Pattern: permission                           │
+│  permission                  ││                                              │
+│  timestamp                   ││Source: built-in                              │
+│  uuid                        ││Regex: (?:^|\s)(?P<perm_type>[dlcbps-])(?P<per│
+│  url                         ││Style: (default — Edit with 'e' or 'c' for col│
+│  email                       ││                                              │
+│  ipv4                        ││Press 'o' to override (copy into user-config s│
+│  ipv6                        ││Press 'e' to edit the regex source (inline edi│
+│  mac                         ││Press 'c' to open color picker (C4)           │
+│  log_level                   ││                                              │
+│  filename                    ││                                              │
+│  fqdn                        ││                                              │
+│  duration                    ││                                              │
+│── User ──                    ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+└──────────────────────────────┘└──────────────────────────────────────────────┘

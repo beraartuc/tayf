@@ -342,6 +342,15 @@ impl App {
         app.preview.recompile(&app.sample_input.text);
         app
     }
+
+    /// Deterministic test constructor — empty config, defaults across the
+    /// board, no modal. Used by render snapshot tests (spec §6.7).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn default_for_test() -> Self {
+        let snapshot = crate::config_tui::snapshot::ConfigSnapshot::empty();
+        Self::from_snapshot(snapshot)
+    }
 }
 
 #[cfg(test)]
