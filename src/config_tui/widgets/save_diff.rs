@@ -475,4 +475,20 @@ mod tests {
             "(diff too large for inline display: 400 lines removed, 400 lines added)",
         );
     }
+
+    #[test]
+    fn build_diff_crlf_old_vs_lf_new_reports_no_false_diff_on_matching_bodies() {
+        // str::lines() splits on both \n and \r\n. CRLF old vs LF new with
+        // identical line bodies → "(no changes)".
+        let d = build_diff(b"a\r\nb\r\n", b"a\nb\n");
+        assert_eq!(d, "(no changes)\n");
+    }
+
+    #[test]
+    fn build_diff_trailing_newline_normalization_is_no_change() {
+        // str::lines() strips the trailing newline equally. "a\nb" and
+        // "a\nb\n" both iterate ["a", "b"].
+        let d = build_diff(b"a\nb", b"a\nb\n");
+        assert_eq!(d, "(no changes)\n");
+    }
 }
