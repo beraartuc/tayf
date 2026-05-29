@@ -606,15 +606,13 @@ pub(crate) fn rule_id_display_name(rule_id: &crate::config_tui::edit::RuleId) ->
 }
 
 /// Re-read the config snapshot from disk, clear pending edits, and
-/// recompile the live-preview pipeline. Used by `DiscardAndReload`
-/// (`handle_save_diff_key`) and the v0.6.2 override-copy 'o' handler
-/// (via [`request_snapshot_reload`]).
+/// recompile the live-preview pipeline. Used by the v0.6.2 override-copy
+/// `'o'` handler (via [`request_snapshot_reload`]).
 ///
-/// Mirrors `SaveDiffOutcome::DiscardAndReload` semantics: all
-/// precedence-chain inputs (theme / profile / CLI flags) flow through
-/// `ConfigSnapshot::read_from_disk` — reload does not introduce
-/// `app.edits` as a new precedence input. Memory
-/// `feedback_reload_precedence_snapshot`.
+/// All precedence-chain inputs (theme / profile / CLI flags) flow
+/// through [`crate::config_tui::snapshot::ConfigSnapshot::read_from_disk`]
+/// — reload does not introduce `app.edits` as a new precedence input.
+/// Memory `feedback_reload_precedence_snapshot`.
 fn reload_snapshot_inline(app: &mut App) -> Result<(), crate::error::Error> {
     let snap = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(
         app.snapshot.source_path.as_deref(),
