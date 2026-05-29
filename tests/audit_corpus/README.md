@@ -12,7 +12,7 @@ Each `.txt` file under this directory describes one audit item:
 # Measurement mode: PIPELINE | RULE
 # Profile context: (none) | aws | docker | k8s | gcp | network
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §<ref>
-# Decision: <KALSIN | TIGHTEN | DEMOTE | TBD>
+# Decision: <KALSIN | TIGHTEN | DEMOTE | ACCEPT-DOCUMENTED | TBD>
 
 POS: <input> => <expected_match>
 NEG: <input>
@@ -28,5 +28,6 @@ NEG: <input>
 - **KALSIN** — pattern stays; corpus pins regression. Allowed only if FP rate ≤ 5% of NEG.
 - **TIGHTEN** — pattern data tightened; before/after corpus measurement.
 - **DEMOTE-to-user-config** — pattern removed from built-ins; recipe moved to user-config README.
+- **ACCEPT-DOCUMENTED** — high-FP (>5%) built-in with no clean fix under the regex crate's no-look-around constraint; retained for common-case value and documented in the README "Known limitations" section. Not valid at FP ≤ 5% (use KALSIN).
 
-Memory mandate: high-FP (>5%) → TIGHTEN or DEMOTE zorunlu.
+Memory mandate: high-FP (>5%) requires TIGHTEN, DEMOTE, or ACCEPT-DOCUMENTED.

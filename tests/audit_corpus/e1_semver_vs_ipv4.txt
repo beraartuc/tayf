@@ -3,7 +3,7 @@
 # Measurement mode: PIPELINE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §E-1, §E-2
-# Decision: TIGHTEN (FP 12.5%, defer pattern fix to v0.7.1)
+# Decision: ACCEPT-DOCUMENTED (FP 12.5%, no clean regex-crate fix — see README Known limitations)
 
 POS: ip 192.168.1.1 down => 192.168.1.1
 POS: see 10.0.0.1 hit => 10.0.0.1

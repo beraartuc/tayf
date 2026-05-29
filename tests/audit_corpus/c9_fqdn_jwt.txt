@@ -3,7 +3,7 @@
 # Measurement mode: PIPELINE
 # Profile context: (none)
 # Audit doc: docs/superpowers/reviews/2026-05-27-builtin-pattern-fp-audit.md §C-9
-# Decision: TIGHTEN (FP 60%, defer pattern fix to v0.7.1)
+# Decision: ACCEPT-DOCUMENTED (FP 60%, no clean regex-crate fix — see README Known limitations)
 
 POS: visit example.com please => example.com
 POS: api.test.org served => api.test.org

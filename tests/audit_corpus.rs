@@ -134,7 +134,17 @@ fn check_karar_mandate(fp: usize, nneg: usize, decision: &str, item: &str) {
         let fp_pct = fp_rate * 100.0;
         assert_ne!(
             decision, "KALSIN",
-            "{item}: FP rate {fp_pct:.1}% > 5% threshold; karar must be TIGHTEN or DEMOTE",
+            "{item}: FP rate {fp_pct:.1}% > 5% threshold; karar must be TIGHTEN, DEMOTE, or ACCEPT-DOCUMENTED",
+        );
+    }
+    // ACCEPT-DOCUMENTED is reserved for genuinely high-FP items that have no
+    // clean fix under the regex crate's no-look-around constraint. A clean rule
+    // must use KALSIN — this guards against masking a fixable pattern.
+    if decision == "ACCEPT-DOCUMENTED" {
+        assert!(
+            fp_rate > 0.05,
+            "{item}: ACCEPT-DOCUMENTED reserved for >5% FP (got {:.1}%); use KALSIN if clean",
+            fp_rate * 100.0,
         );
     }
 }
@@ -153,35 +163,46 @@ fn corpus_parser_rejects_empty_case() {
     assert!(r.is_err(), "empty corpus must fail-fast");
 }
 
+#[test]
+fn check_karar_mandate_rejects_accept_documented_below_threshold() {
+    // ACCEPT-DOCUMENTED with FP <= 5% must panic — it would mask a rule that
+    // should be KALSIN. 0/20 = 0% is well below the 5% floor.
+    let r = std::panic::catch_unwind(|| {
+        check_karar_mandate(0, 20, "ACCEPT-DOCUMENTED", "fake");
+    });
+    assert!(r.is_err(), "ACCEPT-DOCUMENTED below 5% FP must fail the mandate");
+}
+
 // Decision constants — implementer fills based on measurement.
 // Per spec §5.4: high-FP (>5%) requires non-KALSIN karar (test enforced).
 
-// C-4: filename single-letter-ext prose collision (a.b.c.d).
-// Measured: 5/15 FP (33.3%). TIGHTEN — audit §C-4 recommends dropping single-letter
-// extensions `a o r v m` (object, R script, Verilog, ObjC, archive already in broader forms).
-// Pattern fix is non-trivial (affects 5 pos cases that rely on those extensions).
-// Deferred to follow-up; karar locked TIGHTEN to satisfy >5% mandate.
+// C-4: filename single-letter-ext prose collision (a.b.c).
+// Measured: 5/15 FP (33.3%) — 4x `.c` (a.b.c) + 1x `.v` (u.v.w). No clean fix:
+// `main.c`/`top.v` are suffix-identical to such prose and the regex crate has
+// no look-around to use leading path/command context. The single-letter exts
+// map to common, valuable file types (.c/.h/.o/.a) so they are retained.
+// ACCEPT-DOCUMENTED — see README "Known limitations" + spec section 11.
 const EXPECTED_FP_C4: usize = 5;
 const EXPECTED_FN_C4: usize = 0;
-const DECISION_C4: &str = "TIGHTEN";
+const DECISION_C4: &str = "ACCEPT-DOCUMENTED";
 
 // C-8: filename vs fqdn Go pkg path (pkg.go.dev/foo).
 // v0.7.1: dropped `go` from FILENAME_EXTENSIONS — FP 1/10 (10%) -> 0/10 (0%).
 // `pkg.go.dev/foo` no longer matches the filename rule (go ext removed);
-// `main.go` now styles as fqdn. Clean; karar KALSIN, pin guards drift.
+// `main.go` now styles as fqdn (accepted trade-off); karar KALSIN, EXPECTED_FP_C8 pinned at 0 guards future drift.
 const EXPECTED_FP_C8: usize = 0;
 const EXPECTED_FN_C8: usize = 0;
 const DECISION_C8: &str = "KALSIN";
 
 // C-9: fqdn matches JWT 3-segment dotted tokens.
-// Measured: 6/10 FP (60%). The fqdn regex fires on base64url labels ending in
-// alpha-only TLD-length sequences (signature, cccc, baz, xyz.abc.def, foo.bar, eyJh.eyJz.cccc).
-// Audit §C-9 recommends ACCEPT with user-config alternative; 60% > 5% mandate requires TIGHTEN.
-// No clean fqdn pattern fix exists without allowlist TLD approach (maintenance burden).
-// Karar locked TIGHTEN; actual pattern fix deferred per spec §13 exception clause.
+// Measured: 6/10 FP (60%). fqdn fires on base64url labels ending in alpha
+// TLD-length sequences (JWT segments). No clean fix without a 4000+ entry
+// known-TLD allowlist (maintenance burden). fqdn's common case (example.com)
+// is valuable, so it is retained.
+// ACCEPT-DOCUMENTED — see README "Known limitations" + spec section 11.
 const EXPECTED_FP_C9: usize = 6;
 const EXPECTED_FN_C9: usize = 0;
-const DECISION_C9: &str = "TIGHTEN";
+const DECISION_C9: &str = "ACCEPT-DOCUMENTED";
 
 #[test]
 fn c4_filename_single_letter_corpus() {
@@ -227,14 +248,15 @@ const EXPECTED_FN_D7: usize = 0;
 const DECISION_D7: &str = "KALSIN";
 
 // E-1/E-2: semver vs ipv4 ambiguity (8 POS, 8 NEG).
-// Measured: 1/8 FP (12.5%), 0/8 FN. The FP is "1.2.3.4.5 long" — the \b word-boundary
-// after the 4th octet falls between '4' and '.' so the pattern matches the leading
-// 1.2.3.4 prefix. 12.5% > 5% mandate requires TIGHTEN. Audit §E-2 says 5-segment
-// strings are the only collision; fix: add negative lookahead (?!\.\d) after the match.
-// Deferred to follow-up commit; karar locked TIGHTEN to satisfy >5% mandate.
+// Measured: 1/8 FP (12.5%), 0/8 FN. The FP is "1.2.3.4.5 long" — the \b after
+// the 4th octet falls between '4' and '.' so the 1.2.3.4 prefix matches. No
+// clean fix: the regex crate has no look-around, and a delimiter-consume
+// rewrite introduces a sentence-final-period FN + adjacency FN + cosmetic
+// delimiter coloring + ~8-12 exemplar-test churn (see spec section 3). ipv4
+// retained as-is. ACCEPT-DOCUMENTED — see README "Known limitations".
 const EXPECTED_FP_E1: usize = 1;
 const EXPECTED_FN_E1: usize = 0;
-const DECISION_E1: &str = "TIGHTEN";
+const DECISION_E1: &str = "ACCEPT-DOCUMENTED";
 
 #[test]
 fn d7_log_level_delimiters_corpus() {
