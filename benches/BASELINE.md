@@ -47,8 +47,10 @@ matching while keeping byte-stream parsing intact. Essentially the
 - The passthrough number is in-process `memcpy`-class and will dwarf any
   real pipe + tty path. Compare it to itself across versions, not to
   `apply_rules` directly.
-- Spec §7 target ("<20% overhead vs native `cat`") is end-to-end and will
-  be validated separately once the v0.4 fast-path lands.
+- Spec §7 target ("<20% overhead vs native `cat`") is end-to-end and was
+  validated in v0.8.0 — see the "## v0.8.0 — End-to-end PTY-vs-cat overhead"
+  section at the end of this file. (Result: not met on bulk streams; tayf
+  processes at ~10–20 MiB/s vs cat's memory-speed ~130–150 MiB/s.)
 - The `apply_rules` cost is dominated today by the linear walk over eight
   individual regexes (`Compiled::individuals`) and the per-match `Vec`
   allocation for spans. v0.4's `RegexSet` pre-filter is expected to drop
@@ -503,3 +505,80 @@ Notes on the v0.3.5 → v0.4.0 delta:
 - `apply_rules/mixed-syslog` ~21.7% faster. Realistic mixed log shape: roughly half ISO-timestamp lines (one captures-styled rule fires), half syslog-format lines (no captures, IPv4 + log level only). Pre-filter eliminates URL / file-path / Git-URL / SSH / fqdn scans on lines where they don't apply. Largest absolute win; closest to a realistic deployment workload.
 - `apply_rules/captures-heavy` ~7.9% **slower**. Synthetic fixture: every line carries an ISO timestamp + POSIX permission + HTTPS URL, plus the fqdn host inside the URL. Hit ratio ~4.12/13 per line (the other ~9 patterns miss, but each miss is so cheap — short anchor-bounded DFA scans — that skipping them recovers only ~0.14 µs/line, less than the ~0.50 µs/line RegexSet scan cost). Intrinsic worst case for any pre-filter; documented as accepted v0.4.0 tradeoff. Future work (spec §1.2 deferred to v0.5+: optional adaptive bypass, alternate pre-filter selection per pattern shape) could revisit; v0.4.0 ships the simple uniform pre-filter.
 - `passthrough/write_all` ~13.6% faster. Sub-µs jitter band; no code in v0.4.0 touches the passthrough path. Most likely run-to-run variance against a noisy baseline; cumulative v0.1.1 → v0.4.0 delta on this group is −13.0% time / +14.9% thrpt vs the original baseline, fully within noise for sub-µs measurements.
+
+## v0.8.0 — End-to-end PTY-vs-cat overhead (recorded 2026-05-30)
+
+First end-to-end validation of spec §7's "<20% overhead vs native `cat`"
+target, deferred since v0.1 (see the §7 deferral note in "Notes & caveats"
+above). Measured by `benches/e2e_overhead.rs` (`cargo bench --bench
+e2e_overhead`): the release `tayf` binary wraps `/bin/sh` running `cat
+<corpus>` inside a real PTY; a bare `/bin/sh` running the same `cat` is the
+denominator. Timing covers the streaming phase only (stdin write → EOF);
+process spawn and the 200 ms startup grace are excluded symmetrically from
+both sides. Startup is a once-per-session cost, separate from the per-byte
+streaming overhead §7 targets.
+
+- Host: Apple M2 Pro, macOS (Darwin arm64)
+- Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+- Profile: release (`cargo bench`)
+- Samples: 10 measured + 3 warmup per side; target corpus ~16 MiB per shape.
+- Corpus shapes: `e2e_prose` (RegexSet-miss fast path), `e2e_log`
+  (colorize hot path), `e2e_ansi` (AnsiSm SGR passthrough).
+
+| Shape | cat median (ms) | tayf median (ms) | overhead% | §7 (<20%) | tayf MiB/s |
+|---|---|---|---|---|---|
+| low-match-prose | 106.63 | 952.58 | +793.35% | **FAIL** | 16.8 |
+| high-match-log | 104.45 | 1630.03 | +1460.64% | **FAIL** | 9.8 |
+| ansi-passthrough | 122.03 | 814.73 | +567.65% | **FAIL** | 19.6 |
+
+(min/median/max per side, ms: prose cat [85.34 / 106.63 / 109.75] tayf
+[944.29 / 952.58 / 999.85]; log cat [83.63 / 104.45 / 113.00] tayf [1600.70
+/ 1630.03 / 1651.79]; ansi cat [116.87 / 122.03 / 129.40] tayf [805.72 /
+814.73 / 849.74]. Tight spreads — the result is stable, not jitter.)
+
+### Disposition
+
+**Spec §7's "<20% overhead vs native `cat`" target is NOT met end-to-end.**
+At a memory-speed consumer, tayf streams at ~10–20 MiB/s versus cat's
+~130–150 MiB/s — a ~570% to ~1460% overhead across the three shapes. This is
+the headline measurement-first finding the cycle was built to surface.
+
+Three things the data tells us:
+
+1. **It is not just regex matching.** Even `low-match-prose` (almost every
+   line is a RegexSet miss — minimal scanner work) runs ~8× slower than cat.
+   So the floor cost is the I/O loop itself: the inner-PTY→tayf→outer-PTY
+   double-hop, per-byte `AnsiSm::step`, line buffering, and per-line/small-
+   chunk blocking writes. `high-match-log` adds the scanner + SGR-injection
+   cost on top (worst at ~1460%), consistent with the in-process
+   `apply_rules` throughput recorded above (~8–27 MiB/s). The bottleneck is
+   shared between the scanner (`pipeline.rs`/`rules.rs`) and the I/O loop
+   (`runtime.rs`/`pty.rs`).
+
+2. **This is the pessimistic bound, not the user-perceived overhead.** The
+   harness drains the consumer at memory speed, so the cat denominator runs
+   at ~150 MiB/s — far faster than any real terminal emulator, which must
+   parse and render every byte (typically a few to tens of MiB/s). In a real
+   terminal both sides are gated by rendering, so the *perceived* overhead is
+   much smaller than these numbers. What this measurement isolates is tayf's
+   intrinsic processing throughput (~10–20 MiB/s), which is the real ceiling
+   for sustained high-throughput streams (`cat largefile`, `journalctl -n
+   100000`). For interactive/small command output (`ls`, a prompt), tayf's
+   per-line cost is imperceptible and the §7 latency rows ("idle <1ms",
+   "command output <16ms") are unaffected — the overhead bites only on
+   sustained bulk output.
+
+3. **Optimization is warranted and is deferred — by design — to v0.8.1+.**
+   Per spec §9, the v0.8.0 cycle measures only; it makes zero `src/` changes.
+   Because even the low-match floor is ~8×, the I/O loop (DOKUNULMAZ
+   `runtime.rs`/`pty.rs`) is implicated, not only the scanner — so a v0.8.1
+   optimization effort that touches those modules MUST go through a
+   `security-review` gate (CLAUDE.md §3: termios / raw-mode / signal-
+   forwarding live there). The first v0.8.1 step should profile to attribute
+   the cost between the double-PTY hop, `AnsiSm`, line buffering, write
+   batching, and the scanner before changing anything.
+
+This closes the long-standing §7 deferral: §7 is now measured, and the
+answer is that tayf does not meet the literal `<20%`-vs-cat throughput
+target on bulk streams. Re-run with `cargo bench --bench e2e_overhead` after
+any v0.8.1 optimization to track progress against this baseline.
