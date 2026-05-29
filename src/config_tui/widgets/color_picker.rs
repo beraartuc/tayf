@@ -409,7 +409,23 @@ pub(crate) enum ColorPickerOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_tui::app::{App, Modal};
+    use crate::config_tui::test_support::assert_render_snapshot;
     use ratatui::crossterm::event::KeyModifiers;
+
+    #[test]
+    fn render_modal_color_picker_default_matches_snapshot() {
+        let mut app = App::default_for_test();
+        let state = ColorPickerState::default();
+        app.modal = Some(Modal::ColorPicker(ColorPickerState::default()));
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &state),
+            "modal_color_picker",
+        );
+    }
 
     fn mk(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())

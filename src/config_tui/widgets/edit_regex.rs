@@ -74,4 +74,43 @@ mod tests {
             "modal_edit_log_level",
         );
     }
+
+    #[test]
+    fn render_modal_edit_regex_valid_matches_snapshot() {
+        let mut app = App::default_for_test();
+        let rule_id = RuleId::UserConfig("my_rule".to_owned());
+        let buffer = "^(foo|bar)$".to_owned();
+        app.modal = Some(Modal::EditRegex {
+            rule_id: rule_id.clone(),
+            buffer: buffer.clone(),
+            error: None,
+        });
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &rule_id, &buffer, None),
+            "modal_edit_regex_valid",
+        );
+    }
+
+    #[test]
+    fn render_modal_edit_regex_error_matches_snapshot() {
+        let mut app = App::default_for_test();
+        let rule_id = RuleId::UserConfig("my_rule".to_owned());
+        let buffer = "^[invalid".to_owned();
+        let error = "unclosed character class".to_owned();
+        app.modal = Some(Modal::EditRegex {
+            rule_id: rule_id.clone(),
+            buffer: buffer.clone(),
+            error: Some(error.clone()),
+        });
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &rule_id, &buffer, Some(&error)),
+            "modal_edit_regex_error",
+        );
+    }
 }
