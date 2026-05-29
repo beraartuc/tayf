@@ -443,4 +443,36 @@ mod tests {
         let d = build_diff(b"a\nb\nc\n", b"x\nb\ny\n");
         assert_eq!(d, "- a\n+ x\n  b\n- c\n+ y\n");
     }
+
+    #[test]
+    fn build_diff_cap_threshold_just_under_passes_lcs() {
+        // 316 × 316 = 99 856 < 100 000 → LCS path active.
+        let mut old = String::new();
+        let mut new = String::new();
+        for i in 0..316_u32 {
+            use std::fmt::Write;
+            let _ = writeln!(old, "line{i}");
+            let _ = writeln!(new, "line{i}");
+        }
+        let d = build_diff(old.as_bytes(), new.as_bytes());
+        assert_eq!(d, "(no changes)\n", "LCS path active under threshold");
+    }
+
+    #[test]
+    fn build_diff_cap_fallback_at_oversize_input() {
+        // 400 × 400 = 160 000 > 100 000 → cap_fallback fires.
+        let mut old = String::new();
+        let mut new = String::new();
+        for i in 0..400_u32 {
+            use std::fmt::Write;
+            let _ = writeln!(old, "old{i}");
+            let _ = writeln!(new, "new{i}");
+        }
+        let d = build_diff(old.as_bytes(), new.as_bytes());
+        let first_line = d.lines().next().expect("cap fallback has banner line");
+        assert_eq!(
+            first_line,
+            "(diff too large for inline display: 400 lines removed, 400 lines added)",
+        );
+    }
 }
