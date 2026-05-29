@@ -4,6 +4,125 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-05-29
+
+Minor bump bundling five engineering-quality items that had been queued as
+`v0.7+` forward-pointers from prior cycles. v0.4.0-class scope (~1100 LOC src
++ ~3300 LOC tests/corpora/snapshots) with full ceremony — paralel opus 4.7
+spec review (Rust idiom + tayf-architecture lenses, 8 CRITICAL + 13
+IMPORTANT + 11 NIT absorbed into spec rev2) and final cross-cutting opus
+4.7 review (1 CRITICAL + 5 IMPORTANT + 3 NIT absorbed). Zero new
+dependencies. DOKUNULMAZ `src/pty.rs` and `src/runtime.rs` untouched;
+`src/rules.rs` and `src/pipeline.rs` gained only `pub(crate)` test shims +
+`Compiled::names` plumbing for the audit-corpus harness.
+
+### Added
+- Per-element merge of `[[rules]]` array-of-tables: edits to individual
+  named rules now produce field-level conflicts in the Config TUI's save
+  modal instead of v0.6.2's whole-array conflicts. Identity is the `name`
+  string field — required by `UserRule` (config.rs:93-94). Rules without
+  a `name` field fall back to the prior whole-array conflict (preserves
+  v0.6.2 behavior for malformed configs). Convergent inserts that diverge
+  in order trip an explicit order-divergence guard (RegexSet first-match-
+  wins order is semantically meaningful). An absent AoT key on one side
+  is treated as an empty array, so deleting the entire `[[rules]]`
+  section against the other sides' modifications surfaces as element-
+  level conflicts rather than a single whole-key conflict.
+- `WriteToPathError::AotElementMissing { path, element_name }` typed
+  error variant (pin format-string assertion in the merge tests). The
+  apply-layer in `events::build_final_doc` translates this error (and
+  `MissingIntermediate`) to a remove when the conflict is a delete-modify
+  case, so the user's Ours/Theirs pick does what they intuit.
+- LCS-DP line diff in the save-diff modal: replaces the v0.5.4 `HashSet`
+  implementation that hid duplicate-line edits ("a\na\nb\n" → "a\nb\n"
+  showed "(no changes)"). Hunt-McIlroy algorithm with strictly-greater
+  dp neighbour preference + Add-on-tie convention in the backward walk;
+  after reverse this yields the canonical `diff -u` Remove-before-Add
+  forward order. Flat `Vec<u16>` cell layout (cache-friendly, single
+  alloc; `u16` bound proven `<= floor(sqrt(MAX_DP_CELLS)) = 316`).
+  `MAX_DP_CELLS = 100 000` defensive cap with literal removal+addition
+  fallback for pathological sizes.
+- Render snapshot tests for the Config TUI: 13 plain-text goldens under
+  `src/config_tui/snapshots/`. Helper at `src/config_tui/test_support.rs`
+  uses ratatui 0.30 TestBackend + plain-text buffer stringify; mismatch
+  panics with an LCS diff (dogfoods the new line-diff). `UPDATE_SNAPSHOTS
+  =1` regenerates locally only — refused under `CI=true`.
+  `.gitattributes` enforces LF eol on `.snap` files. Coverage: 3 tab
+  inits (Themes/Rules/Profiles) + 4 modals (Edit / ConflictList /
+  SaveDiff Clean / Help) + 3 NewPattern wizard phases + 2 EditRegex
+  states (valid + error) + 1 ColorPicker.
+- Adversarial-corpus regression harness in `tests/audit_corpus/` for
+  built-in pattern false-positive / false-negative tracking across seven
+  audit-flagged items (C-4 filename single-letter ext, C-8 filename ↔
+  fqdn Go pkg paths, C-9 fqdn JWT, D-7 log_level delimiters, E-1/E-2
+  semver vs ipv4, F-3 duration μs, F-4 URL trim across schemes). Each
+  corpus declares Measurement mode (PIPELINE for karar measurement, RULE
+  for debugging); FP/FN measured via `tayf::__test_api::pipeline_spans`
+  (full production pipeline — priority sort + overlap suppression +
+  profile gating, per audit doc §0.2). `check_karar_mandate` machine-
+  enforces memory `feedback_builtin_pattern_bar`: > 5% FP rate forbids
+  KALSIN — TIGHTEN or DEMOTE is required.
+- `tayf::__test_api::{match_named_rule, pipeline_spans}` — two
+  `#[doc(hidden)] pub fn` extensions on the existing test-only module.
+  `match_named_rule` returns the leftmost match span for a single rule
+  in isolation (no priority, no overlap, no profile). `pipeline_spans`
+  returns the post-priority post-overlap `(rule_name, matched_span)`
+  list — the production view. No stability guarantees.
+
+### Changed
+- `KeyConflict::is_array_block` semantics narrow to flag only fallback
+  paths (no name identity, same-side duplicate name, or order
+  divergence). Per-element AoT conflicts carry deeper paths and the
+  prior flag value would be misleading. Internal SemVer impact only
+  (the field is `pub(crate)` per v0.6.3 demote).
+- `widgets/conflict_list.rs:55` suffix string changed from
+  `"⚠ array merge v0.7+"` to `"⚠ array-shape conflict (no name
+  identity)"` to reflect the v0.7 fallback semantic. The corresponding
+  integration pin in `tests/config_tui_conflict_list.rs` was renamed
+  and assertion-flipped per memory `feedback_collision_pin_pattern`.
+
+### Fixed
+- Stale `v0.7+` forward-pointer comments removed (one DELETE at
+  `save.rs:651` — per-key conflict UI shipped in v0.6.2) or refreshed
+  to `v0.8+ on community demand` (four sites covering capture-group
+  TUI wires, Themes/Profiles `resolve_selected_rule_id` extension,
+  Embedded/disk profile catalog resolution, sample set incremental).
+  These map to spec §1.3 DEFER items and are not in v0.7 scope.
+
+### Known issues
+
+The audit-corpus harness measured higher than the 5% FP threshold on
+four items. The current behavior is documented and pin-regressed by the
+corpus assertions (so silent drift cannot occur), but the actual
+pattern fixes are deferred to a v0.7.1 hotfix cycle:
+
+- **C-4 (filename single-letter extension prose collision):** 33.3% FP
+  (5/15 NEG inputs misfire). Fix path: drop `a`, `o`, `r`, `v`, `m`
+  from `FILENAME_EXTENSIONS` and re-anchor those single-letter exts to
+  require a path separator. The five POS cases (`libfoo.a`, `out.o`,
+  `run.r`, `top.v`, `class.m`) become FNs without that anchor; corpus
+  redesign required.
+- **C-8 (filename ↔ fqdn Go pkg path):** 10% FP (1/10 NEG inputs).
+  `pkg.go.dev/foo` matches `pkg.go` because `go` is in
+  `FILENAME_EXTENSIONS`. Fix: drop `go` from the extension list, OR
+  add a path-separator left-anchor to the filename regex.
+- **C-9 (fqdn JWT 3-segment):** 60% FP (6/10 NEG inputs). The fqdn
+  regex `\b(?:label\.)+[A-Za-z]{2,24}\b` fires on base64url JWT
+  segments. No clean pattern fix without a known-TLD allowlist
+  (4000+ entries — maintenance burden). v0.7.1 will surface this as
+  a documented limitation + ship a user-config recipe README entry.
+- **E-1/E-2 (semver vs ipv4 fifth-octet prose):** 12.5% FP (1/8 NEG).
+  `1.2.3.4.5 long` matches as the `1.2.3.4` prefix because `\b` is
+  satisfied between digit `4` and dot `.`. Fix: negative lookahead
+  `(?!\.\d)` appended to the ipv4 pattern.
+
+The corpus `EXPECTED_FP_*` constants lock the current numbers so any
+unintended drift surfaces immediately. The v0.7.1 pattern fixes will
+re-measure and update the constants in lockstep.
+- Pre-existing local PTY flake (OSC 11 bg-detect query leak in
+  `integration_ansi` / `integration_signals` / `integration_themes`)
+  carried forward from v0.6.x — local-only, CI green at ship time.
+
 ## [0.6.3] - 2026-05-29
 
 Pure cleanup cycle — closes all three IMPORTANT findings (I1 / I2 / I3)
