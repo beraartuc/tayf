@@ -286,11 +286,18 @@ fn merge_array_of_tables(
         return;
     }
 
-    // Order-divergence guard. Same set, different order → whole-array conflict.
+    // Order-divergence guard. Same set (all-sides or convergent-insert), different
+    // order → whole-array conflict. Covers two cases:
+    //   (a) All three sides share the same name-set but ours/theirs differ in order.
+    //   (b) Convergent inserts: ours and theirs independently added the same new
+    //       names but in different order (ours_set == theirs_set, ours_names ≠ theirs_names).
     let base_set: BTreeSet<&String> = base_names.iter().collect();
     let ours_set: BTreeSet<&String> = ours_names.iter().collect();
     let theirs_set: BTreeSet<&String> = theirs_names.iter().collect();
-    if base_set == ours_set && base_set == theirs_set && ours_names != theirs_names {
+    let order_diverges = (base_set == ours_set && base_set == theirs_set
+        || ours_set == theirs_set && ours_set != base_set)
+        && ours_names != theirs_names;
+    if order_diverges {
         conflicts.push(KeyConflict {
             path: path.clone(),
             base_value: render_item(Some(&Item::ArrayOfTables(base.clone()))),
@@ -969,5 +976,56 @@ mod tests {
             ],
         );
         assert_eq!(c.shape, ConflictValueShape::Leaf, "leaf scalar");
+    }
+
+    #[test]
+    fn merge_array_of_tables_without_name_field_falls_back_to_whole_array_v0_7_fallback_guard() {
+        // Spec §3.4 #7. theirs adds an element without `name` → fallback.
+        let base = doc("[[rules]]\nname = \"a\"\npattern = \"A\"\n");
+        let ours = doc("[[rules]]\nname = \"a\"\npattern = \"B\"\n");
+        let theirs = doc("[[rules]]\npattern = \"C\"\n"); // missing name
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert_eq!(merge.conflicts.len(), 1);
+        assert!(merge.conflicts[0].is_array_block, "fallback guard");
+    }
+
+    #[test]
+    fn merge_array_of_tables_empty_string_name_is_valid_identity() {
+        // Spec §3.4 #13. name = "" is a valid identity key (apply_user_rules
+        // late-validates separately). ours-only pattern change auto-merges.
+        let base = doc("[[rules]]\nname = \"\"\npattern = \"A\"\n");
+        let ours = doc("[[rules]]\nname = \"\"\npattern = \"B\"\n");
+        let theirs = doc("[[rules]]\nname = \"\"\npattern = \"A\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert!(merge.conflicts.is_empty(), "ours-only change auto-merges");
+        let s = merge.auto_merged.to_string();
+        assert!(s.contains("pattern = \"B\""), "ours-side change kept");
+    }
+
+    #[test]
+    fn merge_array_of_tables_same_side_duplicate_name_falls_back_to_whole_array() {
+        // Spec §3.4 #14. theirs has duplicate name="x" (malformed disk).
+        let base = doc("[[rules]]\nname = \"x\"\npattern = \"A\"\n");
+        let ours = doc("[[rules]]\nname = \"x\"\npattern = \"B\"\n");
+        let theirs = doc(
+            "[[rules]]\nname = \"x\"\npattern = \"A\"\n[[rules]]\nname = \"x\"\npattern = \"C\"\n",
+        );
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert_eq!(merge.conflicts.len(), 1);
+        assert!(merge.conflicts[0].is_array_block, "duplicate-name fallback");
+    }
+
+    #[test]
+    fn merge_array_of_tables_convergent_inserts_in_different_order_yields_whole_array_conflict_order_guard(
+    ) {
+        // Spec §3.4 #12. base [a], ours [a,x,y], theirs [a,y,x] → order guard fires.
+        let base = doc("[[rules]]\nname = \"a\"\n");
+        let ours =
+            doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"x\"\n[[rules]]\nname = \"y\"\n");
+        let theirs =
+            doc("[[rules]]\nname = \"a\"\n[[rules]]\nname = \"y\"\n[[rules]]\nname = \"x\"\n");
+        let merge = merge_three_way(&base, &ours, &theirs);
+        assert_eq!(merge.conflicts.len(), 1);
+        assert!(merge.conflicts[0].is_array_block, "order-divergence guard fires");
     }
 }
