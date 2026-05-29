@@ -115,6 +115,18 @@ pub enum WriteToPathError {
         /// Dotted path where the source descent ran out.
         path: String,
     },
+    /// Path descended into an array-of-tables but no element with the
+    /// requested `name` field was found on the source side. Distinct from
+    /// `MissingIntermediate` (which fires on plain-table descent failure).
+    #[error(
+        "array-of-tables element not found at {path}: no element with name=\"{element_name}\""
+    )]
+    AotElementMissing {
+        /// Dotted path where the `AoT` descent ran out.
+        path: String,
+        /// The `name` field value that did not match any `AoT` element.
+        element_name: String,
+    },
 }
 
 /// Walk `base`, `ours`, and `theirs` together and produce a structural
@@ -552,6 +564,10 @@ fn set_or_remove(out: &mut Table, key: &str, item: Option<&Item>) {
 /// for a conflicting key, the chosen side's value at that path overwrites
 /// the auto-merged document's value.
 ///
+/// Path segments that match an `[[array-of-tables]]` key are resolved by
+/// looking up the element whose `name` field equals the next path segment
+/// (the same convention used by `merge_array_of_tables`). Spec §3.3.
+///
 /// # Errors
 ///
 /// - [`WriteToPathError::TypeMismatch`] when an intermediate segment in
@@ -559,6 +575,9 @@ fn set_or_remove(out: &mut Table, key: &str, item: Option<&Item>) {
 /// - [`WriteToPathError::MissingIntermediate`] when `source` does not
 ///   have a value at `path` (caller asked us to copy something that
 ///   does not exist).
+/// - [`WriteToPathError::AotElementMissing`] when a path segment names
+///   an `[[array-of-tables]]` element that does not exist in `source`
+///   or `doc`.
 pub fn write_to_path(
     doc: &mut DocumentMut,
     path: &[String],
@@ -569,39 +588,93 @@ pub fn write_to_path(
     }
     let display_path = path.join(".");
 
-    // Resolve the source leaf by descending the path.
-    let mut src_item: &Item = source.as_item();
-    for seg in path {
-        let Some(t) = src_item.as_table() else {
-            return Err(WriteToPathError::MissingIntermediate { path: display_path.clone() });
-        };
-        let Some(next) = t.get(seg) else {
-            return Err(WriteToPathError::MissingIntermediate { path: display_path.clone() });
-        };
-        src_item = next;
-    }
-    let src_leaf = src_item.clone();
+    let src_leaf = descend_source(source.as_item(), path, &display_path)?;
+    descend_dest_and_set(doc.as_item_mut(), path, &src_leaf, &display_path)
+}
 
-    // Walk `doc`, creating intermediate tables as needed.
-    let mut cur: &mut Item = doc.as_item_mut();
-    for (i, seg) in path.iter().enumerate() {
-        let is_leaf = i == path.len() - 1;
-        let cur_type = cur.type_name().to_owned();
-        let Some(t) = cur.as_table_mut() else {
-            return Err(WriteToPathError::TypeMismatch {
-                path: display_path.clone(),
-                dest_type: cur_type,
-                source_type: "table".to_owned(),
-            });
+fn descend_source(item: &Item, path: &[String], display: &str) -> Result<Item, WriteToPathError> {
+    let mut cursor: Item = item.clone();
+    for seg in path {
+        cursor = match cursor {
+            Item::ArrayOfTables(aot) => {
+                let idx = aot
+                    .iter()
+                    .position(|t| t.get("name").and_then(Item::as_str) == Some(seg.as_str()))
+                    .ok_or_else(|| WriteToPathError::AotElementMissing {
+                        path: display.to_owned(),
+                        element_name: seg.clone(),
+                    })?;
+                let elem = aot.get(idx).ok_or_else(|| WriteToPathError::MissingIntermediate {
+                    path: display.to_owned(),
+                })?;
+                Item::Table(elem.clone())
+            }
+            Item::Table(t) => t.get(seg).cloned().ok_or_else(|| {
+                WriteToPathError::MissingIntermediate { path: display.to_owned() }
+            })?,
+            _ => return Err(WriteToPathError::MissingIntermediate { path: display.to_owned() }),
         };
-        if is_leaf {
-            t.insert(seg, src_leaf.clone());
-            return Ok(());
-        }
-        let entry = t.entry(seg).or_insert_with(|| Item::Table(Table::new()));
-        cur = entry;
     }
-    Ok(())
+    Ok(cursor)
+}
+
+fn descend_dest_and_set(
+    item: &mut Item,
+    path: &[String],
+    src_leaf: &Item,
+    display: &str,
+) -> Result<(), WriteToPathError> {
+    let Some((head, tail)) = path.split_first() else {
+        return Err(WriteToPathError::MissingIntermediate { path: "(empty)".to_owned() });
+    };
+    let is_leaf = tail.is_empty();
+    if let Item::ArrayOfTables(aot) = item {
+        let idx = aot
+            .iter()
+            .position(|t| t.get("name").and_then(Item::as_str) == Some(head.as_str()))
+            .ok_or_else(|| WriteToPathError::AotElementMissing {
+                path: display.to_owned(),
+                element_name: head.clone(),
+            })?;
+        if is_leaf {
+            if let Item::Table(t) = src_leaf {
+                let elem_ref = aot.get_mut(idx).ok_or_else(|| {
+                    WriteToPathError::MissingIntermediate { path: display.to_owned() }
+                })?;
+                elem_ref.clone_from(t);
+                return Ok(());
+            }
+            return Err(WriteToPathError::TypeMismatch {
+                path: display.to_owned(),
+                dest_type: "table".to_owned(),
+                source_type: src_leaf.type_name().to_owned(),
+            });
+        }
+        // Recurse into the element by wrapping its Table as an Item::Table.
+        let elem_table = aot
+            .get_mut(idx)
+            .ok_or_else(|| WriteToPathError::MissingIntermediate { path: display.to_owned() })?;
+        let mut elem_item = Item::Table(std::mem::take(elem_table));
+        let result = descend_dest_and_set(&mut elem_item, tail, src_leaf, display);
+        if let Item::Table(t) = elem_item {
+            *elem_table = t;
+        }
+        return result;
+    }
+    let cur_type = item.type_name().to_owned();
+    let Some(t) = item.as_table_mut() else {
+        return Err(WriteToPathError::TypeMismatch {
+            path: display.to_owned(),
+            dest_type: cur_type,
+            source_type: "table".to_owned(),
+        });
+    };
+    if is_leaf {
+        t.insert(head, src_leaf.clone());
+        return Ok(());
+    }
+    let entry = t.entry(head).or_insert_with(|| Item::Table(Table::new()));
+    descend_dest_and_set(entry, tail, src_leaf, display)
 }
 
 /// Return `true` if `doc` has a value at `path`. Read-only mirror of the
@@ -1027,5 +1100,34 @@ mod tests {
         let merge = merge_three_way(&base, &ours, &theirs);
         assert_eq!(merge.conflicts.len(), 1);
         assert!(merge.conflicts[0].is_array_block, "order-divergence guard fires");
+    }
+
+    #[test]
+    fn write_to_path_descends_aot_element_by_name() {
+        // Spec §3.4 #10. Replace pattern of [[rules]] name="log_level".
+        let mut dest = doc("[[rules]]\nname = \"log_level\"\npattern = \"A\"\n");
+        let source = doc("[[rules]]\nname = \"log_level\"\npattern = \"NEW\"\n");
+        write_to_path(
+            &mut dest,
+            &["rules".to_owned(), "log_level".to_owned(), "pattern".to_owned()],
+            &source,
+        )
+        .expect("AoT leaf write must succeed");
+        assert!(dest.to_string().contains("pattern = \"NEW\""));
+        assert!(!dest.to_string().contains("pattern = \"A\""));
+    }
+
+    #[test]
+    fn write_to_path_aot_element_missing_returns_typed_error_with_exact_message() {
+        // Spec §3.4 #11. Path references an element name that the source
+        // does not have → typed AotElementMissing error with exact format.
+        let mut dest = doc("[[rules]]\nname = \"a\"\n");
+        let source = doc("[[rules]]\nname = \"b\"\n");
+        let res = write_to_path(&mut dest, &["rules".to_owned(), "absent".to_owned()], &source);
+        let err = res.expect_err("AoT element absent must error");
+        assert_eq!(
+            format!("{err}"),
+            "array-of-tables element not found at rules.absent: no element with name=\"absent\"",
+        );
     }
 }
