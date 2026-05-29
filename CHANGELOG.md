@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-05-29
+
+Pattern audit follow-up hotfix — closes the four built-in items v0.7.0
+flagged but did not fix. The `regex` crate has no look-around (the
+linear-time ReDoS guarantee in CLAUDE.md §3), so three of the four fixes
+v0.7.0 proposed are not implementable; only C-8 has a clean data fix. The
+other three retain their built-ins (valuable common case; the audit corpus
+is an adversarial stress-test, not frequency-weighted) and become documented
+limitations. The hot-path modules `src/pty.rs` / `src/runtime.rs` / `src/pipeline.rs`
+were untouched; `src/rules.rs` lost one extension entry.
+
+### Fixed
+- `pkg.go.dev/foo` is no longer mis-styled as the filename `pkg.go`: `go`
+  was dropped from the `filename` extension catalog (audit C-8, FP
+  10% → 0%). Go source files (`main.go`) now style as `fqdn` (blue)
+  rather than `filename` (bright cyan).
+
+### Changed
+- New `ACCEPT-DOCUMENTED` decision value in the audit-corpus harness for
+  high-FP built-ins with no clean fix under the linear-time regex engine.
+  `check_karar_mandate` enforces it is used only at >5% FP. Items C-4
+  (filename single-letter prose, 33%), C-9 (fqdn JWT, 60%), and E-1
+  (ipv4 5-segment version, 12.5%) are reclassified from `TIGHTEN` to
+  `ACCEPT-DOCUMENTED`.
+- README gains a `## Known limitations` section documenting the three
+  collisions above plus a recipe to disable a noisy built-in
+  (`enabled = false`).
+
+### Documentation
+- Corrected the `[0.7.0]` "Known issues" fix paths (see below): the
+  look-around fixes they proposed do not compile under the `regex` crate.
+
 ## [0.7.0] - 2026-05-29
 
 Minor bump bundling five engineering-quality items that had been queued as
@@ -119,6 +151,14 @@ pattern fixes are deferred to a v0.7.1 hotfix cycle:
 The corpus `EXPECTED_FP_*` constants lock the current numbers so any
 unintended drift surfaces immediately. The v0.7.1 pattern fixes will
 re-measure and update the constants in lockstep.
+
+> **Correction (v0.7.1):** the fix paths above are partly wrong. The `regex`
+> crate has no look-around, so the `(?!\.\d)` (E-1) and path-anchor lookbehind
+> (C-4) fixes do not compile, and C-4's "drop `a o r v m`" would not reach
+> <5% (the offenders are `.c` ×4 + `.v` ×1, and `c` is retained). v0.7.1 fixes
+> C-8 (drops `go`) and reclassifies C-4 / C-9 / E-1 as `ACCEPT-DOCUMENTED`
+> documented limitations — see the `[0.7.1]` entry and README "Known limitations".
+
 - Pre-existing local PTY flake (OSC 11 bg-detect query leak in
   `integration_ansi` / `integration_signals` / `integration_themes`)
   carried forward from v0.6.x — local-only, CI green at ship time.
