@@ -21,6 +21,10 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
+#[path = "common/math.rs"]
+mod math;
+use math::{max_sample, median, min_sample, overhead_pct};
+
 /// Fixed PTY geometry for every run (matches the integration-test default).
 const PTY_SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
 
@@ -43,35 +47,6 @@ const SHAPES: &[Shape] = &[
     Shape { name: "high-match-log", template: include_bytes!("inputs/e2e_log.txt") },
     Shape { name: "ansi-passthrough", template: include_bytes!("inputs/e2e_ansi.txt") },
 ];
-
-/// Median of a non-empty slice of sample times (milliseconds). Sorts a copy;
-/// inputs are finite positive durations, so `partial_cmp` never sees NaN.
-fn median(samples: &[f64]) -> f64 {
-    let mut v = samples.to_vec();
-    v.sort_by(|a, b| a.partial_cmp(b).expect("sample times are finite"));
-    let n = v.len();
-    let mid = n / 2;
-    if n % 2 == 1 {
-        v[mid]
-    } else {
-        (v[mid - 1] + v[mid]) / 2.0
-    }
-}
-
-/// Smallest sample (the least-perturbed run).
-fn min_sample(samples: &[f64]) -> f64 {
-    samples.iter().copied().fold(f64::INFINITY, f64::min)
-}
-
-/// Largest sample.
-fn max_sample(samples: &[f64]) -> f64 {
-    samples.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-}
-
-/// Overhead of `tayf` over `cat` as a percentage: `(tayf - cat) / cat * 100`.
-fn overhead_pct(tayf: f64, cat: f64) -> f64 {
-    (tayf - cat) / cat * 100.0
-}
 
 /// Spawn `cmd args` (with `env` overrides) in a fresh PTY, sleep the startup
 /// grace, then time the streaming phase: write `stdin`, drain the master to
@@ -208,58 +183,5 @@ fn main() {
             min_sample(&cat_ms), cat_med, max_sample(&cat_ms),
             min_sample(&tayf_ms), tayf_med, max_sample(&tayf_ms),
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)] // reason: harness=false bench; test fns use these via super::*
-    use super::*;
-
-    #[allow(dead_code)] // reason: harness=false bench; called only from #[test] fns
-    fn close(a: f64, b: f64) -> bool {
-        (a - b).abs() < 1e-9
-    }
-
-    #[test]
-    fn median_odd_count() {
-        assert!(close(median(&[3.0, 1.0, 2.0]), 2.0));
-    }
-
-    #[test]
-    fn median_even_count() {
-        assert!(close(median(&[1.0, 2.0, 3.0, 4.0]), 2.5));
-    }
-
-    #[test]
-    fn median_single() {
-        assert!(close(median(&[5.0]), 5.0));
-    }
-
-    #[test]
-    fn median_unsorted_input() {
-        assert!(close(median(&[10.0, 2.0, 8.0, 4.0, 6.0]), 6.0));
-    }
-
-    #[test]
-    fn min_and_max() {
-        let s = [3.0, 1.0, 2.0];
-        assert!(close(min_sample(&s), 1.0));
-        assert!(close(max_sample(&s), 3.0));
-    }
-
-    #[test]
-    fn overhead_twenty_percent() {
-        assert!(close(overhead_pct(120.0, 100.0), 20.0));
-    }
-
-    #[test]
-    fn overhead_zero_when_equal() {
-        assert!(close(overhead_pct(100.0, 100.0), 0.0));
-    }
-
-    #[test]
-    fn overhead_negative_when_faster() {
-        assert!(close(overhead_pct(90.0, 100.0), -10.0));
     }
 }
