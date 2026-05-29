@@ -11,12 +11,6 @@
 //!   7. parent dir `sync_all` (best-effort; APFS underdocumented)
 //!   8. snapshot reparse
 
-// reason: helpers like `ts_for_backup_filename` and `civil_from_days`
-// are only reachable on the first-run-init Shift+D dump-backup path
-// (timestamp filename helper waits for that wire-up). Module-level
-// allow until that path lands.
-#![allow(dead_code)]
-
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
