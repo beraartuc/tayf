@@ -570,9 +570,10 @@ Three things the data tells us:
 
 3. **Optimization is warranted and is deferred — by design — to v0.8.1+.**
    Per spec §9, the v0.8.0 cycle measures only; it makes zero `src/` changes.
-   Because even the low-match floor is ~8×, the I/O loop (DOKUNULMAZ
-   `runtime.rs`/`pty.rs`) is implicated, not only the scanner — so a v0.8.1
-   optimization effort that touches those modules MUST go through a
+   Because even the low-match floor is ~8×, the I/O loop (the off-limits
+   hot-path modules `runtime.rs`/`pty.rs`) is implicated, not only the
+   scanner — so a v0.8.1 optimization effort that touches those modules MUST
+   go through a
    `security-review` gate (CLAUDE.md §3: termios / raw-mode / signal-
    forwarding live there). The first v0.8.1 step should profile to attribute
    the cost between the double-PTY hop, `AnsiSm`, line buffering, write

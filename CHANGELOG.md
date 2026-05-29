@@ -60,7 +60,7 @@ were untouched; `src/rules.rs` lost one extension entry.
 ### Changed
 - New `ACCEPT-DOCUMENTED` decision value in the audit-corpus harness for
   high-FP built-ins with no clean fix under the linear-time regex engine.
-  `check_karar_mandate` enforces it is used only at >5% FP. Items C-4
+  `check_decision_mandate` enforces it is used only at >5% FP. Items C-4
   (filename single-letter prose, 33%), C-9 (fqdn JWT, 60%), and E-1
   (ipv4 5-segment version, 12.5%) are reclassified from `TIGHTEN` to
   `ACCEPT-DOCUMENTED`.
@@ -124,12 +124,12 @@ dependencies. Off-limits hot-path modules `src/pty.rs` and `src/runtime.rs` unto
   audit-flagged items (C-4 filename single-letter ext, C-8 filename ↔
   fqdn Go pkg paths, C-9 fqdn JWT, D-7 log_level delimiters, E-1/E-2
   semver vs ipv4, F-3 duration μs, F-4 URL trim across schemes). Each
-  corpus declares Measurement mode (PIPELINE for karar measurement, RULE
+  corpus declares Measurement mode (PIPELINE for decision measurement, RULE
   for debugging); FP/FN measured via `tayf::__test_api::pipeline_spans`
   (full production pipeline — priority sort + overlap suppression +
-  profile gating, per audit doc §0.2). `check_karar_mandate` machine-
+  profile gating, per audit doc §0.2). `check_decision_mandate` machine-
   enforces memory `feedback_builtin_pattern_bar`: > 5% FP rate forbids
-  KALSIN — TIGHTEN or DEMOTE is required.
+  KEEP — TIGHTEN or DEMOTE is required.
 - `tayf::__test_api::{match_named_rule, pipeline_spans}` — two
   `#[doc(hidden)] pub fn` extensions on the existing test-only module.
   `match_named_rule` returns the leftmost match span for a single rule
