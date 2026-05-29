@@ -70,3 +70,55 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, phase: &NewPatternPhase, dra
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_tui::app::App;
+    use crate::config_tui::test_support::assert_render_snapshot;
+
+    #[test]
+    fn render_modal_new_pattern_phase_name_matches_snapshot() {
+        let app = App::default_for_test();
+        let phase = NewPatternPhase::Name;
+        let draft = PatternDraft::new();
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &phase, &draft),
+            "modal_new_pattern_phase_name",
+        );
+    }
+
+    #[test]
+    fn render_modal_new_pattern_phase_regex_matches_snapshot() {
+        let app = App::default_for_test();
+        let phase = NewPatternPhase::Regex;
+        let mut draft = PatternDraft::new();
+        draft.name = "x".to_owned();
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &phase, &draft),
+            "modal_new_pattern_phase_regex",
+        );
+    }
+
+    #[test]
+    fn render_modal_new_pattern_phase_style_matches_snapshot() {
+        let app = App::default_for_test();
+        let phase = NewPatternPhase::Style;
+        let mut draft = PatternDraft::new();
+        draft.name = "x".to_owned();
+        draft.pattern = r"\bERROR\b".to_owned();
+        assert_render_snapshot(
+            80,
+            24,
+            &app,
+            move |frame, area, _app| render(frame, area, &phase, &draft),
+            "modal_new_pattern_phase_style",
+        );
+    }
+}
