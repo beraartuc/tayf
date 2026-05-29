@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - Unreleased
+
+Measurement-first performance cycle. No `src/` changes — the hot-path
+modules (`src/runtime.rs` / `src/pty.rs` / `src/pipeline.rs`) are measured
+from the outside, not modified. Optimization is deferred to a data-driven
+v0.8.1+ (behind a security-review gate if it touches the I/O loop).
+
+### Added
+- End-to-end PTY-vs-`cat` overhead benchmark (`benches/e2e_overhead.rs`,
+  `cargo bench --bench e2e_overhead`): drives the release binary inside a
+  real PTY and reports streaming-phase overhead % against the spec §7
+  `<20%` target across three corpus shapes (prose / log / ansi). Reuses the
+  existing `portable-pty` dependency — no new crates. A CI-covered smoke
+  test guards the mechanism; there is no wall-clock perf gate (e2e timing is
+  noisy).
+
+### Performance
+- First end-to-end measurement of the spec §7 "<20% overhead vs native
+  `cat`" target (deferred since v0.1). **Result: the target is not met on
+  sustained bulk streams** — with a memory-speed consumer, tayf streams at
+  ~10–20 MiB/s versus cat's ~130–150 MiB/s. Even low-match input is ~8×, so
+  the I/O loop, not only the regex scanner, is implicated. This is the
+  pessimistic bound: a real terminal renders far slower than 150 MiB/s and
+  gates both sides, so interactive and small-output latency are unaffected;
+  the ceiling bites only on bulk output. Full numbers and analysis in
+  `benches/BASELINE.md`. Optimization is deferred to v0.8.1+.
+
+### Changed
+- Anglicized the audit-corpus decision vocabulary: `check_karar_mandate` →
+  `check_decision_mandate`, the `KALSIN` decision token → `KEEP`, and the
+  related corpus headers / README (rename-only; behavior unchanged).
+
+### Documentation
+- Corrected Turkish leaks in the released `[0.7.0]` entry (`paralel` →
+  `parallel`, `DOKUNULMAZ` → `Off-limits hot-path modules`).
+
 ## [0.7.1] - 2026-05-29
 
 Pattern audit follow-up hotfix — closes the four built-in items v0.7.0
