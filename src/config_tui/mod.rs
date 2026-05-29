@@ -31,12 +31,18 @@ pub(crate) mod dump_cmd;
 pub(crate) mod edit;
 pub(crate) mod events;
 /// AST-level three-way merge over `toml_edit::DocumentMut`. v0.6.2 §3.5.
-/// Public so integration tests (`tests/config_tui_merge_3way.rs`) can
-/// drive the pure logic directly — the algorithm has no IO and its
-/// boundary surface (`merge_three_way`, `KeyConflict`,
-/// `ConflictValueShape`, `write_to_path`, `WriteToPathError`) is small
-/// and stable.
-pub mod merge;
+/// `pub(crate)` from v0.6.3 onwards: the prior `pub mod merge`
+/// re-exported `toml_edit::DocumentMut` through `MergeResult.auto_merged`
+/// + `merge_three_way` / `write_to_path` parameters, locking tayf's
+/// public API to `toml_edit = "0.25"`. CLAUDE.md §4 (pub items are
+/// contract) plus memory `feedback_toml_edit_025_quirks` (a major bump
+/// is a *when*, not an *if*) made the public exposure a future-major
+/// burden with no external consumers. The integration tests were moved
+/// inline to `#[cfg(test)] mod tests` in `merge.rs`; the two pure-data
+/// types `ConflictValueShape` and `KeyConflict` are re-exported through
+/// `crate::__test_api` for the `tests/config_tui_conflict_list.rs` render
+/// suite (those structs carry no `toml_edit` types in their fields).
+pub(crate) mod merge;
 pub(crate) mod reconcile;
 pub(crate) mod render;
 pub(crate) mod save;

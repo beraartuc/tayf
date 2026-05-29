@@ -3,9 +3,10 @@
 //! Render-side coverage on `render_conflict_list` (title pluralization,
 //! help footer, leaf vs block row shapes). The save-side commit_bytes
 //! invariant is covered by lib-level tests in `src/config_tui/save.rs`;
-//! the build_initial_state + dispatcher paths share the commit_bytes
-//! helper and the merge module, both of which have their own integration
-//! suites (`config_tui_merge_3way.rs` for the merge algorithm).
+//! the merge algorithm itself is covered by `#[cfg(test)] mod tests`
+//! inline in `src/config_tui/merge.rs` (moved from the prior
+//! `tests/config_tui_merge_3way.rs` integration suite when the module
+//! was demoted to `pub(crate)` in v0.6.3 I2).
 
 #![allow(clippy::expect_used)] // integration-test convenience
 
@@ -13,8 +14,7 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use tayf::__test_api::{render_conflict_list, ConflictChoice};
-use tayf::config_tui::merge::{ConflictValueShape, KeyConflict};
+use tayf::__test_api::{render_conflict_list, ConflictChoice, ConflictValueShape, KeyConflict};
 
 fn leaf_conflict(path: &[&str], ours: &str, theirs: &str) -> KeyConflict {
     KeyConflict {

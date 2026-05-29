@@ -969,6 +969,16 @@ pub mod __test_api {
     // -----------------------------------------------------------------------
     pub use crate::config_tui::widgets::conflict_list::render_conflict_list;
     pub use crate::config_tui::widgets::save_diff::ConflictChoice;
+
+    // -----------------------------------------------------------------------
+    // v0.6.3 I2 re-export — `config_tui::merge` was demoted to
+    // `pub(crate)` to drop the `toml_edit::DocumentMut` re-export from
+    // the crate's public surface. These two pure-data types carry no
+    // `toml_edit` types in their fields (verified in `merge.rs:59-85`)
+    // and are needed by `tests/config_tui_conflict_list.rs` to fabricate
+    // fixtures for the conflict-list render suite.
+    // -----------------------------------------------------------------------
+    pub use crate::config_tui::merge::{ConflictValueShape, KeyConflict};
 }
 
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`
