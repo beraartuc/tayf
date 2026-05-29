@@ -166,13 +166,12 @@ const EXPECTED_FN_C4: usize = 0;
 const DECISION_C4: &str = "TIGHTEN";
 
 // C-8: filename vs fqdn Go pkg path (pkg.go.dev/foo).
-// Measured: 1/10 FP (10%). The FP is `pkg.go` matching because `go` IS in FILENAME_EXTENSIONS.
-// Audit §C-8 recommends ACCEPT but 10% > 5% machine threshold requires TIGHTEN.
-// Fix: remove `go` from filename extensions or add path-separator anchor.
-// Deferred to follow-up commit; karar locked TIGHTEN to satisfy >5% mandate.
-const EXPECTED_FP_C8: usize = 1;
+// v0.7.1: dropped `go` from FILENAME_EXTENSIONS — FP 1/10 (10%) -> 0/10 (0%).
+// `pkg.go.dev/foo` no longer matches the filename rule (go ext removed);
+// `main.go` now styles as fqdn. Clean; karar KALSIN, pin guards drift.
+const EXPECTED_FP_C8: usize = 0;
 const EXPECTED_FN_C8: usize = 0;
-const DECISION_C8: &str = "TIGHTEN";
+const DECISION_C8: &str = "KALSIN";
 
 // C-9: fqdn matches JWT 3-segment dotted tokens.
 // Measured: 6/10 FP (60%). The fqdn regex fires on base64url labels ending in

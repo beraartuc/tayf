@@ -200,7 +200,6 @@ const FILENAME_EXTENSIONS: &[&str] = &[
     "ts",
     "tsx",
     "jsx",
-    "go",
     "java",
     "kt",
     "kts",
