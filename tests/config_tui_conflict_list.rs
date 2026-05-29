@@ -142,7 +142,10 @@ fn conflict_list_focused_row_carries_arrow_marker() {
 }
 
 #[test]
-fn conflict_list_array_block_row_surfaces_v0_7_array_merge_warning() {
+fn conflict_list_array_block_row_surfaces_array_shape_conflict_warning() {
+    // v0.7 rename + flip — the v0.6.2 "array merge v0.7+" suffix is gone;
+    // is_array_block now flags only the no-name-identity fallback path
+    // (see merge.rs §3.6 and conflict_list.rs:54 suffix rewrite).
     let conflict = KeyConflict {
         path: vec!["rules".to_owned()],
         base_value: "(array)".to_owned(),
@@ -159,8 +162,15 @@ fn conflict_list_array_block_row_surfaces_v0_7_array_merge_warning() {
         concat.push_str(&row_text(&buf, r));
         concat.push('\n');
     }
+    // The 80-col row truncates the full "(no name identity)" tail, but
+    // the "array-shape conflict (no name i" prefix is enough to pin the
+    // v0.7 wording is what's rendered.
     assert!(
-        concat.contains("array merge v0.7+"),
-        "array-of-tables row must carry the v0.7+ banner; rendered rows:\n{concat}"
+        concat.contains("array-shape conflict"),
+        "array-of-tables row must carry the v0.7 array-shape suffix; rendered rows:\n{concat}",
+    );
+    assert!(
+        !concat.contains("v0.7+"),
+        "stale v0.7+ banner must not appear; rendered rows:\n{concat}",
     );
 }
