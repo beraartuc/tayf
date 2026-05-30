@@ -27,8 +27,7 @@ fn scaled(template: &[u8]) -> Vec<u8> {
     template.repeat(reps)
 }
 
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-// reason: byte count for criterion Throughput fits u64.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)] // reason: byte count for criterion Throughput fits u64.
 fn bench_shape(c: &mut Criterion, name: &str, template: &[u8]) {
     let input = scaled(template);
     let mut group = c.benchmark_group("pipeline_feed");

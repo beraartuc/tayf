@@ -130,7 +130,10 @@ fn main() {
     let target = env_usize("TAYF_E2E_BYTES", 16 * 1024 * 1024);
     let tayf = env!("CARGO_BIN_EXE_tayf");
 
-    println!("tayf v0.8.1 end-to-end overhead (spec §7 target: <20% full vs native cat)");
+    println!(
+        "tayf {} end-to-end overhead (spec §7 target: <20% full vs native cat)",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("samples={samples} warmup={warmup} target_bytes={target}");
     println!("timing = streaming phase only (spawn + {STARTUP_GRACE:?} grace excluded, symmetric)");
     println!();
