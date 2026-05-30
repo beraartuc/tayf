@@ -160,6 +160,14 @@ impl AnsiSm {
         self.flags != 0
     }
 
+    /// True iff the machine is in `Ground` — the next non-ESC byte is `Data`
+    /// and stepping it mutates no SM field, so the pipeline may batch the run
+    /// up to the next ESC instead of stepping byte-by-byte (spec §4: Ground arm
+    /// is a no-op; `sequence_bytes_seen == 0` in Ground so the cap never fires).
+    pub(crate) fn is_ground(&self) -> bool {
+        self.state == SmState::Ground
+    }
+
     /// Advance the machine by one byte; emit the classification event.
     ///
     /// Implements the full Williams VT500 subset: CSI (with `CsiIgnore`

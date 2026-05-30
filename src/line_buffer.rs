@@ -143,9 +143,6 @@ impl LineBuffer {
     /// Invariant relied on: `inner.len() <= MAX_BUFFER_BYTES` on entry and after
     /// every emit (overflow/newline emits reset to empty; a buffered tail is
     /// strictly shorter than the distance to the cap), so `until_overflow >= 1`.
-    // reason: called by the H4a chunk-level feed path (Task 3); not yet wired
-    // to pipeline.rs at the Task-2 stage of the plan.
-    #[allow(dead_code)]
     pub(crate) fn feed_data_run(&mut self, run: &[u8]) -> Vec<(Vec<u8>, bool)> {
         if run.is_empty() {
             return Vec::new();

@@ -459,37 +459,68 @@ impl Pipeline {
         }
     }
 
-    /// Feed a chunk from the PTY master into the pipeline. See spec §5
-    /// for the three-path mimari (TUI passthrough / scratch accumulation /
-    /// OSC payload direct).
+    /// Feed a chunk from the PTY master into the pipeline.
+    ///
+    /// Two buckets: in `Ground` the run up to the next ESC is all `Data` and
+    /// mutates no SM field (spec §4), so it is batched via
+    /// [`LineBuffer::feed_data_run`] (or written verbatim in TUI mode);
+    /// otherwise each byte goes through the per-byte `step` + dispatch for
+    /// sequence handling. See spec §5 C-1..I-5 for the preserved invariants.
     pub(crate) fn feed<W: Write>(&mut self, chunk: &[u8], out: &mut W) -> std::io::Result<()> {
-        for &byte in chunk {
+        let mut i = 0;
+        while i < chunk.len() {
+            // Fast path: Ground run up to the next ESC.
+            if self.sm.is_ground() {
+                let rest = &chunk[i..];
+                let run_len = rest.iter().position(|&b| b == 0x1b).unwrap_or(rest.len());
+                if run_len > 0 {
+                    let run = &rest[..run_len];
+                    // C-1: re-read the TUI flag at the head of every run (it flips
+                    // only in the slow-path finalize_csi; never cache it across one).
+                    if self.sm.tui_mode_active() {
+                        out.write_all(run)?;
+                    } else {
+                        // C-3: pure feeder — no buffer drain, no flag reset here;
+                        // apply_or_passthrough (per emitted line) is the sole reset site.
+                        for (line, trailing_newline) in self.buffer.feed_data_run(run) {
+                            self.apply_or_passthrough(&line, out)?;
+                            if trailing_newline {
+                                out.write_all(b"\n")?;
+                            }
+                        }
+                    }
+                    i += run_len;
+                    continue;
+                }
+                // run_len == 0 -> chunk[i] is ESC; fall through to the slow path.
+            }
+
+            // Slow path: per-byte (I-5: sequence/string bytes are never batched).
+            let byte = chunk[i];
             if self.sm.tui_mode_active() {
                 // Path 1: TUI mode active — verbatim passthrough.
                 out.write_all(&[byte])?;
                 let event = self.sm.step(byte);
                 if matches!(event, crate::ansi::StepEvent::ForceStringTerminate) {
-                    // tmux running inside tayf can emit large OSC 52 payloads while
-                    // alt-screen is held by tmux — cap-fire mid-OSC even in TUI mode.
-                    // Emit synthetic ST so terminal doesn't keep eating shell output.
-                    // No re-step: byte was already written to stdout above. See spec §4.4.
                     out.write_all(b"\x1b\\")?;
                 }
+                i += 1;
                 continue;
             }
             let event = self.sm.step(byte);
             if let crate::ansi::StepEvent::ForceStringTerminate = event {
                 out.write_all(b"\x1b\\")?;
-                // SM has reset to Ground; re-step the byte for fresh classification.
                 let event = self.sm.step(byte);
                 debug_assert!(
                     !matches!(event, crate::ansi::StepEvent::ForceStringTerminate),
                     "ForceStringTerminate must not recur after re-step"
                 );
                 self.dispatch_classification_event(event, byte, out)?;
+                i += 1;
                 continue;
             }
             self.dispatch_classification_event(event, byte, out)?;
+            i += 1;
         }
         Ok(())
     }
@@ -1753,5 +1784,112 @@ mod pipeline_tests {
         // Stdout must contain a synthetic \e\\ ST emitted at cap fire.
         let has_st = out.windows(2).any(|w| w == b"\x1b\\");
         assert!(has_st, "expected synthetic ST in stdout; got len={}", out.len());
+    }
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use super::*;
+    use crate::style::{Color, Style};
+    use arc_swap::ArcSwap;
+    use regex::bytes::{Regex, RegexSet};
+
+    fn pipeline_with(compiled: Compiled) -> Pipeline {
+        Pipeline::new(Arc::new(ArcSwap::from_pointee(compiled)))
+    }
+
+    /// A Compiled with one literal rule `pat` -> red, `respect_existing_colors` as given.
+    fn one_rule(pat: &str, respect: bool) -> Compiled {
+        Compiled {
+            set: RegexSet::new([pat]).unwrap(),
+            individuals: vec![Regex::new(pat).unwrap()],
+            names: vec!["t".to_owned()],
+            styles: vec![Style { fg: Some(Color::Red), ..Style::DEFAULT }],
+            group_styles: vec![vec![]],
+            uses_capture_styling: vec![false],
+            respect_existing_colors: respect,
+            priorities: vec![0],
+        }
+    }
+
+    fn feed_all(p: &mut Pipeline, chunks: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for c in chunks {
+            p.feed(c, &mut out).unwrap();
+        }
+        p.drain(&mut out).unwrap();
+        out
+    }
+
+    // C-2 / central byte-identity: output must not depend on chunk boundaries.
+    #[test]
+    fn feed_output_independent_of_chunk_boundaries() {
+        let input: &[u8] =
+            b"plain line\nip 192.168.1.1 here\n\x1b[31mpre-colored\x1b[0m tail\ntitle\x1b]0;t\x07after\n";
+        // builtins so IP/SGR/OSC all exercise real paths.
+        let mut whole = pipeline_with(Compiled::load_builtins().unwrap());
+        let out_whole = feed_all(&mut whole, &[input]);
+        let mut bytewise = pipeline_with(Compiled::load_builtins().unwrap());
+        let chunks: Vec<&[u8]> = input.chunks(1).collect();
+        let out_bytewise = feed_all(&mut bytewise, &chunks);
+        assert_eq!(
+            out_whole, out_bytewise,
+            "feed output must be identical regardless of chunk size"
+        );
+    }
+
+    // C-3: a Data run before a mid-line OSC keeps exact stdout byte order.
+    #[test]
+    fn data_run_before_osc_preserves_stdout_byte_order() {
+        // "abc"/"def" match no builtin -> pure passthrough; assert verbatim.
+        let mut p = pipeline_with(Compiled::load_builtins().unwrap());
+        let input: &[u8] = b"abc\x1b]0;title\x07def\n";
+        let out = feed_all(&mut p, &[input]);
+        assert_eq!(out, input, "OSC mid-line must preserve byte order; no rules on payload line");
+    }
+
+    // I-1: SGR set on the first line of a multi-line Data run skips only that line.
+    #[test]
+    fn sgr_then_multiline_ground_run_skips_only_first_line() {
+        // rule matches "YYY"; respect_existing_colors = true so an SGR line is skipped.
+        let mut p = pipeline_with(one_rule("YYY", true));
+        // Line 1 carries a real SGR (\x1b[1m) then YYY -> skipped (verbatim).
+        // Line 2 is YYY with no SGR -> rules apply (red wrap).
+        let input: &[u8] = b"\x1b[1mYYY\nYYY\n";
+        let out = feed_all(&mut p, &[input]);
+        let s = String::from_utf8(out).unwrap();
+        // First YYY: no red (\x1b[31m) wrapping (line had SGR, skipped).
+        // Second YYY: red wrap present.
+        assert!(s.contains("\x1b[31m"), "second line YYY must be colorized: {s:?}");
+        // Exactly one red introducer (only the second line).
+        assert_eq!(s.matches("\x1b[31m").count(), 1, "only the non-SGR line is colorized: {s:?}");
+    }
+
+    // C-1: a mid-chunk alt-screen toggle reroutes the following Data run.
+    #[test]
+    fn alt_screen_toggle_reroutes_following_data_run() {
+        // After toggle-ON, data is verbatim (no rules). After toggle-OFF, data
+        // is line-buffered (rules apply). One feed call, both transitions.
+        let mut p = pipeline_with(one_rule("YYY", false));
+        let input: &[u8] = b"\x1b[?1049hYYY\x1b[?1049lYYY\n";
+        let out = feed_all(&mut p, &[input]);
+        let s = String::from_utf8(out).unwrap();
+        // Exactly one red wrap: the post-toggle-OFF YYY. The in-alt-screen YYY is verbatim.
+        assert_eq!(s.matches("\x1b[31m").count(), 1, "only post-toggle-off YYY colorized: {s:?}");
+    }
+
+    // I-3: a >64KB run with interior newlines keeps per-line framing (not one blob).
+    #[test]
+    fn overflow_run_with_interior_newlines_preserves_framing() {
+        // Two short lines, then one line > MAX, all in one Data run.
+        let mut p = pipeline_with(Compiled::load_builtins().unwrap());
+        let mut input = Vec::new();
+        input.extend_from_slice(b"short1\nshort2\n");
+        input.extend(std::iter::repeat(b'x').take(crate::line_buffer::MAX_BUFFER_BYTES + 10));
+        input.push(b'\n');
+        let out = feed_all(&mut p, &[input.as_slice()]);
+        // short1/short2 survive as their own lines (the giant line did not swallow them).
+        assert!(out.windows(8).any(|w| w == b"short1\ns"), "short1 line must be framed separately");
+        assert!(out.windows(7).any(|w| w == b"short2\n"), "short2 line must be framed separately");
     }
 }
