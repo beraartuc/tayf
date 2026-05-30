@@ -7,7 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.8.2] - 2026-05-30
 
 Performance cycle (H4, security-gated): the output pipeline now processes input
-chunk-by-chunk instead of byte-by-byte. The DOKUNULMAZ `src/pipeline.rs` was
+chunk-by-chunk instead of byte-by-byte. The off-limits hot-path module `src/pipeline.rs` was
 modified under a mandatory security review; `src/runtime.rs` and `src/pty.rs`
 (termios / raw-mode / signal forwarding) were not touched.
 
@@ -459,7 +459,7 @@ public-API tightening, and test-coverage backfill.
   (`tests/integration_tui_polish.rs`). Final lib test count: 700
   (was 679 at v0.6.0).
 - Ceremony: LEAN per memory `feedback_lean_process_small_subversions`
-  — single release with paralel spec review (Rust + TUI senior) +
+  — single release with parallel spec review (Rust + TUI senior) +
   final cross-cutting opus 4.7 review on the full v0.6.0..v0.6.1
   diff (mandate `feedback_cross_cutting_review_value` —
   not skipped in lean cycle).
@@ -733,7 +733,7 @@ No code change; 636 lib tests unchanged.
 ### Invariants
 
 - Hot path (`apply_rules` + Pipeline + IO loop + PTY) byte-identical
-  to v0.5.3; no bench-CI baseline regen needed. DOKUNULMAZ list per
+  to v0.5.3; no bench-CI baseline regen needed. Off-limits hot-path module list per
   spec §5.4 confirmed zero-touch by final cross-cutting review.
 - `tests/integration_smoke.rs` byte-identical pass.
 - Public API: `Args` field-path migration is the only break (above);
@@ -768,7 +768,7 @@ spec §2.2 for the full list:
 - **`apply_confirm` `DiscardEditsAndReload` + `InitFromDump`** —
   Toast::warn placeholders (DeleteUserRule + ResetUserOverride
   arms wired in `9b2f24d`).
-- **Span-emitting preview pipeline** (§5.4 DOKUNULMAZ blocker on
+- **Span-emitting preview pipeline** (§5.4 off-limits hot-path blocker on
   `apply_rules`) — mini-preview ships uncolorized.
 - **`Modal::ColorPicker` side-channel unification** — borrow-checker-driven
   split between inline-state ColorPicker and side-channel SaveDiff /

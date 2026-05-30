@@ -1004,7 +1004,7 @@ pub mod __test_api {
     /// Run the full production pipeline against `input` with optional
     /// `profile` activation. Returns post-priority post-overlap
     /// `(rule_name, matched_span)` pairs — exactly what tayf would color
-    /// in production output. Used for corpus harness karar measurement
+    /// in production output. Used for corpus harness decision measurement
     /// (spec §5.3, §5.4).
     ///
     /// `profile` is the name of an embedded profile (e.g. `"aws"`, `"k8s"`).

@@ -547,7 +547,7 @@ pub(crate) fn apply_user_rules_with_source(
             if let Some(s) = &ur.style {
                 existing.style = s.to_style(path, &ur.name)?;
             }
-            // v0.3.5: REPLACE semantics (Rev2 Karar 27). When a user/theme
+            // v0.3.5: REPLACE semantics (Rev2 Decision 27). When a user/theme
             // entry supplies a `styles = { ... }` map for a built-in, the
             // built-in's pre-populated `group_styles` is REPLACED in full —
             // not merged — at `Compiled::load_with_theme` build time. We

@@ -43,7 +43,7 @@ pub(crate) struct BuiltinRule {
     /// `Compiled::load_with_theme` build time, validate each key against
     /// the compiled regex's `captures_len()` and overlay the user's
     /// styles into `group_styles[i]` REPLACING the built-in defaults
-    /// (REPLACE semantics, Rev2 Karar 27).
+    /// (REPLACE semantics, Rev2 Decision 27).
     ///
     /// Keys are positive-decimal capture-group indexes (1-based; grammar
     /// `^[1-9][0-9]*$`); `validate_styles_map_key` enforces the grammar
@@ -63,7 +63,7 @@ pub(crate) struct BuiltinRule {
     /// `Vec<ProfileRuleError>` for [`Error::ProfileValidation`]).
     ///
     /// Since the user-config layer applies AFTER the theme layer and
-    /// REPLACES `styles_override` wholesale (Rev2 Karar 27), a value of
+    /// REPLACES `styles_override` wholesale (Rev2 Decision 27), a value of
     /// [`RuleSource::Theme`] on a rule whose `pattern` and `style` match
     /// the built-in defaults unambiguously means "this rule's
     /// `styles_override` originated from the theme and was never
@@ -99,7 +99,7 @@ pub(crate) struct BuiltinRule {
 /// fail-collected [`Error::ProfileValidation`]. Built-in rules pass validation
 /// by construction (asserted by `builtin_rules_*` tests).
 ///
-/// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), Rev2 Karar 27
+/// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), Rev2 Decision 27
 /// (REPLACE semantics for `styles` map overlays), v0.5.2 §4.3
 /// (`EmbeddedProfile` variant for `[[append_rules]]` provenance).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -599,7 +599,7 @@ pub(crate) struct Compiled {
     /// When `true`, lines containing any SGR (CSI `m`) byte skip rule
     /// application. Read from `[general] respect_existing_colors` and
     /// snapshotted at line boundary via the enclosing `ArcSwap<Compiled>`
-    /// (spec §4.4, Karar 11).
+    /// (spec §4.4, Decision 11).
     pub(crate) respect_existing_colors: bool,
     /// Per-rule priority parallel vec (NEW v0.5.6). Length matches
     /// `individuals` / `styles` / `group_styles` / `uses_capture_styling`.
@@ -787,7 +787,7 @@ impl Compiled {
 
         // Step 5 (v0.5.2 §5.4) — user config. `RuleSource::UserConfig`:
         // user-config writes overwrite any prior theme- or profile-tagged
-        // `styles_override` (REPLACE semantics, Rev2 Karar 27), and any
+        // `styles_override` (REPLACE semantics, Rev2 Decision 27), and any
         // subsequent range/key errors surface as `Error::Config` so the
         // user sees them on their own config path.
         if let Some(c) = config {
@@ -822,7 +822,7 @@ impl Compiled {
             profile_path,
         )?;
 
-        // Karar 11: snapshot config value into Compiled so reads happen at
+        // Decision 11: snapshot config value into Compiled so reads happen at
         // line boundary via ArcSwap<Compiled>, no separate atomic needed.
         let respect_existing_colors = config.map_or_else(
             || crate::config::GeneralSection::default().respect_existing_colors,
@@ -1101,7 +1101,7 @@ fn compile_merged_rules(
 /// `captures_len == 1` and any non-empty `styles_override` map is
 /// out-of-range by definition.
 ///
-/// Spec ref: §3.6, §1.3.5, Rev2 I-1, Rev2 Karar 27, v0.5.0 §2.3, v0.5.2 §6.4.
+/// Spec ref: §3.6, §1.3.5, Rev2 I-1, Rev2 Decision 27, v0.5.0 §2.3, v0.5.2 §6.4.
 // reason: explicit three-step dispatch (zero / all-digit / named) × four
 // provenance arms (Theme / UserConfig / EmbeddedProfile / Builtin) × four
 // error paths (zero, malformed, out-of-range, name-unknown, duplicate-target)
@@ -1451,7 +1451,7 @@ pub(crate) fn testing_match_named_rule(rule_name: &str, input: &str) -> Option<S
 /// `Vec<(rule_name, matched_span)>` in start-ascending (accepted) order.
 ///
 /// Applies the full production pipeline: priority sort + overlap suppression
-/// + profile gating (whitelist + append_rules). Used for corpus karar
+/// + profile gating (whitelist + append_rules). Used for corpus decision
 /// measurement (spec §5.3, §5.4).
 ///
 /// Builds a fresh `Compiled` per call — only for use in test/harness code.
@@ -2238,7 +2238,7 @@ mod tests {
 
     #[test]
     fn url_git_at_host_class_rejects_pathological_hosts() {
-        // REGRESSION GUARD: spec §3.1 Karar 3 — host class label-aware.
+        // REGRESSION GUARD: spec §3.1 Decision 3 — host class label-aware.
         assert_eq!(match_string("url", "git@.host:path"), None);
         assert_eq!(match_string("url", "git@host.:path"), None);
         assert_eq!(match_string("url", "git@-host:path"), None);
@@ -2632,7 +2632,7 @@ mod tests {
     //     `Error::ThemeValidation` (fail-collected, Rev2 I-1);
     //   - user-config-sourced errors fail-fast as `Error::Config`;
     //   - user `styles` REPLACE the built-in's `group_styles` wholesale
-    //     (Rev2 Karar 27).
+    //     (Rev2 Decision 27).
 
     #[test]
     fn compiled_load_with_theme_collects_theme_captures_index_out_of_range() {

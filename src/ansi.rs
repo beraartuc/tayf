@@ -1006,7 +1006,7 @@ mod ansi_tests {
 
     #[test]
     fn eight_bit_c1_st_not_recognized() {
-        // \e]2;foo\x9c — 8-bit C1 ST per Karar 6 treated as data, not ST.
+        // \e]2;foo\x9c — 8-bit C1 ST per Decision 6 treated as data, not ST.
         let mut sm = AnsiSm::new();
         let events = step_all(&mut sm, b"\x1b]2;foo\x9c");
         let last = events.last().expect("events");

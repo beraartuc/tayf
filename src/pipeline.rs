@@ -80,7 +80,7 @@ pub(crate) fn apply_rules<W: Write>(
 /// [`apply_rules`]; takes `&Compiled` so the caller can reuse a single
 /// `ArcSwap::load_full` for both the `respect_existing_colors` gate and
 /// styling (one snapshot per line — a reload landing mid-line can never split
-/// the gate from the styling; v0.5.6 Karar 11).
+/// the gate from the styling; v0.5.6 Decision 11).
 pub(crate) fn apply_rules_with<W: Write>(
     line: &[u8],
     compiled: &Compiled,
@@ -640,14 +640,14 @@ impl Pipeline {
     /// Apply rules to `line`, OR pass it through verbatim. Rules are skipped
     /// when either:
     /// - The rule snapshot has `respect_existing_colors = true` and the line
-    ///   carried any SGR (spec §4.4, Karar 11); or
+    ///   carried any SGR (spec §4.4, Decision 11); or
     /// - The line had an OSC/DCS/PM/APC string payload (the pre-string
     ///   portion was already drained verbatim — re-applying rules to the
     ///   post-string remainder alone would split styling across the line).
     ///
     /// Resets both line flags after handling.
     fn apply_or_passthrough<W: Write>(&mut self, line: &[u8], out: &mut W) -> std::io::Result<()> {
-        // Karar 11: one snapshot per line drives BOTH the skip gate and styling,
+        // Decision 11: one snapshot per line drives BOTH the skip gate and styling,
         // so a reload landing mid-line cannot split them.
         let compiled = self.rules.load_full();
         let skip_rules =

@@ -7,7 +7,7 @@
 //!    colorize).
 //! 2. With TAYF_DISABLE=1 (env), same as #1 (env var path).
 //! 3. CLI --bypass wins over TAYF_DISABLE=0 (precedence).
-//! 4. --bypass --no-hot-reload combined remains passthrough (Karar 14
+//! 4. --bypass --no-hot-reload combined remains passthrough (Decision 14
 //!    documentation gap closed — Rev2 N-3).
 //!
 //! All tests set TAYF_DISABLE_BG_DETECT=1 defensively (v0.3.2 pattern:
@@ -149,7 +149,7 @@ fn cli_bypass_overrides_env_disable_zero() {
 
 #[test]
 fn bypass_combined_with_no_hot_reload_is_passthrough() {
-    // Rev2 N-3 — Karar 14 combined-flag coverage.
+    // Rev2 N-3 — Decision 14 combined-flag coverage.
     let (out, _status) = run_in_pty(&["--bypass", "--no-hot-reload"], &[], "echo error: failed");
     let s = String::from_utf8_lossy(&out);
     assert!(s.contains("error: failed"));
