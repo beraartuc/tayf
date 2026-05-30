@@ -129,6 +129,72 @@ impl LineBuffer {
         Some(line)
     }
 
+    /// Feed a run of Data bytes (no ESC — caller guarantees it is a Ground run
+    /// up to the next ESC) in bulk. Returns one `(line, trailing_newline)` per
+    /// emitted line: `line` is the rule-input with any terminating `\n`
+    /// stripped (matching the former per-byte `feed_byte_with_overflow`
+    /// contract), and `trailing_newline` tells the caller to re-emit a raw
+    /// `\n` after applying rules. A single line exceeding `MAX_BUFFER_BYTES`
+    /// is flushed as `(blob, false)` with a warning — byte-identical to feeding
+    /// each byte through `feed_byte_with_overflow`. The partial tail stays
+    /// buffered across calls. See spec §5 C-2 (`\n`-strip contract) and I-3
+    /// (per-line overflow framing).
+    ///
+    /// Invariant relied on: `inner.len() <= MAX_BUFFER_BYTES` on entry and after
+    /// every emit (overflow/newline emits reset to empty; a buffered tail is
+    /// strictly shorter than the distance to the cap), so `until_overflow >= 1`.
+    // reason: called by the H4a chunk-level feed path (Task 3); not yet wired
+    // to pipeline.rs at the Task-2 stage of the plan.
+    #[allow(dead_code)]
+    pub(crate) fn feed_data_run(&mut self, run: &[u8]) -> Vec<(Vec<u8>, bool)> {
+        if run.is_empty() {
+            return Vec::new();
+        }
+        self.last_write = Instant::now();
+        let mut emitted = Vec::new();
+        let mut i = 0;
+        while i < run.len() {
+            // Bytes addable before the (cap+1)th byte triggers an overflow flush.
+            let until_overflow = MAX_BUFFER_BYTES + 1 - self.inner.len();
+            match memchr_newline(&run[i..]) {
+                Some(r) if r < until_overflow => {
+                    // A `\n` completes a line at or before the overflow point.
+                    // `r + 1 == until_overflow` is the simultaneous overflow+newline
+                    // edge: the per-byte path warns, strips the `\n`, re-emits it —
+                    // same emitted value as a normal newline, plus the warning.
+                    self.inner.extend_from_slice(&run[i..i + r]);
+                    if r + 1 == until_overflow {
+                        let cap = MAX_BUFFER_BYTES;
+                        crate::log::warn_msg!("line buffer overflowed; cap={cap}");
+                    }
+                    let line = std::mem::take(&mut self.inner);
+                    self.inner = Vec::with_capacity(4096);
+                    emitted.push((line, true));
+                    i += r + 1;
+                }
+                _ => {
+                    if until_overflow <= run.len() - i {
+                        // Overflow: the `until_overflow`-th added byte is non-`\n`
+                        // (an earlier `\n` would have matched the arm above), so the
+                        // blob has no trailing `\n` to strip -> (blob, false).
+                        self.inner.extend_from_slice(&run[i..i + until_overflow]);
+                        let cap = MAX_BUFFER_BYTES;
+                        crate::log::warn_msg!("line buffer overflowed; cap={cap}");
+                        let blob = std::mem::take(&mut self.inner);
+                        self.inner = Vec::with_capacity(4096);
+                        emitted.push((blob, false));
+                        i += until_overflow;
+                    } else {
+                        // Run ends with no `\n` and no overflow: buffer the tail.
+                        self.inner.extend_from_slice(&run[i..]);
+                        i = run.len();
+                    }
+                }
+            }
+        }
+        emitted
+    }
+
     /// If the buffer has been idle since `cutoff`, drain and return it.
     pub(crate) fn flush_if_stale(&mut self, cutoff: Instant) -> Option<Vec<u8>> {
         if self.inner.is_empty() {
@@ -371,5 +437,65 @@ mod tests {
             assert!(buf.feed_byte_with_overflow(b).is_none());
         }
         assert_eq!(buf.feed_byte_with_overflow(b'\n'), Some(b"second".to_vec()));
+    }
+
+    /// Oracle: `feed_data_run` over a slice must emit exactly the `(line,
+    /// had_newline)` sequence that feeding the same bytes one-at-a-time through
+    /// `feed_byte_with_overflow` (+ the Data arm's `byte == b'\n'` flag) would,
+    /// and leave an identical residual partial. This is the byte-identity proof
+    /// for the H4a chunk path (spec §5 C-2/I-3).
+    fn assert_data_run_matches_per_byte(run: &[u8]) {
+        let mut bulk = LineBuffer::new();
+        let bulk_lines = bulk.feed_data_run(run);
+
+        let mut per_byte = LineBuffer::new();
+        let mut pb_lines: Vec<(Vec<u8>, bool)> = Vec::new();
+        for &b in run {
+            if let Some(line) = per_byte.feed_byte_with_overflow(b) {
+                pb_lines.push((line, b == b'\n'));
+            }
+        }
+        assert_eq!(bulk_lines, pb_lines, "emitted (line,newline) differ for run len {}", run.len());
+        assert_eq!(
+            bulk.drain(),
+            per_byte.drain(),
+            "residual partial differs for run len {}",
+            run.len()
+        );
+    }
+
+    #[test]
+    fn feed_data_run_matches_per_byte_oracle() {
+        assert_data_run_matches_per_byte(b"");
+        assert_data_run_matches_per_byte(b"hello world\n");
+        assert_data_run_matches_per_byte(b"a\nb\nc\n");
+        assert_data_run_matches_per_byte(b"partial without newline");
+        assert_data_run_matches_per_byte(b"line1\npartial2");
+        assert_data_run_matches_per_byte(b"\n\n\n");
+        assert_data_run_matches_per_byte(b"trailing\n\n");
+        let max = MAX_BUFFER_BYTES;
+        assert_data_run_matches_per_byte(&vec![b'x'; max]); // exactly cap, no newline -> partial
+        assert_data_run_matches_per_byte(&vec![b'x'; max + 1]); // cap+1 -> one overflow blob
+        assert_data_run_matches_per_byte(&vec![b'x'; 2 * max + 5]); // multiple overflow blobs
+        let mut nl_at_overflow = vec![b'x'; max]; // simultaneous overflow + newline
+        nl_at_overflow.push(b'\n');
+        assert_data_run_matches_per_byte(&nl_at_overflow);
+        let mut over_then_nl = vec![b'x'; max + 1];
+        over_then_nl.push(b'\n');
+        assert_data_run_matches_per_byte(&over_then_nl);
+        let mut nl_then_tail = vec![b'x'; max - 1]; // newline as the max-th byte, then more
+        nl_then_tail.push(b'\n');
+        nl_then_tail.extend_from_slice(b"tail\nmore");
+        assert_data_run_matches_per_byte(&nl_then_tail);
+    }
+
+    #[test]
+    fn feed_data_run_across_calls_preserves_partial() {
+        // A line split across two runs (as a real PTY would deliver) must emit
+        // once, on the run carrying the newline, with the joined content.
+        let mut buf = LineBuffer::new();
+        assert!(buf.feed_data_run(b"abc").is_empty(), "no newline yet -> nothing emitted");
+        let lines = buf.feed_data_run(b"def\n");
+        assert_eq!(lines, vec![(b"abcdef".to_vec(), true)]);
     }
 }
