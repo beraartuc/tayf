@@ -673,7 +673,7 @@ Within the pipeline (micro-bench shape deltas):
 
 **Fundable bottlenecks, ranked by data (for the Phase 2 checkpoint):**
 
-| Rank | Bottleneck | Module | DOKUNULMAZ? | Why (data) |
+| Rank | Bottleneck | Module | Off-limits? | Why (data) |
 |---|---|---|---|---|
 | 1 | Per-byte `Instant::now()` + O(L²) `memchr` rescan in line buffering (H1) | `line_buffer.rs` | **No** (low risk) | Paid by every shape; ~16M clock reads + quadratic rescans per 16 MiB. Highest ROI / lowest risk. |
 | 2 | Per-byte `AnsiSm::step` + single-byte buffer feed → chunk-level (H4) | `pipeline.rs` | **Yes** (security-gate) | The per-byte loop itself; biggest structural win, higher risk. |
@@ -691,8 +691,8 @@ whole accumulated buffer on every byte (O(L²) across a line). Replaced with an
 O(1) push + single `byte == b'\n'` check, exploiting the invariant that the
 buffer never holds an interior newline (a `debug_assert` now guards it). The
 per-byte `Instant::now()` clock — a Phase-1 hypothesis — was first measured by a
-throwaway spike and found negligible (~1%), so it was left in place. Not a
-DOKUNULMAZ change (only `src/line_buffer.rs`); no security gate needed.
+throwaway spike and found negligible (~1%), so it was left in place. Not an
+off-limits-module change (only `src/line_buffer.rs`); no security gate needed.
 Behavior byte-identical (788 lib tests pass, +2 regression tests).
 
 *v0.8.2 follow-up:* `feed_byte_with_overflow` was the per-byte hot path in
@@ -736,14 +736,14 @@ slightly run-to-run; the tayf-side drop is the real signal.)
 
 ### Disposition
 
-One non-DOKUNULMAZ change cut end-to-end tayf streaming time by **−28% (prose,
+One non-off-limits-module change cut end-to-end tayf streaming time by **−28% (prose,
 968→701 ms), −18% (log, 1646→1354 ms), −30% (ansi, 856→598 ms)**, lifting tayf
 bulk throughput from ~16.5 to ~23 MiB/s on prose. The in-process micro-bench
 roughly halved on every shape (prose −48%, log −36%, ansi −51%). Real,
 low-risk progress. **§7's `<20%`-vs-cat is still far off** — the remaining cost
 is the per-byte `AnsiSm::step` loop + single-byte buffer feed (H4) and, on
 matching lines, `apply_rules` (the log shape stays the worst). H4 is the next
-lever but lives in DOKUNULMAZ `pipeline.rs` → a future security-gated step. See
+lever but lives in off-limits `pipeline.rs` → a future security-gated step. See
 the Phase-1 fundable-bottlenecks table above.
 
 ## v0.8.2 — H4 chunk-level pipeline (recorded 2026-05-30)
@@ -855,4 +855,5 @@ different matching strategy (single combined regex / Aho-Corasick literal-prefix
 prefilter / SIMD) — a major redesign, out of scope for the v0.8.x finale and
 deliberately deferred. Spec §7's literal "<20% vs cat" is unreachable for a
 byte-transforming wrapper; the honest result is the cumulative v0.8.x relative
-improvement (prose ~3.0×, log ~1.7×, ansi ~2.1× vs v0.8.0). Perf series: DONE.
+improvement (e2e streaming time: prose ~3.0×, log ~1.7×, ansi ~2.1× vs v0.8.0).
+Perf series: DONE.
