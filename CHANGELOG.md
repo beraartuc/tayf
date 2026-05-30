@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-30
+
+Profile-first performance cycle: measure where the v0.8.0-measured overhead
+actually lives, then take the highest-ROI low-risk optimization. The hot-path
+modules `src/pty.rs` / `src/runtime.rs` / `src/pipeline.rs` were NOT modified;
+the only production change is in `src/line_buffer.rs`.
+
+### Added
+- Attribution benchmarks. `benches/e2e_overhead.rs` gains a `tayf --bypass`
+  column that splits pure I/O-loop overhead (bypass vs `cat`) from total
+  pipeline cost (full vs bypass). New `benches/pipeline_feed.rs` (criterion)
+  measures `Pipeline::feed` in-process to a `Vec` sink, splitting the
+  pipeline-internal cost across the prose / log / ansi shapes. Numbers and
+  analysis in `benches/BASELINE.md`. No new dependencies.
+
+### Performance
+- `LineBuffer::feed_byte_with_overflow` (the per-byte hot path) no longer
+  delegates to the general `feed_with_overflow`, which re-scanned the whole
+  accumulated buffer for a newline on every byte (O(L²) across a line). It now
+  pushes the byte and compares it to `\n` — O(1) — using the invariant that the
+  buffer never holds an interior newline (guarded by a `debug_assert`). Measured
+  end-to-end: tayf streaming time dropped ~28% (prose), ~18% (log), ~30% (ansi)
+  versus the v0.8.1 Phase-1 baseline; the in-process pipeline micro-bench
+  roughly halved on every shape. Behavior is byte-identical (two regression
+  tests added). The general `feed_with_overflow` is unchanged.
+
+### Notes
+- Spec §7's "<20% overhead vs native `cat`" is still not met on bulk streams.
+  The attribution shows the dominant remaining cost is the per-byte
+  `AnsiSm::step` loop + single-byte line-buffer feed, which lives in the
+  off-limits hot-path module `src/pipeline.rs`; reworking it to chunk-level is
+  deferred to a future security-gated cycle.
+
 ## [0.8.0] - 2026-05-30
 
 Measurement-first performance cycle. No `src/` changes — the hot-path
