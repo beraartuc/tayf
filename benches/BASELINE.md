@@ -679,3 +679,60 @@ Within the pipeline (micro-bench shape deltas):
 
 This feeds the Phase 2 scope checkpoint — no optimization is chosen here;
 this section only attributes the cost.
+
+## v0.8.1 — Phase 2 line_buffer O(1) fast path (recorded 2026-05-30)
+
+First Phase-2 optimization (hypothesis H1, narrowed): `LineBuffer::feed_byte_with_overflow`
+delegated to the general `feed_with_overflow`, which `memchr`-rescanned the
+whole accumulated buffer on every byte (O(L²) across a line). Replaced with an
+O(1) push + single `byte == b'\n'` check, exploiting the invariant that the
+buffer never holds an interior newline (a `debug_assert` now guards it). The
+per-byte `Instant::now()` clock — a Phase-1 hypothesis — was first measured by a
+throwaway spike and found negligible (~1%), so it was left in place. Not a
+DOKUNULMAZ change (only `src/line_buffer.rs`); no security gate needed.
+Behavior byte-identical (788 lib tests pass, +2 regression tests).
+
+### pipeline_feed micro-bench (in-process, Vec sink) — Phase 1 → Phase 2
+
+| Shape | P1 time | P2 time | P1 thrpt | P2 thrpt | delta (P1→P2) |
+|---|---|---|---|---|---|
+| prose | 42.13 ms | 21.89 ms | 23.73 MiB/s | 45.67 MiB/s | −48.0% time / +92.5% thrpt |
+| log | 82.39 ms | 52.63 ms | 12.14 MiB/s | 19.00 MiB/s | −36.1% time / +56.5% thrpt |
+| ansi | 36.17 ms | 17.84 ms | 27.65 MiB/s | 56.05 MiB/s | −50.7% time / +102.7% thrpt |
+
+(All three roughly halve. The per-byte line-buffer overhead this fix removed is
+paid by every shape regardless of matching, so even ansi — whose bytes mostly
+route through the SGR-sequence path — gains, because each Data byte still went
+through the O(L²) buffer. Deltas computed from the recorded P1 medians vs the P2
+run; criterion's own `change:` for prose is smaller because the throwaway clock
+spike had overwritten prose's stored criterion baseline.)
+
+### e2e end-to-end overhead — Phase 1 → Phase 2 (median ms, ~16 MiB/shape)
+
+Columns: cat / bypass are this (P2) run's medians; tayf and full-ovh% shown for
+both phases.
+
+| Shape | cat (P2) | bypass (P2) | tayf P1 | tayf P2 | full ovh% P1 | full ovh% P2 |
+|---|---|---|---|---|---|---|
+| low-match-prose | 103.40 | 140.16 | 968.11 | 700.64 | +772.11% | +577.58% |
+| high-match-log | 103.41 | 136.54 | 1646.17 | 1354.09 | +1419.07% | +1209.39% |
+| ansi-passthrough | 116.40 | 156.29 | 856.48 | 598.17 | +601.14% | +413.88% |
+
+(min/med/max ms P2 — prose: cat [96.15/103.40/112.98] bypass
+[121.24/140.16/233.03] tayf [687.28/700.64/705.45]; log: cat
+[92.14/103.41/114.79] bypass [127.03/136.54/156.71] tayf
+[1334.16/1354.09/1404.66]; ansi: cat [107.54/116.40/130.56] bypass
+[153.49/156.29/167.26] tayf [590.07/598.17/605.77]. cat/bypass shift
+slightly run-to-run; the tayf-side drop is the real signal.)
+
+### Disposition
+
+One non-DOKUNULMAZ change cut end-to-end tayf streaming time by **−28% (prose,
+968→701 ms), −18% (log, 1646→1354 ms), −30% (ansi, 856→598 ms)**, lifting tayf
+bulk throughput from ~16.5 to ~23 MiB/s on prose. The in-process micro-bench
+roughly halved on every shape (prose −48%, log −36%, ansi −51%). Real,
+low-risk progress. **§7's `<20%`-vs-cat is still far off** — the remaining cost
+is the per-byte `AnsiSm::step` loop + single-byte buffer feed (H4) and, on
+matching lines, `apply_rules` (the log shape stays the worst). H4 is the next
+lever but lives in DOKUNULMAZ `pipeline.rs` → a future security-gated step. See
+the Phase-1 fundable-bottlenecks table above.
