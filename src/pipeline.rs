@@ -73,7 +73,21 @@ pub(crate) fn apply_rules<W: Write>(
     out: &mut W,
 ) -> std::io::Result<()> {
     let snapshot: Arc<Compiled> = compiled_handle.load_full();
-    let runs = select_runs(line, snapshot.as_ref(), scratch);
+    apply_rules_with(line, snapshot.as_ref(), scratch, out)
+}
+
+/// Apply an already-snapshotted rule set to one line. Same emit semantics as
+/// [`apply_rules`]; takes `&Compiled` so the caller can reuse a single
+/// `ArcSwap::load_full` for both the `respect_existing_colors` gate and
+/// styling (one snapshot per line — a reload landing mid-line can never split
+/// the gate from the styling; v0.5.6 Karar 11).
+pub(crate) fn apply_rules_with<W: Write>(
+    line: &[u8],
+    compiled: &Compiled,
+    scratch: &mut PipelineScratch,
+    out: &mut W,
+) -> std::io::Result<()> {
+    let runs = select_runs(line, compiled, scratch);
 
     let mut cursor = 0usize;
     for &(start, end, style) in runs {
@@ -603,14 +617,15 @@ impl Pipeline {
     ///
     /// Resets both line flags after handling.
     fn apply_or_passthrough<W: Write>(&mut self, line: &[u8], out: &mut W) -> std::io::Result<()> {
-        // Karar 11: snapshot Compiled at line boundary.
+        // Karar 11: one snapshot per line drives BOTH the skip gate and styling,
+        // so a reload landing mid-line cannot split them.
         let compiled = self.rules.load_full();
         let skip_rules =
             self.line_has_string_payload || (compiled.respect_existing_colors && self.line_has_sgr);
         if skip_rules {
             out.write_all(line)?;
         } else {
-            apply_rules(line, &self.rules, &mut self.scratch, out)?;
+            apply_rules_with(line, compiled.as_ref(), &mut self.scratch, out)?;
         }
         self.line_has_sgr = false;
         self.line_has_string_payload = false;
@@ -1470,6 +1485,20 @@ mod rule_tests {
             assert!(w[0].start <= w[1].start, "spans sorted by start ASC");
             assert!(w[0].end <= w[1].start, "non-overlapping");
         }
+    }
+
+    #[test]
+    fn apply_rules_wrapper_matches_apply_rules_with_snapshot() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let handle = ArcSwap::from_pointee(Compiled::load_builtins().unwrap());
+        let mut scratch_a = PipelineScratch::default();
+        let mut scratch_b = PipelineScratch::default();
+        let mut out_a = Vec::new();
+        let mut out_b = Vec::new();
+        let line = b"connect to 192.168.1.1 at 2026-05-30T10:00:00Z\n";
+        apply_rules(line, &handle, &mut scratch_a, &mut out_a).unwrap();
+        apply_rules_with(line, &compiled, &mut scratch_b, &mut out_b).unwrap();
+        assert_eq!(out_a, out_b, "wrapper and direct-snapshot paths must be byte-identical");
     }
 }
 
