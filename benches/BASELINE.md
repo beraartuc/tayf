@@ -798,3 +798,61 @@ applies regex per line cannot reach native `cat`; the honest disposition stays
 relative-improvement, not the literal §7 target. The dominant remaining cost on
 matching streams is `apply_rules` itself (the log shape); the per-byte routing
 overhead H4 targeted is gone.
+
+## v0.8.3 — perf-series finale (recorded 2026-05-31)
+
+**No perf code change.** `src/pipeline.rs` / `src/rules.rs` logic is byte-identical
+to v0.8.2 (the only v0.8.3 edits are doc-comments — the EN-cleanup). The v0.8.2
+baseline numbers above remain authoritative. This section records the spike-first
+measurement that closes the perf series. Full detail:
+`docs/superpowers/reviews/2026-05-31-v0.8.3-phase0-checkpoint.md`.
+
+Two candidate levers were spiked (throwaway, byte-identity-shaped) and both
+measured as not worth shipping. Session note: this run was noisier than the
+v0.8.2 session (base `pipeline_feed/prose` measured 138.10 MiB/s vs the stored
+v0.8.2 146.96; e2e pipeline-independent `bypass_ms` drifted ~+20% between runs).
+All comparisons below are back-to-back same-session; criterion `change:` accounts
+for within-run variance, and the signs are robust.
+
+### H5 — no-match fast-lane → ACCEPT-DOCUMENTED (not adopted)
+
+`pipeline_feed` base → spike (in-process micro-bench, the clean signal):
+
+| shape | base MiB/s | spike MiB/s | Δ | criterion |
+|---|---|---|---|---|
+| prose | 138.10 | 125.31 | −9.26% | regressed |
+| log   | 25.536 | 24.444 | −4.28% | regressed |
+| ansi  | 108.01 | 105.35 | −2.46% | regressed |
+
+No prose win (vs a hypothesized ~446 MiB/s ceiling). `RegexSet::is_match(whole_run)`
+visits every byte like the sum of per-line `RegexSet::matches(line)` → the regex
+work is a wash; a fast-lane only reclaims the per-line bookkeeping that v0.8.1/8.2
+already made cheap, then adds guard + `memrchr` + tail-buffer overhead. (e2e was
+confounded by ambient load — `bypass_ms`, which never runs the pipeline, rose ~+20%
+in the same run — so the in-process bench is the evidence.)
+
+### H6 — apply_rules internals → ACCEPT-DOCUMENTED (not adopted)
+
+Combined ceiling of skip-final-sort (≤1 contributing rule) + skip-priority-sort
+(uniform priorities), `pipeline_feed/log` base → probe:
+
+| shape | base MiB/s | probe MiB/s | criterion change |
+|---|---|---|---|
+| log | 26.625 | 26.702 | time [−1.30% / −0.29% / +0.80%], p=0.60 → No change detected |
+
+The non-regex overhead (both sorts + load) is below criterion's measurement floor
+(~0.3% on the log shape); on the dedicated `apply_rules` `throughput` bench the
+probe was flat-to-slightly-slower (guard cost exceeds the sort savings on the tiny
+matched-index slices). H6-c (per-run `load_full` hoist) ACCEPT-DOCUMENTED by
+transitivity (smallest expected win).
+
+### Disposition
+
+The dominant remaining cost is the irreducible regex scan; v0.8.0–v0.8.2 already
+captured the structural wins (H1 line-buffer O(1), H2 single snapshot/line, H4
+chunk-level feed). Perf is at the architectural floor. Further gains require a
+different matching strategy (single combined regex / Aho-Corasick literal-prefix
+prefilter / SIMD) — a major redesign, out of scope for the v0.8.x finale and
+deliberately deferred. Spec §7's literal "<20% vs cat" is unreachable for a
+byte-transforming wrapper; the honest result is the cumulative v0.8.x relative
+improvement (prose ~3.0×, log ~1.7×, ansi ~2.1× vs v0.8.0). Perf series: DONE.

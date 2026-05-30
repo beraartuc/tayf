@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-05-31
+
+Performance-series finale. A measurement-first (spike-first) investigation of the
+two remaining optimization levers found neither worth shipping: the pipeline's
+dominant cost is now the irreducible regex scan, and v0.8.0–v0.8.2 already captured
+the structural wins. v0.8.3 ships an English-cleanup pass and records the finding;
+no hot-path code changed.
+
+### Changed
+
+- Anglicized leftover Turkish `Karar`/`karar` → `Decision`/`decision` in
+  doc-comments across `src/` and `tests/`, and corrected Turkish-jargon leaks
+  (`DOKUNULMAZ`, `paralel`) in older CHANGELOG entries. Comment/text only; no
+  behavior change.
+
+### Performance
+
+- **H5 (no-match fast-lane): investigated, not adopted.** A whole-run
+  `RegexSet::is_match` pre-scan to skip per-line rule application on no-match runs
+  yielded no throughput win (a byte-identical spike regressed `pipeline_feed/prose`
+  rather than improving it). `RegexSet::is_match` over a run visits every byte just
+  as the sum of per-line `RegexSet::matches` does, so the regex work is unchanged;
+  the per-line bookkeeping a fast-lane would skip was already made cheap in
+  v0.8.1/v0.8.2.
+- **H6 (apply_rules internals): investigated, not adopted.** Skipping the final
+  run-sort and the priority-sort on the common case measured 0% ± noise on the
+  high-match shape — the sorts are below the measurement floor; the regex scan
+  dominates `apply_rules`.
+- **Perf series concluded.** The remaining overhead is the regex scan itself,
+  irreducible without a different matching strategy (combined regex / Aho-Corasick
+  literal prefilter / SIMD), which is out of scope here. The cumulative v0.8.x
+  improvement vs v0.8.0 is roughly prose 3.0×, log 1.7×, ansi 2.1×. See
+  `docs/superpowers/reviews/2026-05-31-v0.8.3-phase0-checkpoint.md`.
+
 ## [0.8.2] - 2026-05-30
 
 Performance cycle (H4, security-gated): the output pipeline now processes input
