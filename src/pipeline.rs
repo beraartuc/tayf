@@ -502,6 +502,7 @@ impl Pipeline {
                 out.write_all(&[byte])?;
                 let event = self.sm.step(byte);
                 if matches!(event, crate::ansi::StepEvent::ForceStringTerminate) {
+                    // No re-step: byte was already written to stdout above; SM returns to Ground and the next iteration re-classifies.
                     out.write_all(b"\x1b\\")?;
                 }
                 i += 1;
@@ -540,14 +541,12 @@ impl Pipeline {
         match event {
             StepEvent::Data => {
                 debug_assert!(self.sequence_scratch.is_empty());
-                if let Some(line) = self.buffer.feed_byte_with_overflow(byte) {
+                // Reachable only via the ForceStringTerminate re-step (a non-ESC
+                // byte re-classified in Ground). Route through the same bulk feeder
+                // as the fast path (feed_byte_with_overflow retired in v0.8.2).
+                for (line, trailing_newline) in self.buffer.feed_data_run(&[byte]) {
                     self.apply_or_passthrough(&line, out)?;
-                    // `feed_byte_with_overflow` strips the trailing `\n` from
-                    // newline-terminated lines (see line_buffer.rs); restore
-                    // it here so byte-for-byte fidelity holds. The slice-API
-                    // path (used for scratch drains in dispatch_completed_sequence)
-                    // keeps `\n` in the line, so it does not need this.
-                    if byte == b'\n' {
+                    if trailing_newline {
                         out.write_all(b"\n")?;
                     }
                 }
@@ -1520,6 +1519,7 @@ mod rule_tests {
 
     #[test]
     fn apply_rules_wrapper_matches_apply_rules_with_snapshot() {
+        // Both instances load the same deterministic builtin rules, so the two paths must produce identical bytes.
         let compiled = Compiled::load_builtins().unwrap();
         let handle = ArcSwap::from_pointee(Compiled::load_builtins().unwrap());
         let mut scratch_a = PipelineScratch::default();

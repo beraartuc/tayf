@@ -653,10 +653,13 @@ gap is the I/O layer the micro-bench excludes. The two measurements agree.
 
 Within the pipeline (micro-bench shape deltas):
 - **prose (23.7 MiB/s)** = per-byte machinery (`AnsiSm::step` per byte +
-  `LineBuffer::feed_byte_with_overflow` per byte) + a per-line
+  `LineBuffer::feed_byte_with_overflow` per byte, as of Phase 1) + a per-line
   `RegexSet::matches` scan that mostly misses. apply_rules does almost no
   matching work here, so this is largely the **per-byte loop + line-buffer
-  floor** (hypotheses H1 `line_buffer.rs` + H4 `pipeline.rs`).
+  floor** (hypotheses H1 `line_buffer.rs` + H4 `pipeline.rs`). Note: v0.8.2
+  (H4a) replaced the per-byte `feed_byte_with_overflow` call in `Pipeline::feed`
+  with chunk-level `LineBuffer::feed_data_run`; `feed_byte_with_overflow` was
+  retired and deleted after the oracle test proved byte-identity.
 - **log (12.1 MiB/s, slowest)** = prose floor + full `apply_rules` on hits
   (`find_iter` + SGR emit). It is ~2× slower than prose (82 ms vs 42 ms) —
   that delta is the matching + SGR-emit cost on a high-match line.
@@ -691,6 +694,12 @@ per-byte `Instant::now()` clock — a Phase-1 hypothesis — was first measured 
 throwaway spike and found negligible (~1%), so it was left in place. Not a
 DOKUNULMAZ change (only `src/line_buffer.rs`); no security gate needed.
 Behavior byte-identical (788 lib tests pass, +2 regression tests).
+
+*v0.8.2 follow-up:* `feed_byte_with_overflow` was the per-byte hot path in
+`Pipeline::feed`. v0.8.2 (H4a chunk-level rewrite) replaced every call site with
+`LineBuffer::feed_data_run`, then retired and deleted `feed_byte_with_overflow`.
+The byte-strip and overflow-no-strip guarantees it proved are re-pinned as static
+assertions in `feed_data_run_emits_expected_static_cases`.
 
 ### pipeline_feed micro-bench (in-process, Vec sink) — Phase 1 → Phase 2
 
