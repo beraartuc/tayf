@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - Unreleased
+
+Performance cycle (H4, security-gated): the output pipeline now processes input
+chunk-by-chunk instead of byte-by-byte. The DOKUNULMAZ `src/pipeline.rs` was
+modified under a mandatory security review; `src/runtime.rs` and `src/pty.rs`
+(termios / raw-mode / signal forwarding) were not touched.
+
+### Performance
+- `Pipeline::feed` rewritten from a per-byte loop to a chunk-level one: while in
+  the ANSI ground state, the run up to the next escape is batched through a new
+  byte-identical `LineBuffer::feed_data_run` (or written verbatim in TUI
+  passthrough); only escape-sequence bytes are still processed per byte. This
+  retires the former per-byte `feed_byte_with_overflow`. Measured end-to-end,
+  `tayf` streaming time dropped ~54% (prose), ~27% (log), ~31% (ansi) versus
+  0.8.1; the in-process pipeline micro-bench rose +221% / +35% / +92%. Output is
+  byte-for-byte identical, pinned by a `feed_data_run` oracle against the former
+  per-byte path plus chunk-boundary-invariance tests. `cat`'s `<20%` overhead
+  target (spec §7) is still not met for a byte-transforming wrapper — see
+  `benches/BASELINE.md` for the full disposition.
+- One rule-set snapshot is now loaded per line instead of two, removing a
+  redundant atomic load and a latent inconsistency where a reload landing
+  mid-line could apply different snapshots to the skip gate and the styling.
+
+### Changed
+- `memchr` is now a direct dependency (it was already in the tree transitively
+  via `regex`, so no new code is added) and backs the escape-delimiter and
+  newline byte-scans (+11.5% prose / +9.7% ansi on the pipeline micro-bench).
+
 ## [0.8.1] - 2026-05-30
 
 Profile-first performance cycle: measure where the v0.8.0-measured overhead

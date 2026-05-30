@@ -745,3 +745,56 @@ is the per-byte `AnsiSm::step` loop + single-byte buffer feed (H4) and, on
 matching lines, `apply_rules` (the log shape stays the worst). H4 is the next
 lever but lives in DOKUNULMAZ `pipeline.rs` → a future security-gated step. See
 the Phase-1 fundable-bottlenecks table above.
+
+## v0.8.2 — H4 chunk-level pipeline (recorded 2026-05-30)
+
+The H4 cycle (security-gated; spec `2026-05-30-tayf-v0.8.2-chunk-level-pipeline.md`)
+rewrote `Pipeline::feed` from a per-byte loop to a chunk-level one: in `Ground`,
+the run up to the next ESC is batched through the new byte-identical
+`LineBuffer::feed_data_run` (or written verbatim in TUI mode); only sequence
+bytes go per-byte. Plus H2 (one rule snapshot per line) and `memchr` for the
+ESC/newline scans. Byte-for-byte identical (789 lib tests, incl. a `feed_data_run`
+oracle vs the retired per-byte path + chunk-boundary-invariance pipeline tests).
+Baseline = v0.8.1 (`fc02a43`); both rows measured on the same machine/session.
+
+### pipeline_feed micro-bench (in-process, Vec sink, ~1 MiB per shape) — median MiB/s
+
+| Shape | v0.8.1 | v0.8.2 | Δ thrpt | v0.8.1 ms | v0.8.2 ms |
+|---|---|---|---|---|---|
+| prose | 45.72 | 146.96 | +221% | 21.864 | 6.8026 |
+| log | 19.13 | 25.87 | +35% | 52.267 | 38.661 |
+| ansi | 56.77 | 109.05 | +92% | 17.613 | 9.1685 |
+
+### e2e end-to-end overhead (median ms, ~16 MiB/shape; `samples=8 warmup=2`)
+
+| Shape | cat 8.1→8.2 | bypass 8.1→8.2 | tayf 8.1→8.2 | tayf stream Δ | full_ovh% 8.1→8.2 |
+|---|---|---|---|---|---|
+| low-match-prose | 103.93→105.62 | 140.45→144.65 | 698.74→324.32 | **−53.6%** | 572.34%→207.06% |
+| high-match-log | 101.80→103.81 | 135.34→135.74 | 1354.75→988.45 | **−27.0%** | 1230.86%→852.18% |
+| ansi-passthrough | 126.85→121.18 | 159.21→162.13 | 599.78→411.37 | **−31.4%** | 372.84%→239.46% |
+
+`cat` and `bypass` medians are stable run-to-run (the I/O loop is untouched), so
+the `tayf` drop is the real signal. `bypass_ovh%` (pure I/O loop vs `cat`)
+remains ~30–37% — unchanged, as expected.
+
+### memchr decision (measured, kept)
+
+`memchr 2.8` was already a transitive dep via `regex` (zero new audit surface);
+promoting it to a direct dep and using it for the two byte-scans measured, on
+`pipeline_feed` vs the std `iter().position` scan: **prose +11.5%** (131.82 →
+146.96 MiB/s), **ansi +9.7%** (99.45 → 109.05), **log ~0%** (26.11 → 25.87,
+within noise, p=0.06). Kept — a free win on the exact operation it accelerates.
+
+### Disposition
+
+The chunk-level rewrite cut end-to-end `tayf` streaming time by **−54% (prose,
+699→324 ms), −27% (log, 1355→988 ms), −31% (ansi, 600→411 ms)** vs v0.8.1, and
+the in-process micro-bench rose **+221% / +35% / +92%**. This met and exceeded
+the cycle's data-driven target (the Phase-1 chunk-level spike measured a ceiling
+of ~−49 / −24 / −18% e2e; the byte-identical shipping form matched it and, on
+ansi, beat it). **§7's `<20%`-vs-cat is still NOT met** (full_ovh% 207 / 852 /
+239%) — a byte-transforming wrapper that read-by-read copies the PTY stream and
+applies regex per line cannot reach native `cat`; the honest disposition stays
+relative-improvement, not the literal §7 target. The dominant remaining cost on
+matching streams is `apply_rules` itself (the log shape); the per-byte routing
+overhead H4 targeted is gone.
