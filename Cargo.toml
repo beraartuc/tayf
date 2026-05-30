@@ -33,6 +33,12 @@ path = "src/lib.rs"
 [dependencies]
 arc-swap = "1.9"
 clap = { version = "4.6", features = ["derive"] }
+# reason: memchr — dual MIT/Apache-2.0, the canonical SIMD byte-search crate
+# (maintained by BurntSushi; already in our tree as a transitive dep of regex,
+# so zero new audit surface). Used by the chunk-level pipeline to scan for the
+# ESC delimiter and line newlines; measured +11.5% prose / +9.7% ansi on the
+# pipeline_feed micro-bench vs the std `iter().position` scan.
+memchr = "2.8"
 nix = { version = "0.28", features = ["term", "signal", "user", "fs", "poll"] }
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
 portable-pty = "0.9"

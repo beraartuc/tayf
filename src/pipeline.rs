@@ -472,7 +472,7 @@ impl Pipeline {
             // Fast path: Ground run up to the next ESC.
             if self.sm.is_ground() {
                 let rest = &chunk[i..];
-                let run_len = rest.iter().position(|&b| b == 0x1b).unwrap_or(rest.len());
+                let run_len = memchr::memchr(0x1b, rest).unwrap_or(rest.len());
                 if run_len > 0 {
                     let run = &rest[..run_len];
                     // C-1: re-read the TUI flag at the head of every run (it flips

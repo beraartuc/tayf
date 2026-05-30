@@ -1780,6 +1780,7 @@ dependencies = [
  "arc-swap",
  "clap",
  "criterion",
+ "memchr",
  "nix 0.28.0",
  "notify",
  "portable-pty",

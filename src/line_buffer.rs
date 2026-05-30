@@ -166,7 +166,7 @@ impl LineBuffer {
 }
 
 fn memchr_newline(haystack: &[u8]) -> Option<usize> {
-    haystack.iter().position(|&b| b == b'\n')
+    memchr::memchr(b'\n', haystack)
 }
 
 #[cfg(test)]
