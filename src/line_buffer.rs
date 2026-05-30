@@ -35,7 +35,7 @@ impl LineBuffer {
     /// "line" without regex application. The caller is expected to log the
     /// overflow.
     // reason: thin overflow-discarding wrapper around `feed_with_overflow`;
-    // the live pipeline path uses `feed_data_run` (single-byte) or
+    // the live pipeline path uses `feed_data_run` (chunk-level Data runs) or
     // `feed_with_overflow` (sequence scratch). Kept as part of the type's
     // documented surface and exercised by unit tests.
     #[allow(dead_code)]
@@ -84,8 +84,7 @@ impl LineBuffer {
     /// stripped (matching the former per-byte `feed_byte_with_overflow`
     /// contract), and `trailing_newline` tells the caller to re-emit a raw
     /// `\n` after applying rules. A single line exceeding `MAX_BUFFER_BYTES`
-    /// is flushed as `(blob, false)` with a warning — byte-identical to feeding
-    /// each byte through `feed_byte_with_overflow`. The partial tail stays
+    /// is flushed as `(blob, false)` with a warning. The partial tail stays
     /// buffered across calls. See spec §5 C-2 (`\n`-strip contract) and I-3
     /// (per-line overflow framing).
     ///
