@@ -583,3 +583,99 @@ This closes the long-standing §7 deferral: §7 is now measured, and the
 answer is that tayf does not meet the literal `<20%`-vs-cat throughput
 target on bulk streams. Re-run with `cargo bench --bench e2e_overhead` after
 any v0.8.1 optimization to track progress against this baseline.
+
+## v0.8.1 — Phase 1 attribution (recorded 2026-05-30)
+
+Splits the v0.8.0 end-to-end overhead into stages, to direct Phase 2
+optimization. No `src/` behavior change (only a behavior-neutral
+`__bench__::BenchPipeline` shim). Two measurements:
+
+- **e2e bypass differential** (`cargo bench --bench e2e_overhead`): adds a
+  `tayf --bypass` column (`apply_colors=false` — the I/O loop runs, the
+  pipeline is never fed). `bypass vs cat` = pure I/O-loop overhead;
+  `full vs bypass` = total pipeline cost on top.
+- **pipeline_feed micro-bench** (`cargo bench --bench pipeline_feed`):
+  in-process `Pipeline::feed` over the three corpus shapes to a `Vec` sink
+  (PTY/stdout excluded). Splits the pipeline-internal cost.
+
+- Host: Apple M2 Pro, macOS (Darwin arm64)
+- Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+- Profile: release (`cargo bench`)
+- Samples: e2e 10 + 3 warmup per side, ~16 MiB per shape; micro-bench
+  criterion defaults over ~1 MiB per shape.
+
+### e2e bypass differential (median ms; ~16 MiB per shape)
+
+| Shape | cat | bypass | tayf | bypass ovh% (I/O loop) | pipe cost% | full ovh% |
+|---|---|---|---|---|---|---|
+| low-match-prose | 111.01 | 138.83 | 968.11 | +25.06% | +597.36% | +772.11% |
+| high-match-log | 108.37 | 135.43 | 1646.17 | +24.97% | +1115.51% | +1419.07% |
+| ansi-passthrough | 122.16 | 166.93 | 856.48 | +36.65% | +413.09% | +601.14% |
+
+(min/med/max ms — prose: cat [83.79/111.01/170.36] bypass
+[134.94/138.83/154.21] tayf [958.74/968.11/984.67]; log: cat
+[99.62/108.37/119.28] bypass [128.77/135.43/142.13] tayf
+[1634.17/1646.17/1669.96]; ansi: cat [91.02/122.16/136.84] bypass
+[149.85/166.93/213.76] tayf [816.74/856.48/906.88].)
+
+### pipeline_feed micro-bench (in-process, Vec sink, ~1 MiB per shape)
+
+| Shape | time/iter (median) | throughput |
+|---|---|---|
+| prose | 42.13 ms | 23.73 MiB/s |
+| log | 82.39 ms | 12.14 MiB/s |
+| ansi | 36.17 ms | 27.65 MiB/s |
+
+### Attribution summary
+
+**The pipeline is the overwhelming bottleneck (+413% to +1115% on top of the
+I/O loop), and it is CPU-bound, not write-bound. The I/O loop is small but
+not free — it alone is +25% to +37% over cat, itself above the §7 target.**
+Findings:
+
+1. **I/O loop overhead (bypass vs cat) is +25–37%.** The double-PTY hop +
+   `read(2)` + per-chunk blocking write cost a quarter-to-a-third over cat —
+   modest next to the pipeline, but already past the §7 `<20%` line on its
+   own. The other ~6–15× of full overhead is **all pipeline** (`pipe cost%` =
+   +413% to +1115% on top of bypass).
+
+2. **The pipeline is slow even writing to a `Vec` (no syscall):** the
+   in-process micro-bench runs at 12–28 MiB/s vs cat's ~150 MiB/s. So
+   **write batching (hypothesis H3: `BufWriter` in `runtime.rs`) is NOT the
+   dominant cost** — a `Vec` sink removes all write-syscall cost and the
+   pipeline is still ~5–12× slower than cat. H3 could trim the +25–37% I/O
+   layer but cannot touch the dominant pipeline cost; de-prioritized vs
+   H1/H4 by the data.
+
+Cross-check (consistency): e2e prose full = 968 ms over 16 MiB ≈ 16.5 MiB/s;
+micro-bench prose = 23.7 MiB/s (no PTY/write). Same order of magnitude — the
+gap is the I/O layer the micro-bench excludes. The two measurements agree.
+
+Within the pipeline (micro-bench shape deltas):
+- **prose (23.7 MiB/s)** = per-byte machinery (`AnsiSm::step` per byte +
+  `LineBuffer::feed_byte_with_overflow` per byte) + a per-line
+  `RegexSet::matches` scan that mostly misses. apply_rules does almost no
+  matching work here, so this is largely the **per-byte loop + line-buffer
+  floor** (hypotheses H1 `line_buffer.rs` + H4 `pipeline.rs`).
+- **log (12.1 MiB/s, slowest)** = prose floor + full `apply_rules` on hits
+  (`find_iter` + SGR emit). It is ~2× slower than prose (82 ms vs 42 ms) —
+  that delta is the matching + SGR-emit cost on a high-match line.
+- **ansi (27.6 MiB/s, fastest)** = per-byte machinery + SGR-sequence routing
+  but **`apply_rules` is skipped** (`respect_existing_colors` default → SGR
+  lines pass verbatim). ansi is only ~17% faster than prose (36 ms vs 42 ms)
+  despite skipping the matcher entirely — so the per-line `RegexSet::matches`
+  scan that prose pays is a *modest* cost; the dominant floor in BOTH shapes
+  is the **per-byte loop**, which even the fastest shape cannot beat (27.6
+  MiB/s ≪ cat's ~150).
+
+**Fundable bottlenecks, ranked by data (for the Phase 2 checkpoint):**
+
+| Rank | Bottleneck | Module | DOKUNULMAZ? | Why (data) |
+|---|---|---|---|---|
+| 1 | Per-byte `Instant::now()` + O(L²) `memchr` rescan in line buffering (H1) | `line_buffer.rs` | **No** (low risk) | Paid by every shape; ~16M clock reads + quadratic rescans per 16 MiB. Highest ROI / lowest risk. |
+| 2 | Per-byte `AnsiSm::step` + single-byte buffer feed → chunk-level (H4) | `pipeline.rs` | **Yes** (security-gate) | The per-byte loop itself; biggest structural win, higher risk. |
+| 3 | Per-line `RegexSet::matches` scan + double `Arc::load_full` (H2) | `pipeline.rs` | **Yes** (security-gate) | prose-vs-ansi gap shows the per-line scan costs even on miss. |
+| — | Write batching / `BufWriter` (H3) | `runtime.rs` | Yes | **De-prioritized** — the I/O loop is +25–37% (could trim) but the Vec-sink bench shows the pipeline is still ~5–12× slow with zero write cost, so H3 cannot touch the dominant cost. |
+
+This feeds the Phase 2 scope checkpoint — no optimization is chosen here;
+this section only attributes the cost.
