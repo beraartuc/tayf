@@ -88,14 +88,29 @@ impl LineBuffer {
     /// consumers that route bytes through `AnsiSm::step` (spec §6.1). Used
     /// by the per-byte pipeline path in `pipeline::Pipeline::feed`.
     pub(crate) fn feed_byte_with_overflow(&mut self, byte: u8) -> Option<Vec<u8>> {
-        let (mut lines, overflow) = self.feed_with_overflow(&[byte]);
-        if let Some(Error::BufferOverflow { cap }) = overflow {
+        // Per-byte hot path. The general `feed_with_overflow` rescans the whole
+        // accumulated buffer for newlines on every call (O(L²) across a line);
+        // here we exploit the invariant that `inner` never holds a `\n` between
+        // calls (every completed line drains it, and the multi-byte path drains
+        // all newlines before returning). So after pushing one byte, the only
+        // possible newline is that byte. Push + a single comparison = O(1).
+        self.last_write = Instant::now();
+        self.inner.push(byte);
+
+        let overflow = self.inner.len() > MAX_BUFFER_BYTES;
+        if overflow {
+            let cap = MAX_BUFFER_BYTES;
             crate::log::warn_msg!("line buffer overflowed; cap={cap}");
+        } else if byte != b'\n' {
+            return None;
         }
-        let mut line = lines.pop()?;
-        // Slice API includes the trailing '\n' on newline-terminated lines;
-        // overflow flushes do not. Strip the newline when present so byte
-        // consumers get a clean payload.
+
+        // Either the cap was exceeded, or this byte completed a line: flush
+        // `inner` as the line and reset. Strip a trailing `\n` so byte consumers
+        // get a clean payload (matches the prior contract; overflow flushes that
+        // do not end in `\n` are returned verbatim).
+        let mut line = std::mem::take(&mut self.inner);
+        self.inner = Vec::with_capacity(4096);
         if line.last() == Some(&b'\n') {
             line.pop();
         }
@@ -309,5 +324,40 @@ mod tests {
         }
         let line2 = buf.feed_byte_with_overflow(b'\n').expect("line2");
         assert_eq!(line2, b"second");
+    }
+
+    #[test]
+    fn feed_byte_overflow_flushes_without_newline_strip() {
+        // Per-byte path: feeding MAX_BUFFER_BYTES+1 non-newline bytes must
+        // flush the accumulated buffer (no trailing newline to strip).
+        let mut buf = LineBuffer::new();
+        let mut flushed: Option<Vec<u8>> = None;
+        for _ in 0..=MAX_BUFFER_BYTES {
+            if let Some(line) = buf.feed_byte_with_overflow(b'x') {
+                flushed = Some(line);
+                break;
+            }
+        }
+        let line = flushed.expect("overflow must flush a line via the per-byte path");
+        assert_eq!(
+            line.len(),
+            MAX_BUFFER_BYTES + 1,
+            "overflow flush returns all accumulated bytes"
+        );
+        assert!(line.iter().all(|&b| b == b'x'), "no newline present, nothing stripped");
+    }
+
+    #[test]
+    fn feed_byte_resumes_after_newline_flush() {
+        // After a newline flush, the buffer must be empty and accept a fresh line.
+        let mut buf = LineBuffer::new();
+        for &b in b"first" {
+            assert!(buf.feed_byte_with_overflow(b).is_none());
+        }
+        assert_eq!(buf.feed_byte_with_overflow(b'\n'), Some(b"first".to_vec()));
+        for &b in b"second" {
+            assert!(buf.feed_byte_with_overflow(b).is_none());
+        }
+        assert_eq!(buf.feed_byte_with_overflow(b'\n'), Some(b"second".to_vec()));
     }
 }
