@@ -2,8 +2,11 @@
 //!
 //! Drives the release `tayf` binary inside a real PTY and times the
 //! streaming phase of `cat <corpus>` against a bare `/bin/sh` running the
-//! same command. Reports `overhead% = (tayf - cat) / cat * 100` per corpus
-//! shape against the spec §7 `<20%` target, plus throughput in MiB/s.
+//! same command. Reports three overhead columns per corpus shape:
+//!
+//! - `bypass_ovh%` — pure I/O-loop overhead (`tayf --bypass` vs `cat`)
+//! - `pipe_cost%`  — pipeline-internal cost (`tayf` full vs `tayf --bypass`)
+//! - `full_ovh%`   — total overhead (`tayf` full vs `cat`; spec §7 target <20%)
 //!
 //! NOT a criterion bench (`harness = false`): criterion's iteration model
 //! fits in-process microbenchmarks, not subprocess + PTY spawning. This is
@@ -11,7 +14,7 @@
 //! `cargo bench --bench e2e_overhead`. Numbers are recorded by hand in
 //! `benches/BASELINE.md`. Timing covers the streaming phase only (stdin
 //! write -> EOF); process spawn and the ~200 ms startup grace are excluded
-//! symmetrically from both sides (see spec §5.5).
+//! symmetrically from all three sides (see spec §5.5).
 //!
 //! Tuning env vars: `TAYF_E2E_SAMPLES` (default 10), `TAYF_E2E_WARMUP`
 //! (default 3), `TAYF_E2E_BYTES` (default 16 MiB).
@@ -127,62 +130,67 @@ fn main() {
     let target = env_usize("TAYF_E2E_BYTES", 16 * 1024 * 1024);
     let tayf = env!("CARGO_BIN_EXE_tayf");
 
-    println!("tayf v0.8.0 end-to-end overhead (spec §7 target: <20% vs native cat)");
+    println!("tayf v0.8.1 end-to-end overhead (spec §7 target: <20% full vs native cat)");
     println!("samples={samples} warmup={warmup} target_bytes={target}");
     println!("timing = streaming phase only (spawn + {STARTUP_GRACE:?} grace excluded, symmetric)");
     println!();
     println!(
-        "{:<18} {:>12} {:>12} {:>12} {:>10} {:>12} {:>12} {:>8}",
-        "shape",
-        "cat_med_ms",
-        "tayf_med_ms",
-        "overhead%",
-        "result",
-        "cat_MiB/s",
-        "tayf_MiB/s",
-        "bytes"
+        "{:<18} {:>10} {:>10} {:>10} {:>12} {:>12} {:>8}",
+        "shape", "cat_ms", "bypass_ms", "tayf_ms", "bypass_ovh%", "pipe_cost%", "full_ovh%"
     );
 
     for shape in SHAPES {
         let corpus = write_corpus(shape.template, target);
-        let bytes = std::fs::metadata(corpus.path()).expect("stat corpus").len() as f64;
         // NamedTempFile paths are alphanumeric under the temp dir (no spaces
         // or shell metacharacters), so the path needs no shell quoting here.
         let stdin = format!("cat {}\nexit\n", corpus.path().display());
 
         let cat_args: &[&str] = &[];
         let cat_env: &[(&str, &str)] = &[];
+        let bypass_args: &[&str] = &["--bypass", "--shell", "/bin/sh"];
+        let bypass_env: &[(&str, &str)] = &[("TAYF_DISABLE_BG_DETECT", "1")];
         let tayf_args: &[&str] = &["--shell", "/bin/sh"];
         let tayf_env: &[(&str, &str)] = &[("TAYF_DISABLE_BG_DETECT", "1")];
 
         for _ in 0..warmup {
             timed_run("/bin/sh", cat_args, cat_env, &stdin);
+            timed_run(tayf, bypass_args, bypass_env, &stdin);
             timed_run(tayf, tayf_args, tayf_env, &stdin);
         }
 
         let mut cat_ms = Vec::with_capacity(samples);
+        let mut bypass_ms = Vec::with_capacity(samples);
         let mut tayf_ms = Vec::with_capacity(samples);
         for _ in 0..samples {
             cat_ms.push(timed_run("/bin/sh", cat_args, cat_env, &stdin).as_secs_f64() * 1000.0);
+            bypass_ms.push(timed_run(tayf, bypass_args, bypass_env, &stdin).as_secs_f64() * 1000.0);
             tayf_ms.push(timed_run(tayf, tayf_args, tayf_env, &stdin).as_secs_f64() * 1000.0);
         }
 
         let cat_med = median(&cat_ms);
+        let bypass_med = median(&bypass_ms);
         let tayf_med = median(&tayf_ms);
-        let over = overhead_pct(tayf_med, cat_med);
-        let result = if over < 20.0 { "PASS" } else { "FAIL" };
-        let mib = bytes / (1024.0 * 1024.0);
-        let cat_thrpt = mib / (cat_med / 1000.0);
-        let tayf_thrpt = mib / (tayf_med / 1000.0);
+        let full_over = overhead_pct(tayf_med, cat_med);
+        let bypass_over = overhead_pct(bypass_med, cat_med);
+        let pipeline_cost = overhead_pct(tayf_med, bypass_med);
+        let result = if full_over < 20.0 { "PASS" } else { "FAIL" };
 
         println!(
-            "{:<18} {:>12.2} {:>12.2} {:>11.2}% {:>10} {:>12.1} {:>12.1} {:>8}",
-            shape.name, cat_med, tayf_med, over, result, cat_thrpt, tayf_thrpt, bytes as u64
+            "{:<18} {:>10.2} {:>10.2} {:>10.2} {:>11.2}% {:>11.2}% {:>8.2}% [{}]",
+            shape.name,
+            cat_med,
+            bypass_med,
+            tayf_med,
+            bypass_over,
+            pipeline_cost,
+            full_over,
+            result
         );
         eprintln!(
-            "  {} detail: cat [min {:.2} / med {:.2} / max {:.2}] tayf [min {:.2} / med {:.2} / max {:.2}]",
+            "  {} detail: cat [min {:.2}/med {:.2}/max {:.2}] bypass [min {:.2}/med {:.2}/max {:.2}] tayf [min {:.2}/med {:.2}/max {:.2}]",
             shape.name,
             min_sample(&cat_ms), cat_med, max_sample(&cat_ms),
+            min_sample(&bypass_ms), bypass_med, max_sample(&bypass_ms),
             min_sample(&tayf_ms), tayf_med, max_sample(&tayf_ms),
         );
     }
