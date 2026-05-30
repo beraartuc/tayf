@@ -111,6 +111,18 @@ impl LineBuffer {
         // do not end in `\n` are returned verbatim).
         let mut line = std::mem::take(&mut self.inner);
         self.inner = Vec::with_capacity(4096);
+        // Fast-path invariant guard. The O(1) path is only correct because the
+        // buffer never holds an *interior* `\n` — every newline flushes
+        // immediately, so the only `\n` a flushed line can contain is its final
+        // byte. Checked once per flush (O(line), i.e. O(total bytes) overall —
+        // NOT the per-byte O(L²) scan this method just removed) and compiled
+        // out in release. If a future change (e.g. the H4 chunk-level rewrite)
+        // ever lets a `\n` accumulate mid-buffer, this fires loudly instead of
+        // silently returning a wrong line boundary.
+        debug_assert!(
+            !line.iter().take(line.len().saturating_sub(1)).any(|&b| b == b'\n'),
+            "line_buffer per-byte fast path: interior newline in flushed line",
+        );
         if line.last() == Some(&b'\n') {
             line.pop();
         }
