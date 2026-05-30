@@ -1043,6 +1043,30 @@ mod __test_api_smoke {
     }
 }
 
+/// Smoke tests for the `__bench__::BenchPipeline` shim. Kept separate from
+/// the existing `__test_api_smoke` module so they are easy to filter via
+/// `cargo test --lib __bench_pipeline_smoke`.
+#[cfg(test)]
+mod __bench_pipeline_smoke {
+    #[test]
+    fn bench_pipeline_feeds_and_emits_sgr_for_ipv4() {
+        let mut p = crate::__bench__::BenchPipeline::with_builtins();
+        let mut out: Vec<u8> = Vec::new();
+        p.feed(b"connect 192.168.1.1 now\n", &mut out).expect("feed ok");
+        let s = String::from_utf8(out).expect("utf8");
+        assert!(s.contains("192.168.1.1"), "payload must survive: {s:?}");
+        assert!(s.contains("\x1b["), "ipv4 builtin must inject an SGR: {s:?}");
+    }
+
+    #[test]
+    fn bench_pipeline_passes_plain_text_unchanged() {
+        let mut p = crate::__bench__::BenchPipeline::with_builtins();
+        let mut out: Vec<u8> = Vec::new();
+        p.feed(b"the quick brown fox\n", &mut out).expect("feed ok");
+        assert_eq!(out, b"the quick brown fox\n", "no match => byte-identical");
+    }
+}
+
 /// Bench-only adapters around `pub(crate)` internals so the `benches/`
 /// crate (an external crate from rustc's perspective) can drive the hot
 /// path directly.
@@ -1065,6 +1089,36 @@ pub mod __bench__ {
     /// contract. Not part of the public API.
     #[derive(Default)]
     pub struct BenchScratch(crate::pipeline::PipelineScratch);
+
+    /// Bench-only wrapper exposing the `pub(crate)` `Pipeline::feed` hot path
+    /// to external bench crates without widening `src/pipeline.rs` visibility
+    /// (an off-limits hot-path module). Constructs a pipeline over the
+    /// built-in rule set. Behavior-neutral: forwards verbatim to `Pipeline`.
+    pub struct BenchPipeline(crate::pipeline::Pipeline);
+
+    impl BenchPipeline {
+        /// Build a pipeline over the default built-in rule set.
+        ///
+        /// # Panics
+        /// Panics if the built-in rule set fails to compile — impossible in
+        /// practice (the built-ins are compile-tested) and acceptable in a
+        /// bench-only constructor.
+        #[must_use]
+        pub fn with_builtins() -> Self {
+            let compiled =
+                crate::rules::Compiled::load_builtins().expect("built-in rules must compile");
+            let rules = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled));
+            BenchPipeline(crate::pipeline::Pipeline::new(rules))
+        }
+
+        /// Feed a chunk through the pipeline, writing styled output to `out`.
+        ///
+        /// # Errors
+        /// Propagates any write error from `out`.
+        pub fn feed<W: Write>(&mut self, chunk: &[u8], out: &mut W) -> std::io::Result<()> {
+            self.0.feed(chunk, out)
+        }
+    }
 
     /// Compile the v0.1 built-in rule set (same path the production runtime
     /// uses). See `src/rules.rs::Compiled::load_builtins`.
