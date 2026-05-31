@@ -10,3 +10,8 @@ Cargo.lock.bak
 
 # Superpowers brainstorming visual companion (mockups + server state)
 .superpowers/
+
+# Fuzzer-discovered corpus inputs are non-deterministic generated artifacts;
+# track only the committed seed-* files (see fuzz/corpus/*/seed-*).
+/fuzz/corpus/*/*
+!/fuzz/corpus/*/seed-*
