@@ -82,6 +82,12 @@ impl PtySession {
             cmd.arg("-l");
         }
 
+        // Mark the child environment so always-on wrappers (rc `exec tayf`
+        // guards) and tools can detect they are running inside tayf. Constant
+        // value; CommandBuilder inherits the parent env (no env_clear), so this
+        // is purely additive and does not affect the direct-argv invocation.
+        cmd.env("TAYF_SESSION", "1");
+
         let child = pair.slave.spawn_command(cmd).map_err(io_err)?;
         drop(pair.slave);
 
