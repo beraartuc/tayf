@@ -14,6 +14,7 @@ readme = "README.md"
 include = [
     "src/**/*",
     "assets/themes/*.toml",
+    "assets/profiles/*.toml",
     "build.rs",
     "Cargo.toml",
     "LICENSE-MIT",
