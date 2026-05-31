@@ -1,18 +1,25 @@
-name: release-dryrun
+name: release
 
-# v0.9: manual dry-run only. v1.0 will add `on: push: tags: ['v*']`.
+# Tag push `v*`  -> LIVE: build + sign + SBOM + crates.io publish + GitHub Release.
+# workflow_dispatch -> DRY-RUN: build + attest + verify + package/SBOM only,
+#                      NO crates.io publish and NO GitHub Release (the publish and
+#                      release jobs are gated on `github.event_name == 'push'`).
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write      # keyless Sigstore OIDC
-  attestations: write  # SLSA build provenance
+# Default-deny; each job opts into the minimum it needs.
+permissions: {}
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write      # keyless Sigstore OIDC (public repo -> public-good)
+      attestations: write  # SLSA build provenance
     strategy:
       fail-fast: false
       matrix:
@@ -28,27 +35,40 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --locked
-      - name: SHA256SUMS
-        shell: bash
-        run: |
-          set -euo pipefail
-          bin="target/${{ matrix.target }}/release/tayf"
-          shasum -a 256 "$bin" > "tayf-${{ matrix.target }}.sha256"
       - name: Attest build provenance (SLSA v1.0 Build L2, keyless)
+        id: attest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3
         with:
           subject-path: target/${{ matrix.target }}/release/tayf
-      - name: Upload dry-run artifacts
+      - name: Verify provenance (smoke)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh attestation verify "target/${{ matrix.target }}/release/tayf" --repo "$REPO"
+      - name: Stage release assets (flat-named binary + checksum + bundle)
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          bin="tayf-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/tayf" "$bin"
+          shasum -a 256 "$bin" > "$bin.sha256"
+          cp "$BUNDLE" "$bin.sigstore.json"
+      - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: tayf-${{ matrix.target }}
           path: |
-            target/${{ matrix.target }}/release/tayf
+            tayf-${{ matrix.target }}
             tayf-${{ matrix.target }}.sha256
+            tayf-${{ matrix.target }}.sigstore.json
 
   package-and-sbom:
-    name: Package + SBOM (dry-run)
+    name: Package + SBOM
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
@@ -67,3 +87,79 @@ jobs:
         with:
           name: sbom-cyclonedx
           path: "*.cdx.json"
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: [build, package-and-sbom]
+    if: github.event_name == 'push'   # tag push only — never the dry-run
+    runs-on: ubuntu-latest
+    environment: release              # required-reviewer gate + scoped secret
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
+        with:
+          toolchain: stable
+      - name: Idempotent publish (tag must match Cargo.toml version)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver="${REF_NAME#v}"
+          crate_ver="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$ver" != "$crate_ver" ]; then
+            echo "::error::tag version ($ver) != Cargo.toml version ($crate_ver)"
+            exit 1
+          fi
+          # Advisory fast-path; cargo's own duplicate-version rejection is the
+          # authoritative idempotency backstop (the read API is cache-laggy and
+          # returns 200 for yanked versions).
+          if curl -sf --retry 3 "https://crates.io/api/v1/crates/tayf/${ver}" >/dev/null 2>&1; then
+            echo "v${ver} already on crates.io; skipping publish."
+          else
+            cargo publish --locked
+          fi
+
+  github-release:
+    name: Create GitHub Release
+    needs: [build, publish-crate]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the release + upload assets
+      attestations: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - name: Download build + SBOM artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Combined SHA256SUMS + release notes
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ( cd dist && cat tayf-*.sha256 > SHA256SUMS )
+          ver="${REF_NAME#v}"
+          awk -v v="$ver" '
+            $0 ~ "^## \\[" v "\\]" { p = 1; next }
+            p && /^## \[/ { exit }
+            p { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          test -s RELEASE_NOTES.md || printf 'Release %s\n' "$REF_NAME" > RELEASE_NOTES.md
+      - name: Create or update the release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$REF_NAME" dist/* --clobber
+          else
+            gh release create "$REF_NAME" dist/* \
+              --title "tayf $REF_NAME" --notes-file RELEASE_NOTES.md
+          fi
