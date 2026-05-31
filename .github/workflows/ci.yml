@@ -6,9 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# Default-deny token permissions; each job opts into the minimum it needs.
+permissions: {}
+
 jobs:
   test:
     name: Test (${{ matrix.host }})
+    # Trusted context only: fork PRs must NEVER run on the self-hosted runner.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
     runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
@@ -50,8 +59,43 @@ jobs:
         # job still exercises full compilation + execution of every bench.
         run: cargo test
 
+  # Fork PRs (untrusted) run a fast check on GitHub-hosted infra ONLY — never on
+  # the self-hosted runner. Gated to fork PRs so same-repo pushes/PRs (which run
+  # the full self-hosted matrix) don't double-run.
+  smoke:
+    name: Smoke (fork PR, GitHub-hosted)
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        timeout-minutes: 15
+        env:
+          # OSC 11 background-detect hang is environment-general (not just the
+          # self-hosted runner); integration tests bypass bg_detect with this.
+          TAYF_DISABLE_BG_DETECT: "1"
+        # Deliberately WITHOUT RUST_TEST_THREADS=1 — the reload-orchestrator hang
+        # was self-hosted-specific. If it reproduces on ubuntu-latest, add it.
+        run: cargo test
+
   audit:
     name: Security audit
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
@@ -67,6 +111,11 @@ jobs:
 
   bench-regression:
     name: Bench regression (${{ matrix.host }})
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
     runs-on: ${{ matrix.runs-on }}
     needs: test  # only run if test passes (don't bench broken code)
     strategy:
@@ -172,6 +221,11 @@ jobs:
 
   msrv:
     name: MSRV (1.88)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
@@ -183,12 +237,12 @@ jobs:
 
   fuzz-smoke:
     name: Fuzz smoke (nightly)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
     runs-on: [self-hosted, Linux, X64]
-    # TODO(v0.9 A7): non-blocking until the self-hosted runner's ASan support
-    # (llvm-tools + permissive kernel mmap) is verified; then drop
-    # continue-on-error to make this a hard regression gate. The blocking
-    # guard meanwhile is tests/adversarial.rs in the `test` job.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # nightly
@@ -210,7 +264,7 @@ jobs:
       #  - `[patch.crates-io] rustix` doesn't apply: `cargo install` of an
       #    external tool ignores the project's patch table.
       # Exposure is limited: cargo-fuzz is a non-shipped dev tool, installed
-      # only on the CI runner, in this continue-on-error (non-blocking) job.
+      # only on the CI runner (a nightly hard-gate job; fork PRs are excluded).
       - run: cargo install cargo-fuzz@0.13.1
       - name: Build + short-run each fuzz target
         run: |
