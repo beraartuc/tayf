@@ -12,8 +12,8 @@ tayf is pre-1.0; only the latest released minor version receives security fixes.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.9.x   | ✅        |
-| < 0.9   | ❌        |
+| 0.10.x  | ✅        |
+| < 0.10  | ❌        |
 
 ## Threat Model
 
