@@ -1778,7 +1778,7 @@ mod pipeline_tests {
         // Adversarial unterminated OSC: \e]2; + lots of 'a' bytes.
         // SEQUENCE_BYTES_CAP is 4096; this exceeds the cap.
         let mut input = vec![0x1b, b']', b'2', b';'];
-        input.extend(std::iter::repeat(b'a').take(5000));
+        input.extend(std::iter::repeat_n(b'a', 5000));
         pipeline.feed(&input, &mut out).unwrap();
 
         // Stdout must contain a synthetic \e\\ ST emitted at cap fire.
@@ -1885,7 +1885,7 @@ mod feed_tests {
         let mut p = pipeline_with(Compiled::load_builtins().unwrap());
         let mut input = Vec::new();
         input.extend_from_slice(b"short1\nshort2\n");
-        input.extend(std::iter::repeat(b'x').take(crate::line_buffer::MAX_BUFFER_BYTES + 10));
+        input.extend(std::iter::repeat_n(b'x', crate::line_buffer::MAX_BUFFER_BYTES + 10));
         input.push(b'\n');
         let out = feed_all(&mut p, &[input.as_slice()]);
         // short1/short2 survive as their own lines (the giant line did not swallow them).

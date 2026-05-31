@@ -4,11 +4,71 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] — unreleased
+## [0.9.0] - 2026-05-31
+
+Security cycle. A comprehensive, empirical verification of the CLAUDE.md §3
+threat model — adversarial PTY input, terminal-state corruption, process and
+signal handling, config/filesystem, and supply chain — together with new
+hardening and the (dry-run) public-release infrastructure. The systematic audit
+(four threat-category reviewers plus a red-team adversarial-PTY pass and the
+security-review skill) found zero vulnerabilities; the runtime posture is
+verified, not merely asserted. No shipped runtime logic changed in this cycle
+(the only `src/` additions are `#[cfg(fuzzing)]`-gated and absent from normal
+builds). The actual public release (crates.io, Homebrew, signed binaries) is a
+separate v1.0 cycle; v0.9 builds and dry-runs that infrastructure.
+
+### Added
+
+- **Fuzzing harness** (`fuzz/`, a separate cargo-fuzz workspace): four libFuzzer
+  targets — `ansi_sm`, `line_buffer`, `pipeline_feed` (with an empty-rules
+  byte-identity differential oracle), and `regex_compile` — exposed via a
+  `#[cfg(fuzzing)]` access module that adds zero surface to normal/published
+  builds. A nightly `fuzz-smoke` CI job runs each target briefly as a regression
+  signal.
+- **Adversarial regression tests** (`tests/adversarial.rs`, stable/non-nightly):
+  CSI-split chunk-boundary invariance, OSC flood, and the over-cap synthetic-ST
+  behavior — the permanent guard into which any fuzz crash is distilled.
+- **`tests/integration_signal_int.rs`**: pins SIGINT forwarding to the child
+  process group, complementing the existing SIGHUP and SIGWINCH tests.
+- **`benches/redos.rs`**: a linear-scaling proof for the linear-time regex
+  engine (input 2x => time ~2x), demonstrating the guarantee rather than hunting
+  for impossible super-linear blowup.
+- **`SECURITY.md`**: vulnerability-disclosure policy, supported-versions table,
+  and explicit non-goals (sandboxing, Windows, multi-user isolation).
+- **`.github/workflows/release.yml`** (dry-run only, `workflow_dispatch`): a
+  cross-platform build matrix (Linux + macOS) producing SHA256SUMS, keyless
+  cosign/Sigstore signing, a CycloneDX SBOM, and SLSA v1.0 Build L2 provenance
+  via `actions/attest-build-provenance`. No real publish — that is a v1.0 step.
+- **MSRV CI job**: verifies the project builds on its declared minimum Rust.
 
 ### Changed
 
-- MSRV raised from 1.74 (undeclared/untested) to 1.85 (verified); the true floor is set by `clap_lex 1.1.0` (edition 2024, stabilized in Rust 1.85).
+- **cargo-deny hardened**: `multiple-versions` raised from `warn` to `deny`
+  (with documented, version-pinned `skip`/`skip-tree` for irreducible transitive
+  duplicates), and `[advisories]` updated to the current schema with
+  `unmaintained = "all"` and `unsound = "all"` scope selectors.
+- **CI supply-chain hardening**: all GitHub Actions pinned to immutable commit
+  SHAs (closing the mutable-tag attack surface), and the `cargo install` tool
+  versions (cargo-audit, cargo-deny, cargo-fuzz, cargo-cyclonedx) pinned.
+- **MSRV raised from 1.74 (undeclared/untested) to 1.85 (verified)**; the true
+  floor is set by `clap_lex 1.1.0` (edition 2024, stabilized in Rust 1.85).
+
+### Fixed
+
+- **Published-crate packaging**: `assets/profiles/*.toml` were missing from the
+  `include` list although `src/profiles.rs` embeds them via `include_str!` at
+  compile time. The published crate would have failed to compile for downstream
+  users; the dry-run release pipeline caught it before any public release.
+
+### Security
+
+- Comprehensive CLAUDE.md §3 threat-model audit — CLEAN, zero findings. The
+  posture (panic-abort termios restore, killpg-to-process-group signal
+  forwarding, structurally-SGR-only injection with a precise reset, opaque OSC
+  passthrough, 1 MiB regex size/DFA limits on every user pattern, canonicalize +
+  symlink-out config gate, atomic O_EXCL config writes, stderr-only gated
+  logging) was empirically verified, including 2.3M+ fuzz iterations with zero
+  crashes. See `docs/superpowers/reviews/2026-05-31-v0.9-systematic-security-audit.md`.
 
 ## [0.8.3] - 2026-05-31
 

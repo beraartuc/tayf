@@ -41,7 +41,7 @@ fn osc_flood_does_not_panic() {
 #[test]
 fn oversized_osc_injects_synthetic_st() {
     let mut input: Vec<u8> = b"\x1b]0;".to_vec();
-    input.extend(std::iter::repeat(b'A').take(5000)); // > SEQUENCE_BYTES_CAP (4096)
+    input.extend(std::iter::repeat_n(b'A', 5000)); // > SEQUENCE_BYTES_CAP (4096)
     input.push(b'\n');
     let mut p = BenchPipeline::with_builtins();
     let mut out = Vec::new();

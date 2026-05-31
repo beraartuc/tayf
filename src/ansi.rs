@@ -974,7 +974,7 @@ mod ansi_tests {
         let mut sm = AnsiSm::new();
         // \e[?<40 nines>h
         let mut seq = vec![0x1b, b'[', b'?'];
-        seq.extend(std::iter::repeat(b'9').take(40));
+        seq.extend(std::iter::repeat_n(b'9', 40));
         seq.push(b'h');
         let events = step_all(&mut sm, &seq);
         assert!(matches!(
