@@ -194,9 +194,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # nightly
         with:
           toolchain: nightly
-      # No --locked: cargo-fuzz's bundled lockfile pins an old rustix that
-      # fails to compile on current nightly (reserved rustc_attrs). The
-      # version stays pinned; only its transitive deps float to nightly-safe.
+      # cargo-fuzz install: VERSION-pinned (@0.13.1, the latest release) but
+      # intentionally NOT --locked. Supply-chain tradeoff (accepted): the tool
+      # version is pinned, but its transitive deps float to the latest
+      # semver-compatible — the idiomatic `cargo install` form (the cargo-fuzz
+      # README installs this way). Rationale & rejected alternatives:
+      #  - --locked forces cargo-fuzz 0.13.1's bundled lockfile, which pins
+      #    rustix 0.36.5; its Linux raw backend uses reserved `rustc_attrs` and
+      #    no longer compiles on current nightly.
+      #  - Bumping to a newer cargo-fuzz with a clean lockfile is impossible:
+      #    0.13.1 IS the latest release.
+      #  - Pinning nightly to an old known-good date to keep --locked trades a
+      #    floating dep set for a stale-toolchain liability and can't be
+      #    validated locally (the failing rustix backend is Linux-only).
+      #  - `[patch.crates-io] rustix` doesn't apply: `cargo install` of an
+      #    external tool ignores the project's patch table.
+      # Exposure is limited: cargo-fuzz is a non-shipped dev tool, installed
+      # only on the CI runner, in this continue-on-error (non-blocking) job.
       - run: cargo install cargo-fuzz@0.13.1
       - name: Build + short-run each fuzz target
         run: |
