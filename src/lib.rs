@@ -1198,7 +1198,8 @@ pub mod __fuzz__ {
     /// bytes); the buffer cap bounds memory.
     pub fn line_buffer(data: &[u8]) {
         let mut lb = crate::line_buffer::LineBuffer::new();
-        for chunk in data.chunks(7) { // arbitrary small stride to vary chunk boundaries
+        for chunk in data.chunks(7) {
+            // arbitrary small stride to vary chunk boundaries
             let _ = lb.feed_data_run(chunk);
         }
         let _ = lb.feed_with_overflow(data);
@@ -1227,7 +1228,8 @@ pub mod __fuzz__ {
     pub fn pipeline_feed_builtins(data: &[u8]) {
         let mut p = crate::__bench__::BenchPipeline::with_builtins();
         let mut out: Vec<u8> = Vec::new();
-        for chunk in data.chunks(13) { // arbitrary small stride to vary chunk boundaries
+        for chunk in data.chunks(13) {
+            // arbitrary small stride to vary chunk boundaries
             let _ = p.feed(chunk, &mut out);
         }
     }
