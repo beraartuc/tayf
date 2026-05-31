@@ -50,8 +50,10 @@ separate v1.0 cycle; v0.9 builds and dry-runs that infrastructure.
 - **CI supply-chain hardening**: all GitHub Actions pinned to immutable commit
   SHAs (closing the mutable-tag attack surface), and the `cargo install` tool
   versions (cargo-audit, cargo-deny, cargo-fuzz, cargo-cyclonedx) pinned.
-- **MSRV raised from 1.74 (undeclared/untested) to 1.85 (verified)**; the true
-  floor is set by `clap_lex 1.1.0` (edition 2024, stabilized in Rust 1.85).
+- **MSRV raised from 1.74 (undeclared/untested) to 1.88 (verified in CI)**; the
+  floor is set by transitive dependencies declaring `rust-version = 1.88`
+  (`darling`, `time`, and `instability` via `ratatui`), with edition-2024
+  (`clap_lex`) additionally requiring ≥ 1.85.
 
 ### Fixed
 
