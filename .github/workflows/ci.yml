@@ -164,3 +164,24 @@ jobs:
           name: criterion-${{ matrix.host }}
           path: target/criterion/
           retention-days: 14
+
+  fuzz-smoke:
+    name: Fuzz smoke (nightly)
+    runs-on: [self-hosted, Linux, X64]
+    # TODO(v0.9 A7): non-blocking until the self-hosted runner's ASan support
+    # (llvm-tools + permissive kernel mmap) is verified; then drop
+    # continue-on-error to make this a hard regression gate. The blocking
+    # guard meanwhile is tests/adversarial.rs in the `test` job.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install --locked cargo-fuzz
+      - name: Build + short-run each fuzz target
+        run: |
+          set -euo pipefail
+          cd fuzz
+          for t in ansi_sm line_buffer pipeline_feed regex_compile; do
+            cargo fuzz build "$t"
+            cargo fuzz run "$t" -- -max_total_time=60 -timeout=10
+          done
