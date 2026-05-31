@@ -11,7 +11,8 @@ name = "container_id"
 #   name = "container_id"
 #   enabled = false
 pattern = '\b[a-f0-9]{12}\b'
-style = { fg = "cyan" }
+# Neon (dark-tuned); on a light background override in user config.
+style = { fg = "#ff7a4d" }
 
 [[append_rules]]
 name = "image_tag"
@@ -26,5 +27,6 @@ name = "image_tag"
 #   - host:port (`localhost:8080`)
 #   - module:line (`src/main.rs:42` — covered by `filename` built-in)
 pattern = '(?:\b[a-z0-9-]+(?:\.[a-z0-9-]+)+/[a-z0-9._/-]+:[a-z0-9._-]+\b|\b[a-z][a-z0-9_-]*(?:/[a-z0-9_-]+)*:latest\b)'
-style = { fg = "magenta" }
+# Neon (dark-tuned); on a light background override in user config.
+style = { fg = "#ff6bb3" }
 priority = 200

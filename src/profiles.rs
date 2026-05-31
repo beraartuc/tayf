@@ -904,24 +904,26 @@ mod tests {
     #[test]
     fn aws_arn_wins_over_interior_region_pattern() {
         // v0.5.6 priority semantics: arn priority 200 wins envelope over
-        // region priority 100. The full ARN envelope is wrapped in magenta
-        // SGR (35); the interior region substring is suppressed because it
-        // falls inside the arn's claimed span.
+        // region priority 100. The full ARN envelope is wrapped in Neon rose
+        // SGR (38;2;255;107;179 = #ff6bb3); the interior region substring is
+        // suppressed because it falls inside the arn's claimed span.
         let compiled = compile_profile("aws");
         let bytes = apply_to_line(
             &compiled,
             "Found arn:aws:lambda:us-west-2:123456789012:function:foo done\n",
         );
         let s = String::from_utf8_lossy(&bytes);
-        // aws.arn magenta (35) MUST wrap the envelope.
+        // aws.arn Neon rose (#ff6bb3 = 38;2;255;107;179) MUST wrap the envelope.
         assert!(
-            s.contains("\u{1b}[35marn:aws:lambda:us-west-2:123456789012:function:foo"),
-            "aws.arn magenta must wrap envelope (priority 200 beats region 100): {s:?}"
+            s.contains(
+                "\u{1b}[38;2;255;107;179marn:aws:lambda:us-west-2:123456789012:function:foo"
+            ),
+            "aws.arn Neon rose must wrap envelope (priority 200 beats region 100): {s:?}"
         );
-        // Interior region must NOT receive its own green SGR (34 or 32) —
-        // the arn envelope already claimed the span.
+        // Interior region must NOT receive its own emerald SGR
+        // (38;2;54;224;138) — the arn envelope already claimed the span.
         assert!(
-            !s.contains("\u{1b}[32mus-west-2") && !s.contains("\u{1b}[34mus-west-2"),
+            !s.contains("\u{1b}[38;2;54;224;138mus-west-2"),
             "interior region SGR must be suppressed under arn priority 200: {s:?}"
         );
     }
@@ -1000,8 +1002,8 @@ mod tests {
     fn docker_image_tag_wins_over_registry_host_fqdn() {
         // v0.5.6 priority semantics: image_tag priority 200 wins envelope over
         // built-in fqdn priority 0. The full image:tag envelope is wrapped in
-        // magenta SGR (35); the fqdn registry-host substring is suppressed
-        // because it falls inside image_tag's claimed span.
+        // Neon rose SGR (38;2;255;107;179 = #ff6bb3); the fqdn registry-host
+        // substring is suppressed because it falls inside image_tag's claimed span.
         let cases: &[(&str, &str)] = &[
             ("gcr.io/google/nginx:1.21", "gcr.io"),
             ("docker.io/library/redis:6.2-alpine", "docker.io"),
@@ -1016,10 +1018,10 @@ mod tests {
             let line = format!("Pull {img} done\n");
             let bytes = apply_to_line(&compiled, &line);
             let s = String::from_utf8_lossy(&bytes);
-            // image_tag magenta (35) MUST wrap the full envelope.
+            // image_tag Neon rose (#ff6bb3 = 38;2;255;107;179) MUST wrap the full envelope.
             assert!(
-                s.contains(&format!("\u{1b}[35m{img}")),
-                "image_tag magenta must wrap envelope (priority 200 beats fqdn 0): {s:?}"
+                s.contains(&format!("\u{1b}[38;2;255;107;179m{img}")),
+                "image_tag Neon rose must wrap envelope (priority 200 beats fqdn 0): {s:?}"
             );
             // FQDN host must NOT receive its own blue SGR (34) —
             // the image_tag envelope already claimed the span.
@@ -1033,7 +1035,8 @@ mod tests {
     #[test]
     fn docker_image_tag_bare_latest_branch() {
         // Bare `:latest` images have no FQDN prefix, so docker.image_tag
-        // fires cleanly with magenta SGR (35) on the full envelope.
+        // fires cleanly with Neon rose SGR (38;2;255;107;179 = #ff6bb3) on the
+        // full envelope.
         const IMAGES: &[&str] = &["nginx:latest", "library/redis:latest", "my-app:latest"];
         let compiled = compile_profile("docker");
         for img in IMAGES {
@@ -1054,8 +1057,8 @@ mod tests {
     #[test]
     fn docker_image_tag_does_not_match_fp_shapes() {
         // JSON key:value, host:port, module:line FP guards. The image_tag
-        // magenta SGR `\x1b[35` must NOT appear in the output for any of
-        // these candidate lines. (Other built-in styles may apply — fine.)
+        // Neon rose SGR `38;2;255;107;179` must NOT appear in the output for
+        // any of these candidate lines. (Other built-in styles may apply — fine.)
         const FP_LINES: &[&str] = &[
             r#"config: {"foo":"bar"}"#,
             "Connection localhost:8080 ok",
@@ -1066,8 +1069,8 @@ mod tests {
             let bytes = apply_to_line(&compiled, &format!("{line}\n"));
             let s = String::from_utf8_lossy(&bytes);
             assert!(
-                !s.contains("\u{1b}[35"),
-                "FP line `{line}` triggered image_tag magenta SGR: {s:?}"
+                !s.contains("\u{1b}[38;2;255;107;179"),
+                "FP line `{line}` triggered image_tag Neon rose SGR: {s:?}"
             );
         }
     }
