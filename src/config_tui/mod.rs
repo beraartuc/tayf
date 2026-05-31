@@ -1,7 +1,7 @@
 //! Interactive `tayf config` TUI + non-interactive `dump` / `status`
 //! sub-subcommands. v0.5.4 entry point.
 //!
-//! Module layout (see `docs/superpowers/specs/2026-05-26-tayf-v0.5.4-config-tui.md` §5.1):
+//! Module layout (see `ARCHITECTURE.md` for the config-TUI design):
 //! - [`app`] — App state struct + Tab enum + edit-mode FSM.
 //! - [`events`] — crossterm event loop + key dispatch + debounce tick.
 //! - [`render`] — frame composition (Layout split).

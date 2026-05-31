@@ -14,8 +14,7 @@
 //!   `main` own the exit-code policy: BSD `EX_USAGE` (64) on parse failure,
 //!   0 on `--help` / `--version`.
 //!
-//! v0.5.4 — `Args` rename is an acknowledged public-API break
-//! (see `docs/superpowers/specs/2026-05-26-tayf-v0.5.4-config-tui.md` §4.3):
+//! v0.5.4 — `Args` rename is an acknowledged public-API break:
 //! pre-v0.5.4 `args.shell` is now `args.run.shell`. CHANGELOG carries a
 //! `### Changed (breaking)` entry. Pre-1.0, no accessor-shim layer.
 

@@ -1,7 +1,7 @@
 //! tayf — terminal-agnostic, PTY-based, regex-driven output colorizer.
 //!
 //! Public entry point: [`Tayf::run`]. See
-//! `docs/superpowers/specs/2026-05-21-tayf-v0.1-design.md` for the full design.
+//! `ARCHITECTURE.md` for the architecture overview.
 //!
 //! ## Capture-group styling (v0.3.5)
 //!

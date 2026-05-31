@@ -5,8 +5,7 @@
 //! Restoring the terminal is the single most security-critical invariant in
 //! tayf: a corrupted termios state leaves the user's shell with no echo, no
 //! line discipline, or wedged in raw mode after tayf exits. See
-//! `docs/superpowers/specs/2026-05-21-tayf-v0.1-design.md` §6 (terminal
-//! corruption) and `CLAUDE.md` §3.
+//! `ARCHITECTURE.md` (terminal corruption) and `CLAUDE.md` §3.
 //!
 //! Restoration paths covered:
 //!

@@ -3,8 +3,8 @@
 //! Public entry: [`load`] resolves the config file (CLI `--config`, then
 //! `$XDG_CONFIG_HOME/tayf/config.toml`, then `~/.config/tayf/config.toml`),
 //! reads it under a 1 MB cap, parses with `serde` + `toml`, validates rule
-//! shape, and returns `Ok(None)` when no file is present (preserving v0.1
-//! behavior). See `docs/superpowers/specs/2026-05-21-tayf-v0.2.0-design.md`.
+//! shape, and returns `Ok(None)` when no file is present (no config file is
+//! not an error). See `ARCHITECTURE.md` for the configuration schema overview.
 
 use std::path::Path;
 
@@ -905,7 +905,8 @@ style = { fg = "red" }
     fn resolve_treats_empty_xdg_as_unset_per_xdg_spec() {
         // XDG Base Directory spec: "If $XDG_CONFIG_HOME is either not set or
         // empty, a default equal to $HOME/.config should be used." Tayf's own
-        // design doc (tayf-tasarim.md §3) inherits this rule. Regression guard
+        // The XDG Base Directory spec requires treating an empty
+        // $XDG_CONFIG_HOME identically to an unset one. Regression guard
         // for a foot-gun where `export XDG_CONFIG_HOME=""` would otherwise
         // route to a CWD-relative `tayf/config.toml` lookup.
         let dir = tmp();

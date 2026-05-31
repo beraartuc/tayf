@@ -6,7 +6,7 @@
 //! `Arc<ArcSwap<Compiled>>`. Parse/compile failures preserve the
 //! previous rule set and emit a `warn_msg!` to stderr.
 //!
-//! See `docs/superpowers/specs/2026-05-22-tayf-v0.2.1-hot-reload.md` §3.2.
+//! See `ARCHITECTURE.md` for the hot-reload design.
 
 /// Banner byte sequence written on successful reload when
 /// `show_reload_banner = true`. See spec §1.3 for the per-byte semantics.

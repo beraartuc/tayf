@@ -429,7 +429,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             priority: 0,
             source: RuleSource::Builtin,
         },
-        // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
+        // See ARCHITECTURE.md §"Built-in patterns" for the pattern design rationale.
         // Char classes here are byte classes under regex::bytes — bytes 0x80..0xFF
         // (UTF-8 continuation, IDN, percent-decoded paths) are implicitly included
         // because the negation only lists ASCII bytes. Trailing-trim set is sentence
@@ -511,7 +511,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             priority: 0,
             source: RuleSource::Builtin,
         },
-        // See docs/superpowers/specs/2026-05-23-tayf-v0.3.2-pattern-polish-tech-debt.md §3.1.
+        // See ARCHITECTURE.md §"Built-in patterns" for the pattern design rationale.
         // Bare units [smhd] match without whitespace (e.g. "5m", "30s"); multi-letter
         // units (ns/us/μs/ms) keep optional single-space prefix. Compound forms like
         // kubectl AGE "2d3h" or docker STATUS "1h30m20s" match as a single span via

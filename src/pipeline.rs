@@ -797,7 +797,7 @@ mod rule_tests {
     fn http_url_match_renders_single_underlined_sgr() {
         // url rule uses group_styles: Vec::new() — the whole match is wrapped in
         // a single Rgb SGR with underline. url renders as a single underlined span —
-        // see docs/superpowers/plans/2026-05-31-tayf-v0.9.1-neon-default-palette.md
+        // see ARCHITECTURE.md §"Built-in patterns" for the neon palette rationale.
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
         let mut scratch = PipelineScratch::default();

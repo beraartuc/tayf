@@ -5,7 +5,7 @@
 //! per 200 ms quiescent window. The watcher itself runs on its own
 //! thread (`tayf-watch`); the debounce loop runs on `tayf-debounce`.
 //!
-//! See `docs/superpowers/specs/2026-05-22-tayf-v0.2.1-hot-reload.md` §3.1.
+//! See `ARCHITECTURE.md` for the hot-reload design.
 
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
