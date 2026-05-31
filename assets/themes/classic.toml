@@ -1,0 +1,55 @@
+# tayf — classic preset theme: the pre-Neon, terminal-theme-adaptive ANSI palette.
+#
+# Uses the 16 named ANSI colors, so every color resolves to whatever the
+# user's terminal theme defines — output harmonizes with their existing
+# scheme on any background. Opt in with `--theme classic`.
+#
+# Schema: [[rules]] with `name` + `style`. `pattern` / `enabled = false` rejected.
+
+[[rules]]
+name = "permission"
+style = { fg = "white", dim = true }
+
+[[rules]]
+name = "timestamp"
+style = { fg = "bright_black" }
+
+[[rules]]
+name = "uuid"
+style = { fg = "bright_magenta" }
+
+[[rules]]
+name = "url"
+style = { fg = "bright_blue", underline = true }
+
+[[rules]]
+name = "email"
+style = { fg = "bright_green" }
+
+[[rules]]
+name = "ipv4"
+style = { fg = "yellow", bold = true }
+
+[[rules]]
+name = "ipv6"
+style = { fg = "bright_yellow" }
+
+[[rules]]
+name = "mac"
+style = { fg = "cyan" }
+
+[[rules]]
+name = "log_level"
+style = { fg = "bright_red", bold = true }
+
+[[rules]]
+name = "filename"
+style = { fg = "bright_cyan" }
+
+[[rules]]
+name = "fqdn"
+style = { fg = "blue" }
+
+[[rules]]
+name = "duration"
+style = { fg = "green" }

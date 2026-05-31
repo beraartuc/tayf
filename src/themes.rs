@@ -228,19 +228,21 @@ fn collision_error(name: &str, disk_path: &std::path::Path) -> Error {
     }
 }
 
+const CLASSIC_SRC: &str = include_str!("../assets/themes/classic.toml");
 const DARK_SRC: &str = include_str!("../assets/themes/dark.toml");
 const LIGHT_SRC: &str = include_str!("../assets/themes/light.toml");
 
 /// Alphabetically-sorted slice of available theme names. Single source of
 /// truth for the set and order of themes; [`REGISTRY`] is keyed by
 /// `THEME_NAMES[i]` so the two cannot drift.
-const THEME_NAMES: [&str; 2] = ["dark", "light"];
+const THEME_NAMES: [&str; 3] = ["classic", "dark", "light"];
 
 /// `(name, source)` pairs, sorted alphabetically by name. `REGISTRY` is
 /// keyed by [`THEME_NAMES`]`[i]` so the two cannot drift; sorted order
 /// matters because error messages quote that order to give users a stable
 /// list.
-const REGISTRY: &[(&str, &str)] = &[(THEME_NAMES[0], DARK_SRC), (THEME_NAMES[1], LIGHT_SRC)];
+const REGISTRY: &[(&str, &str)] =
+    &[(THEME_NAMES[0], CLASSIC_SRC), (THEME_NAMES[1], DARK_SRC), (THEME_NAMES[2], LIGHT_SRC)];
 
 /// Resolve a theme name to its TOML source, preferring disk themes over
 /// built-in presets when both exist for the same `name`. Production
@@ -501,6 +503,12 @@ mod tests {
     use crate::config::{UserRule, UserStyle};
 
     #[test]
+    fn classic_theme_registered_with_ansi_palette() {
+        assert!(embedded_source("classic").is_some(), "classic must be a registered theme");
+        assert_eq!(names(), &["classic", "dark", "light"], "themes sorted alphabetically");
+    }
+
+    #[test]
     fn names_are_alphabetically_sorted() {
         let n = names();
         let mut sorted: Vec<_> = n.to_vec();
@@ -574,7 +582,10 @@ mod tests {
         match err {
             Error::Theme { name, available } => {
                 assert_eq!(name, "nope");
-                assert_eq!(available, vec!["dark".to_string(), "light".to_string()]);
+                assert_eq!(
+                    available,
+                    vec!["classic".to_string(), "dark".to_string(), "light".to_string()]
+                );
             }
             other => panic!("expected Error::Theme, got {other:?}"),
         }
@@ -953,7 +964,7 @@ mod tests {
     #[test]
     fn available_theme_names_from_base_returns_builtins_when_base_none() {
         let names = available_theme_names_from_base(None);
-        assert_eq!(names, vec!["dark".to_string(), "light".to_string()]);
+        assert_eq!(names, vec!["classic".to_string(), "dark".to_string(), "light".to_string()]);
     }
 
     #[test]
@@ -967,7 +978,13 @@ mod tests {
         let names = available_theme_names_from_base(Some(dir.path()));
         assert_eq!(
             names,
-            vec!["bar".to_string(), "dark".to_string(), "foo".to_string(), "light".to_string()]
+            vec![
+                "bar".to_string(),
+                "classic".to_string(),
+                "dark".to_string(),
+                "foo".to_string(),
+                "light".to_string()
+            ]
         );
     }
 
@@ -981,7 +998,15 @@ mod tests {
         fs::write(themes_dir.join("custom.toml"), "").unwrap();
 
         let names = available_theme_names_from_base(Some(dir.path()));
-        assert_eq!(names, vec!["custom".to_string(), "dark".to_string(), "light".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "classic".to_string(),
+                "custom".to_string(),
+                "dark".to_string(),
+                "light".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -1087,7 +1112,7 @@ mod tests {
         let crate::error::Error::Theme { available, .. } = err else {
             panic!("expected Error::Theme");
         };
-        assert_eq!(available, vec!["bar", "dark", "foo", "light"]);
+        assert_eq!(available, vec!["bar", "classic", "dark", "foo", "light"]);
     }
 
     #[test]
