@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tayf — Neon default + light decision</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#e8e6e1; --dim:#9a978f; --rule:#2a2a33; --amber:#e0a52e; --cyan:#22d3ee; --bg:#0b0b0f; }
+  * { box-sizing:border-box; }
+  html { -webkit-font-smoothing:antialiased; }
+  body {
+    margin:0; color:var(--ink);
+    background:
+      radial-gradient(1100px 560px at 88% -8%, #1a1530 0%, transparent 55%),
+      radial-gradient(820px 480px at -6% 108%, #07232a 0%, transparent 50%),
+      var(--bg);
+    font-family:"Space Grotesk", system-ui, sans-serif; line-height:1.5;
+    padding:clamp(20px,4vw,60px);
+  }
+  .wrap { max-width:960px; margin:0 auto; }
+  .eyebrow { font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.22em;
+             text-transform:uppercase; color:var(--cyan); display:flex; align-items:center; gap:10px; }
+  .eyebrow::before { content:""; width:26px; height:1px; background:var(--cyan); display:inline-block; }
+  h1 { font-size:clamp(28px,4.4vw,50px); font-weight:600; letter-spacing:-.02em; line-height:1.04; margin:.35em 0 .25em; }
+  h1 em { font-style:normal; color:var(--amber); }
+  .lede { color:var(--dim); max-width:72ch; font-size:16px; margin:0 0 26px; }
+  .lede b { color:var(--ink); font-weight:600; }
+
+  .section-h { display:flex; align-items:baseline; gap:12px; margin:32px 0 12px; }
+  .section-h .t { font-size:18px; font-weight:600; }
+  .section-h .meta { font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--dim); }
+
+  .stack { display:flex; flex-direction:column; gap:16px; }
+  .card { border:1px solid var(--rule); border-radius:14px; overflow:hidden; box-shadow:0 18px 48px -30px rgba(0,0,0,.8); }
+  .card.flag { border-color:#7a3b3b; }
+  .card.pick { border-color:var(--amber); box-shadow:0 0 0 1px var(--amber), 0 18px 48px -30px rgba(0,0,0,.8); }
+  .card .meta { display:flex; align-items:center; gap:12px; padding:11px 16px; }
+  .card .idx { font-family:"IBM Plex Mono",monospace; font-size:12px; opacity:.5; }
+  .card .name { font-size:15.5px; font-weight:600; }
+  .card .tag { font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.07em;
+               text-transform:uppercase; padding:3px 8px; border-radius:999px; border:1px solid currentColor; opacity:.85; }
+  .card .swatches { margin-left:auto; display:flex; gap:3px; }
+  .card .swatches i { width:14px; height:14px; border-radius:3px; display:inline-block; }
+  .term { font-family:"IBM Plex Mono",monospace; font-size:13.5px; line-height:1.85;
+          padding:16px 18px; white-space:pre; overflow-x:auto; border-top:1px solid rgba(128,128,128,.18); }
+  .term .plain { font-size:11.5px; opacity:.5; margin-bottom:10px; }
+  .note { font-size:13px; color:var(--dim); padding:9px 16px; background:rgba(122,59,59,.12); }
+  .note.ok { background:rgba(59,122,79,.12); }
+
+  footer { max-width:960px; margin:36px auto 0; color:var(--dim); font-size:13px; border-top:1px solid var(--rule); padding-top:18px; }
+  footer code { font-family:"IBM Plex Mono",monospace; color:var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">tayf · chosen default</div>
+  <h1>Neon as default — the <em>light</em> question</h1>
+  <p class="lede"><b>Neon</b> is the dark default. Electric colors can't stay bright on white, so
+  the light terminal gets a dark, high-contrast recast of the same hues — colorizing to <em>raise</em>
+  legibility on white, not lower it. ipv4 = azure, ipv6 = indigo,
+  url = one blue underlined link (incl. <code style="color:inherit">https://</code>),
+  duration = amber, log_level the only bold.</p>
+
+  <div id="sections"></div>
+
+  <footer>
+    Backgrounds are neutral defaults (dark <code>#141414</code> / light <code>#fbfbfa</code>) —
+    stand-ins for your terminal. Below 24-bit, <code>downgrade()</code> maps each color to the
+    nearest 256/16 entry. The "default text" line shows the bg's own fg; every rule differs from it.
+  </footer>
+</div>
+
+<script>
+const SLOT = {
+  log_level:{slot:"red", bold:true},
+  ipv4:{slot:"cyan"}, ipv6:{slot:"indigo"}, mac:{slot:"teal"}, fqdn:{slot:"purple"},
+  url:{slot:"blue", underline:true},   /* whole link one blue, incl. https:// — no gray */
+  email:{slot:"green"}, uuid:{slot:"magenta"}, filename:{slot:"orange"}, duration:{slot:"yellow"},
+  timestamp:{slot:"comment", subs:{date:"yellow", sep:"comment", time:"green", ms:"comment", tz:"purple"}},
+  permission:{slot:"comment", subs:{type:"blue", owner:"red", group:"yellow", other:"green"}},
+  // profile (--profile docker/aws/k8s) custom rules — own hues, no built-in collision
+  container_id:{slot:"coral"}, instance_id:{slot:"coral"}, pod_name:{slot:"coral"},
+  image_tag:{slot:"rose"}, arn:{slot:"rose"}, region:{slot:"emerald"}
+};
+
+const NEON = {comment:"#83838d",red:"#ff4d6d",orange:"#ff9f1c",yellow:"#ffd23f",green:"#a8ff3e",
+              teal:"#2ee6c4",cyan:"#1f9fe6",blue:"#5b8cff",indigo:"#7c5cff",purple:"#b483ff",magenta:"#ff5cf0",
+              coral:"#ff7a4d",rose:"#ff6bb3",emerald:"#36e08a"};
+
+/* light-adapted: ~800 darkness (high contrast on white) but HUE-SPREAD so the cool
+   family stays distinct when dark — adjacent steps widened to ~28-35° on the wheel. */
+const NEON_LIGHT = {comment:"#475569",red:"#b3093c",orange:"#9a3412",yellow:"#8a5a00",green:"#15692e",
+                    teal:"#0e6f5c",cyan:"#0c6b94",blue:"#1e40af",indigo:"#4c2bb0",purple:"#7c1d9e",magenta:"#a4116f",
+                    coral:"#b3401a",rose:"#a8175e",emerald:"#0f7a4a"};
+
+const CARDS = [
+  { name:"Neon — dark default", tag:"the default", cls:"pick", bg:"#141414", fg:"#d4d4d4", s:NEON },
+  { name:"Neon — light-adapted", tag:"for light terminals", cls:"", bg:"#fbfbfa", fg:"#1f1f1f", s:NEON_LIGHT,
+    note:"✓ deep jewel tones — the electric identity recast for ink-on-paper.", ok:true }
+];
+
+const LINES = [
+  [ {r:"permission", parts:[["type","-"],["owner","rw-"],["group","r--"],["other","r--"]]},
+    {t:"   1 bera  staff    12K  "}, {r:"filename", v:"README.md"} ],
+  [ {t:"64 bytes from "}, {r:"ipv4", v:"142.251.208.110"},
+    {t:": icmp_seq=0 ttl=113 time="}, {r:"duration", v:"17.550 ms"} ],
+  [ {r:"timestamp", parts:[["date","2026-05-31"],["sep","T"],["time","09:14:22"],["ms",".184"],["tz","Z"]]},
+    {t:" "}, {r:"log_level", v:"ERROR"}, {t:" upstream "}, {r:"ipv4", v:"10.0.0.7"},
+    {t:" timed out after "}, {r:"duration", v:"1m30s"} ],
+  [ {r:"timestamp", parts:[["date","2026-05-31"],["sep","T"],["time","09:14:23"],["ms",".001"],["tz","Z"]]},
+    {t:" "}, {r:"log_level", v:"INFO"}, {t:"  GET "},
+    {r:"url", parts:[["scheme","https"],["sep","://"],["body","api.example.com/v1/users"]]},
+    {t:" "}, {r:"duration", v:"42ms"} ],
+  [ {t:"peer "}, {r:"fqdn", v:"db-01.internal.example.com"}, {t:"  "},
+    {r:"ipv6", v:"fe80::1c2d:3f4a:5b6c"}, {t:"  "}, {r:"mac", v:"3c:22:fb:8a:1d:9e"} ],
+  [ {t:"user "}, {r:"email", v:"bera@example.com"}, {t:"  session "},
+    {r:"uuid", v:"550e8400-e29b-41d4-a716-446655440000"} ],
+  [ {t:"── with --profile docker / aws ──────────────"} ],
+  [ {r:"container_id", v:"a1b2c3d4e5f6"}, {t:"  "}, {r:"image_tag", v:"nginx:latest"},
+    {t:"  Up "}, {r:"duration", v:"2h"}, {t:"  "}, {r:"ipv4", v:"0.0.0.0"}, {t:":8080"} ],
+  [ {r:"instance_id", v:"i-0abcd1234567890ef"}, {t:"  "}, {r:"region", v:"us-east-1"},
+    {t:"  "}, {r:"arn", v:"arn:aws:s3:::prod-logs"} ]
+];
+
+const esc = t => t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const slotColor = (c,name) => c.s[name] || c.fg;
+function styleFor(c, ruleName, subKey){
+  const def = SLOT[ruleName]; if(!def) return {color:c.fg};
+  if(subKey && def.subs){ let s = def.subs[subKey] || def.slot; const ul = s.endsWith("|u"); if(ul) s = s.slice(0,-2); return {color:slotColor(c,s), underline:ul}; }
+  return {color:slotColor(c,def.slot), bold:!!def.bold, underline:!!def.underline};
+}
+function css(s){ let c=`color:${s.color}`; if(s.bold)c+=";font-weight:700"; if(s.underline)c+=";text-decoration:underline;text-underline-offset:3px"; return c; }
+function term(c){
+  let h=`<div class="term" style="background:${c.bg};color:${c.fg}">`;
+  h+=`<div class="plain">$ default text in this color — every rule below differs from it</div>`;
+  for(const line of LINES){ h+=`<div>`;
+    for(const seg of line){
+      if(seg.t!==undefined){ h+=esc(seg.t); continue; }
+      if(seg.parts) for(const [g,txt] of seg.parts) h+=`<span style="${css(styleFor(c,seg.r,g))}">${esc(txt)}</span>`;
+      else h+=`<span style="${css(styleFor(c,seg.r))}">${esc(seg.v)}</span>`;
+    } h+=`</div>`; }
+  return h+`</div>`;
+}
+document.getElementById("sections").innerHTML = `<div class="stack">` + CARDS.map((c,i)=>{
+  const sw=["red","yellow","green","cyan","blue","purple"].map(k=>`<i style="background:${c.s[k]}"></i>`).join("");
+  return `<div class="card ${c.cls}">
+    <div class="meta" style="background:${c.bg};color:${c.fg}">
+      <span class="idx">${String(i+1).padStart(2,"0")}</span>
+      <span class="name">${c.name}</span>
+      <span class="tag" style="color:${c.s.cyan}">${c.tag}</span>
+      <span class="swatches">${sw}</span>
+    </div>
+    ${c.note?`<div class="note ${c.ok?'ok':''}">${c.note}</div>`:""}
+    ${term(c)}
+  </div>`;
+}).join("") + `</div>`;
+</script>
+</body>
+</html>
