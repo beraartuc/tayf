@@ -19,8 +19,8 @@ include = [
     "Cargo.toml",
     "LICENSE-MIT",
     "LICENSE-APACHE",
-    "README.md",
-    "CHANGELOG.md",
+    "/README.md",
+    "/CHANGELOG.md",
 ]
 
 [[bin]]
