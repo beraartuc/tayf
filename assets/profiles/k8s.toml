@@ -18,4 +18,5 @@ name = "pod_name"
 #   coredns-558bd4d5db-vwz2j            (mixed hex/non-hex)
 #   my-app-bcdfghjklm-xyz25             (pure non-hex hash)
 pattern = '\b[a-z][a-z0-9-]*-[bcdfghjklmnpqrstvwxz2456789]{10}-[bcdfghjklmnpqrstvwxz2456789]{5}\b'
-style = { fg = "cyan" }
+# Neon (dark-tuned); on a light background override in user config.
+style = { fg = "#ff7a4d" }

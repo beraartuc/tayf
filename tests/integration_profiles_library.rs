@@ -32,6 +32,9 @@ fn run_with_profile(xdg: &Path, input: &str, profile: &str) -> Vec<u8> {
     cmd.env_remove("XDG_CONFIG_HOME");
     cmd.env("XDG_CONFIG_HOME", xdg);
     cmd.env("TAYF_DISABLE_BG_DETECT", "1");
+    // Force truecolor so Neon-palette Rgb styles render as 38;2;R;G;B sequences.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
     cmd.arg("--shell");
     cmd.arg("/bin/sh");
     cmd.arg("--no-hot-reload");
@@ -150,20 +153,20 @@ fn docker_profile_renders_container_id_and_partial_image_tag() {
         "expected styling around container_id; got: {:?}",
         String::from_utf8_lossy(&bytes)
     );
-    // Tightened: require magenta (FG 35) immediately before
-    // `nginx:latest`, not just any SGR anywhere in the output.
-    // We search for the exact byte sequence `\x1b[35mnginx:latest`
-    // to distinguish the image_tag rule (magenta) from a generic-token
-    // rule.  `body.find` could match the un-styled echo of the command,
-    // so we scan `bytes` directly for the 4-byte CSI+35m prefix.
-    let magenta_prefix = b"\x1b[35m";
+    // Tightened: require Neon rose (38;2;255;107;179 = #ff6bb3) immediately
+    // before `nginx:latest`, not just any SGR anywhere in the output.
+    // We search for the exact byte sequence `\x1b[38;2;255;107;179mnginx:latest`
+    // to distinguish the image_tag rule (Neon rose) from a generic-token rule.
+    // `body.find` could match the un-styled echo of the command, so we scan
+    // `bytes` directly for the truecolor CSI prefix.
+    let rose_prefix = b"\x1b[38;2;255;107;179m";
     let needle = b"nginx:latest";
     let found = bytes
-        .windows(magenta_prefix.len() + needle.len())
-        .any(|w| w.starts_with(magenta_prefix) && w.ends_with(needle));
+        .windows(rose_prefix.len() + needle.len())
+        .any(|w| w.starts_with(rose_prefix) && w.ends_with(needle));
     assert!(
         found,
-        "expected magenta (FG 35) SGR immediately before nginx:latest; full: {:?}",
+        "expected Neon rose (38;2;255;107;179) SGR immediately before nginx:latest; full: {:?}",
         String::from_utf8_lossy(&bytes)
     );
 }
