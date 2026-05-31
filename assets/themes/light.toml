@@ -1,58 +1,59 @@
-# tayf — light-background preset theme.
+# tayf — light-background preset theme (Neon, light-adapted).
 #
-# Adjusts the 12 built-in styles for terminals with a light background,
-# where the bright_* color family renders washed out and white/bright_yellow
-# are effectively invisible. Most rules keep distinct (fg, attrs) tuples;
-# the one intentional overlap is `ipv4` and `log_level`, both styled
-# `red + bold`. They are disambiguated by context (dotted-quad number vs.
-# uppercase level word) and the spec locks this trade-off.
+# The Neon palette recast for a light terminal: dark, saturated hues for
+# high contrast on white, with hues spread on the wheel so they stay
+# distinct when dark. Capture-group sub-colors are also overridden so no
+# dark-tuned sub-color leaks onto a light background.
 #
-# Schema: same subset of the user config as dark.toml.
+# Schema: [[rules]] with `name` + `style` (+ optional index-keyed `styles`
+# map for capture groups). `pattern` / `enabled = false` are rejected.
 
 [[rules]]
 name = "permission"
-style = { fg = "black", dim = true }
+style  = { fg = "#475569" }
+styles = { "1" = { fg = "#1e40af" }, "2" = { fg = "#b3093c" }, "3" = { fg = "#8a5a00" }, "4" = { fg = "#15692e" } }
 
 [[rules]]
 name = "timestamp"
-style = { fg = "black", italic = true }
+style  = { fg = "#475569" }
+styles = { "1" = { fg = "#8a5a00" }, "2" = { fg = "#475569" }, "3" = { fg = "#15692e" }, "4" = { fg = "#475569" }, "5" = { fg = "#7c1d9e" } }
 
 [[rules]]
 name = "uuid"
-style = { fg = "magenta" }
+style = { fg = "#a4116f" }
 
 [[rules]]
 name = "url"
-style = { fg = "blue", underline = true }
+style = { fg = "#1e40af", underline = true }
 
 [[rules]]
 name = "email"
-style = { fg = "green", bold = true }
+style = { fg = "#15692e" }
 
 [[rules]]
 name = "ipv4"
-style = { fg = "red", bold = true }
+style = { fg = "#0c6b94" }
 
 [[rules]]
 name = "ipv6"
-style = { fg = "magenta", italic = true }
+style = { fg = "#4c2bb0" }
 
 [[rules]]
 name = "mac"
-style = { fg = "cyan", bold = true }
+style = { fg = "#0e6f5c" }
 
 [[rules]]
 name = "log_level"
-style = { fg = "red", bold = true }
+style = { fg = "#b3093c", bold = true }
 
 [[rules]]
 name = "filename"
-style = { fg = "blue", italic = true }
+style = { fg = "#9a3412" }
 
 [[rules]]
 name = "fqdn"
-style = { fg = "blue" }
+style = { fg = "#7c1d9e" }
 
 [[rules]]
 name = "duration"
-style = { fg = "green" }
+style = { fg = "#8a5a00" }

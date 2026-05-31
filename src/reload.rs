@@ -534,8 +534,8 @@ style = { fg = "yellow", bold = true }
     fn reload_once_preserves_theme() {
         // Build a handle from no-theme defaults; reload with Some("light") and
         // verify the resulting styles match the light theme (permission becomes
-        // Color::Black + dim). Regression guard against the wiring dropping the
-        // theme through reload.
+        // Neon-light slate #475569). Regression guard against the wiring
+        // dropping the theme through reload.
         use crate::rules::BUILTIN_NAMES;
         use crate::style::Color;
 
@@ -546,8 +546,8 @@ style = { fg = "yellow", bold = true }
 
         let compiled = handle.load();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "permission").unwrap();
-        assert_eq!(compiled.styles[idx].fg, Some(Color::Black));
-        assert!(compiled.styles[idx].dim);
+        assert_eq!(compiled.styles[idx].fg, Some(Color::Rgb(0x47, 0x55, 0x69)));
+        assert!(!compiled.styles[idx].dim, "permission must not be dim in Neon-light theme");
     }
 
     // Deliberately NO `reload_once_with_none_path_*` test here — see plan
