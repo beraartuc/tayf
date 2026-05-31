@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-05-31
+
+A visual refresh of the default colors. The built-in palette moves from the
+named-ANSI set to a curated 24-bit "Neon" scheme, with a hand-authored light
+variant and the previous palette preserved as an opt-in `classic` theme. No
+runtime logic changed — only style values, theme presets, and their tests.
+
+### Added
+
+- **`classic` theme.** The pre-Neon, named-ANSI palette is preserved as
+  `--theme classic` for users who prefer output that adapts to their terminal's
+  own color scheme rather than the fixed 24-bit default.
+
+### Changed
+
+- **Default palette is now 24-bit "Neon".** The 12 built-in rules use curated
+  `Color::Rgb` values (log_level hot-coral, ipv4 azure, ipv6 indigo, url blue,
+  duration amber, …) instead of named-ANSI colors. On terminals below truecolor,
+  values downgrade to the nearest 256/16 entry via the existing `downgrade()`
+  path. `ipv4` is no longer bold — bold is now reserved for `log_level`, the one
+  alert affordance — and `url` renders as a single underlined blue span.
+- **Light theme recast for Neon.** `--theme light` is a hand-authored,
+  dark-and-saturated, hue-spread adaptation tuned for contrast on a light
+  background, and now also overrides capture-group sub-colors.
+- **Profile rule colors harmonized with Neon.** The docker/aws/k8s profile
+  rules move to dedicated hues that do not collide with the built-ins:
+  `container_id`/`instance_id`/`pod_name` → coral, `image_tag`/`arn` → rose,
+  `region` → emerald. These are dark-tuned; on a light background, override them
+  in user config.
+
+### Fixed
+
+- The light theme now adapts capture-group sub-colors (the permission rwx triad
+  and timestamp fields), fixing a latent issue where those kept their dark-tuned
+  values on a light background.
+
+### Notes
+
+- The 24-bit palette emits longer SGR sequences than named-ANSI, so per-line
+  colorization overhead is correspondingly higher on heavily-matched streams.
+  This is a byte-count effect only (no functional change); the default palette
+  can be reverted to the lighter-weight named-ANSI set with `--theme classic`.
+
 ## [0.9.0] - 2026-05-31
 
 Security cycle. A comprehensive, empirical verification of the CLAUDE.md §3
