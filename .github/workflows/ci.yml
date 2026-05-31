@@ -165,6 +165,15 @@ jobs:
           path: target/criterion/
           retention-days: 14
 
+  msrv:
+    name: MSRV (1.85)
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+
   fuzz-smoke:
     name: Fuzz smoke (nightly)
     runs-on: [self-hosted, Linux, X64]

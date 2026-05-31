@@ -2,7 +2,7 @@
 name = "tayf"
 version = "0.8.3"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 description = "Terminal-agnostic, PTY-based, regex-driven output colorizer."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/beraartuc/tayf"
