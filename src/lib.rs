@@ -1182,6 +1182,7 @@ pub mod __bench__ {
 /// is absent from normal and `cargo publish` builds — zero public API
 /// surface, clean `cargo metadata`/SBOM. See `fuzz/fuzz_targets/`.
 #[cfg(fuzzing)]
+#[doc(hidden)]
 pub mod __fuzz__ {
     /// Drive the ANSI state machine byte-by-byte. Invariant: no panic; the
     /// SM consumes every byte and the sequence cap keeps internal state bounded.
@@ -1193,11 +1194,11 @@ pub mod __fuzz__ {
     }
 
     /// Drive the line buffer with arbitrary chunking. Invariant: no panic;
-    /// UTF-8 splits never cause invalid slicing (regex::bytes operates on raw
+    /// UTF-8 splits never cause invalid slicing (`regex::bytes` operates on raw
     /// bytes); the buffer cap bounds memory.
     pub fn line_buffer(data: &[u8]) {
         let mut lb = crate::line_buffer::LineBuffer::new();
-        for chunk in data.chunks(7) {
+        for chunk in data.chunks(7) { // arbitrary small stride to vary chunk boundaries
             let _ = lb.feed_data_run(chunk);
         }
         let _ = lb.feed_with_overflow(data);
@@ -1226,7 +1227,7 @@ pub mod __fuzz__ {
     pub fn pipeline_feed_builtins(data: &[u8]) {
         let mut p = crate::__bench__::BenchPipeline::with_builtins();
         let mut out: Vec<u8> = Vec::new();
-        for chunk in data.chunks(13) {
+        for chunk in data.chunks(13) { // arbitrary small stride to vary chunk boundaries
             let _ = p.feed(chunk, &mut out);
         }
     }
