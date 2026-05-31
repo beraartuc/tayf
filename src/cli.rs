@@ -96,7 +96,7 @@ pub struct RunArgs {
     pub config: Option<PathBuf>,
 
     /// Apply a preset color theme before user-config rules. CLI override
-    /// of `[general] theme`. Built-in themes: `dark`, `light`. Disk
+    /// of `[general] theme`. Built-in themes: `classic`, `dark`, `light`. Disk
     /// themes loaded from `<config_base>/themes/<name>.toml` are also
     /// accepted (`$XDG_CONFIG_HOME/tayf/themes/` or
     /// `$HOME/.config/tayf/themes/`). Unknown names, built-in name
