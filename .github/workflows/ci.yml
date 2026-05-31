@@ -17,11 +17,12 @@ jobs:
           - host: linux
             runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Format check
         run: cargo fmt --check
       - name: Clippy
@@ -53,10 +54,12 @@ jobs:
     name: Security audit
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo install --locked cargo-audit cargo-deny
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - run: cargo install --locked cargo-audit@0.22.1 cargo-deny@0.19.8
       - name: cargo audit
         run: cargo audit
       - name: cargo deny
@@ -73,9 +76,11 @@ jobs:
           - host: linux
             runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       # jq must be preinstalled on the self-hosted runner (apt install jq).
 
@@ -159,7 +164,7 @@ jobs:
 
       - name: Upload criterion artifacts (for baseline extraction)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: criterion-${{ matrix.host }}
           path: target/criterion/
@@ -169,9 +174,11 @@ jobs:
     name: MSRV (1.85)
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.85
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 1.85
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - run: cargo check --locked --all-targets
 
   fuzz-smoke:
@@ -183,9 +190,11 @@ jobs:
     # guard meanwhile is tests/adversarial.rs in the `test` job.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo install --locked cargo-fuzz
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # nightly
+        with:
+          toolchain: nightly
+      - run: cargo install --locked cargo-fuzz@0.13.1
       - name: Build + short-run each fuzz target
         run: |
           set -euo pipefail
