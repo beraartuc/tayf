@@ -2463,27 +2463,27 @@ mod tests {
     }
 
     #[test]
-    fn light_theme_changes_permission_to_black_dim() {
+    fn light_theme_sets_permission_to_slate() {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
         let c =
             Compiled::load_with_theme(None, None, Some("light"), None, None, ColorDepth::Truecolor)
                 .unwrap();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "permission").unwrap();
-        assert_eq!(c.styles[idx].fg, Some(Color::Black));
-        assert!(c.styles[idx].dim, "permission must be dim in light theme");
+        assert_eq!(c.styles[idx].fg, Some(Color::Rgb(0x47, 0x55, 0x69)));
+        assert!(!c.styles[idx].dim, "permission must not be dim in Neon-light theme");
     }
 
     #[test]
-    fn light_theme_changes_ipv4_to_red_bold() {
+    fn light_theme_sets_ipv4_to_azure() {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
         let c =
             Compiled::load_with_theme(None, None, Some("light"), None, None, ColorDepth::Truecolor)
                 .unwrap();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "ipv4").unwrap();
-        assert_eq!(c.styles[idx].fg, Some(Color::Red));
-        assert!(c.styles[idx].bold, "ipv4 must be bold in light theme");
+        assert_eq!(c.styles[idx].fg, Some(Color::Rgb(0x0c, 0x6b, 0x94)));
+        assert!(!c.styles[idx].bold, "ipv4 must not be bold in Neon-light theme");
     }
 
     #[test]

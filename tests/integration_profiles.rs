@@ -47,6 +47,9 @@ fn write_profile(xdg: &Path, name: &str, body: &str) -> PathBuf {
 /// `echo <token>\nexit\n` to the child shell and drains the master
 /// until the child exits. Shape mirrors
 /// `tests/integration_capture_groups.rs::run_in_pty`.
+///
+/// `COLORTERM=truecolor` is forced so that Neon-palette Rgb colors render
+/// as `38;2;R;G;B` sequences rather than falling back to 8-color ANSI.
 fn run_in_pty(xdg: &Path, token: &str, extra_args: &[&str]) -> Vec<u8> {
     let pty_system = portable_pty::native_pty_system();
     let pair = pty_system
@@ -58,6 +61,9 @@ fn run_in_pty(xdg: &Path, token: &str, extra_args: &[&str]) -> Vec<u8> {
     cmd.env_remove("XDG_CONFIG_HOME");
     cmd.env("XDG_CONFIG_HOME", xdg);
     cmd.env("TAYF_DISABLE_BG_DETECT", "1");
+    // Force truecolor so Neon-palette Rgb styles render as 38;2;R;G;B sequences.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
     cmd.arg("--shell");
     cmd.arg("/bin/sh");
     cmd.arg("--no-hot-reload");
@@ -100,10 +106,12 @@ fn run_in_pty(xdg: &Path, token: &str, extra_args: &[&str]) -> Vec<u8> {
 // Theme-precedence probes — shared helpers (Task 17 / A.10).
 //
 // The 8-cell theme precedence matrix below uses the built-in `ipv4`
-// rule as a probe. `assets/themes/dark.toml` styles ipv4 as
-// `yellow + bold` (SGR 33); `assets/themes/light.toml` styles ipv4 as
-// `red + bold` (SGR 31). The token `192.168.1.1` triggers the rule;
-// the rendered SGR signature distinguishes which theme was active.
+// rule as a probe. `assets/themes/dark.toml` (Neon dark) styles ipv4 as
+// `#1f9fe6` → SGR `38;2;31;159;230`. `assets/themes/light.toml` (Neon
+// light-adapted) styles ipv4 as `#0c6b94` → SGR `38;2;12;107;148`. The
+// token `192.168.1.1` triggers the rule; the truecolor SGR signature
+// distinguishes which theme was active. `run_in_pty` forces
+// `COLORTERM=truecolor` so 24-bit colors are not downgraded to 8-color.
 // ---------------------------------------------------------------------------
 
 fn probe_ipv4_sgr(xdg: &Path, args: &[&str]) -> String {
@@ -112,17 +120,21 @@ fn probe_ipv4_sgr(xdg: &Path, args: &[&str]) -> String {
 }
 
 fn assert_light_active(s: &str) {
-    let has_red = s.contains("\u{1b}[31") || s.contains(";31;") || s.contains("31m");
-    let has_yellow = s.contains("\u{1b}[33") || s.contains(";33;") || s.contains("33m");
-    assert!(has_red, "expected light theme red SGR on ipv4: {s:?}");
-    assert!(!has_yellow, "must not see dark theme yellow SGR: {s:?}");
+    // Light Neon ipv4 = #0c6b94 = RGB(12, 107, 148) → 38;2;12;107;148
+    let has_light = s.contains("38;2;12;107;148");
+    // Dark Neon ipv4 = #1f9fe6 = RGB(31, 159, 230) → 38;2;31;159;230
+    let has_dark = s.contains("38;2;31;159;230");
+    assert!(has_light, "expected light theme Neon ipv4 SGR (38;2;12;107;148) on ipv4: {s:?}");
+    assert!(!has_dark, "must not see dark theme Neon ipv4 SGR (38;2;31;159;230): {s:?}");
 }
 
 fn assert_dark_active(s: &str) {
-    let has_yellow = s.contains("\u{1b}[33") || s.contains(";33;") || s.contains("33m");
-    let has_red = s.contains("\u{1b}[31") || s.contains(";31;") || s.contains("31m");
-    assert!(has_yellow, "expected dark theme yellow SGR on ipv4: {s:?}");
-    assert!(!has_red, "must not see light theme red SGR: {s:?}");
+    // Dark Neon ipv4 = #1f9fe6 = RGB(31, 159, 230) → 38;2;31;159;230
+    let has_dark = s.contains("38;2;31;159;230");
+    // Light Neon ipv4 = #0c6b94 = RGB(12, 107, 148) → 38;2;12;107;148
+    let has_light = s.contains("38;2;12;107;148");
+    assert!(has_dark, "expected dark theme Neon ipv4 SGR (38;2;31;159;230) on ipv4: {s:?}");
+    assert!(!has_light, "must not see light theme Neon ipv4 SGR (38;2;12;107;148): {s:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -655,23 +667,25 @@ enabled = false
     let pre_region = &s[pre_idx..post_idx];
     let post_region = &s[post_idx..];
 
-    // Pre-edit assertions: instance_id cyan AND timestamp dim.
+    // Pre-edit assertions: instance_id cyan AND timestamp styled (Neon
+    // dark timestamp base = #83838d = RGB(131,131,141) → 38;2;131;131;141).
     assert!(
         pre_region.contains("\u{1b}[36") || pre_region.contains(";36"),
         "pre-edit: instance_id should be cyan: {pre_region:?}"
     );
     assert!(
-        pre_region.contains("\u{1b}[90") || pre_region.contains(";90"),
-        "pre-edit: timestamp should be dim (BrightBlack=90): {pre_region:?}"
+        pre_region.contains("38;2;131;131;141") || pre_region.contains("38;2;255;210;63"),
+        "pre-edit: timestamp should be styled (Neon dark #83838d or date sub-color #ffd23f): {pre_region:?}"
     );
 
-    // Post-edit assertions: instance_id still cyan; timestamp NOT dim.
+    // Post-edit assertions: instance_id still cyan; timestamp NOT styled
+    // (user-config edit disabled it — no timestamp SGR sequences present).
     assert!(
         post_region.contains("\u{1b}[36") || post_region.contains(";36"),
         "post-edit: instance_id should still be cyan (profile active): {post_region:?}"
     );
     assert!(
-        !post_region.contains("\u{1b}[90") && !post_region.contains(";90"),
-        "post-edit: timestamp should NOT be dim (user-config disabled it): {post_region:?}"
+        !post_region.contains("38;2;131;131;141") && !post_region.contains("38;2;255;210;63"),
+        "post-edit: timestamp should NOT be styled (user-config disabled it): {post_region:?}"
     );
 }
