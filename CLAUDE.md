@@ -100,7 +100,8 @@ tayf/
 ├── SECURITY.md                        # vulnerability reporting policy
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                     # fmt + clippy + test + audit + deny + fuzz
+│       ├── ci.yml                     # fmt + clippy + test + audit + deny + fuzz
+│       └── release.yml                # tag-triggered signed publish + GH release
 ├── src/
 │   ├── main.rs                        # CLI entry, ExitCode mapping
 │   ├── lib.rs                         # Tayf::run facade
