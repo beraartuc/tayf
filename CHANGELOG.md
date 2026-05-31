@@ -4,6 +4,62 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-06-01
+
+The first public release. tayf is now published on crates.io and Homebrew, with
+signed GitHub Release binaries. Beyond the new always-on marker, runtime behavior
+is unchanged — this cycle is distribution, CI hardening, and public documentation.
+
+### Added
+
+- **`TAYF_SESSION=1`** is set in the spawned child shell's environment, so
+  always-on wrappers (an rc `exec tayf` guard) and tools can detect they are
+  running inside tayf.
+- **Distribution channels:** crates.io (`cargo install tayf`), a Homebrew tap
+  (`brew install beraartuc/tayf/tayf`), and signed GitHub Release binaries
+  (combined `SHA256SUMS`, Sigstore provenance bundles, and a CycloneDX SBOM).
+- **`ARCHITECTURE.md`** and **`CONTRIBUTING.md`** for contributors.
+
+### Changed
+
+- **CI is hardened for a public repository.** The self-hosted runner jobs run
+  only in trusted contexts (push / same-repo PR); fork PRs instead run a
+  GitHub-hosted smoke check (fmt + clippy + test). Workflow token permissions
+  are default-deny.
+- **`release.yml` is live.** A tag push (`v*`) builds, signs (keyless Sigstore,
+  SLSA Build L2), publishes to crates.io (idempotent, in a protected
+  environment), and creates a signed GitHub Release; `workflow_dispatch` stays a
+  dry-run that publishes nothing.
+- **fuzz-smoke is now a hard CI gate** (previously non-blocking).
+- The README was rewritten for the public: install methods, always-on setup, and
+  the v0.9.1 Neon palette.
+
+### Removed
+
+- The internal design/process docs (`docs/superpowers/`, `tayf-tasarim.md`) are
+  no longer in the published tree (they remain in git history); in-code design
+  citations now point to `ARCHITECTURE.md`.
+- The committed `.cargo/config.toml` (a local mold-linker optimization) and an
+  OSC-11 debug repro example were removed from the tree. mold is documented as an
+  optional local setup in `CONTRIBUTING.md`.
+
+### Security
+
+- Fork-PR code can never execute on the self-hosted runner: the workflow uses
+  `pull_request` (not `pull_request_target`) with job-level trusted-context
+  gates and least-privilege tokens.
+- The crates.io publish token is crate-scoped, expiring, and confined to a
+  protected release environment with a required reviewer.
+- `SECURITY.md` now documents the benign signal-teardown `killpg` window and the
+  crates.io immutability / yank rollback story.
+
+### Notes
+
+- The `fancy-regex` entry in `Cargo.lock` is a feature-gated, **uncompiled**
+  transitive of `termwiz` (via `portable-pty`), not a removable orphan
+  (`cargo tree -i fancy-regex` is empty). The lockfile is intentionally held at
+  the audited v0.9.1 state for release stability.
+
 ## [0.9.1] - 2026-05-31
 
 A visual refresh of the default colors. The built-in palette moves from the
