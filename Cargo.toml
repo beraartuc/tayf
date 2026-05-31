@@ -76,6 +76,10 @@ harness = false
 name = "pipeline_feed"
 harness = false
 
+[[bench]]
+name = "redos"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

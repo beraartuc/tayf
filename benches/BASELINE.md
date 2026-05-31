@@ -857,3 +857,58 @@ deliberately deferred. Spec §7's literal "<20% vs cat" is unreachable for a
 byte-transforming wrapper; the honest result is the cumulative v0.8.x relative
 improvement (e2e streaming time: prose ~3.0×, log ~1.7×, ansi ~2.1× vs v0.8.0).
 Perf series: DONE.
+
+## v0.9 — Linear-scaling proof (recorded 2026-05-31)
+
+**Bench:** `benches/redos.rs` (`cargo bench --bench redos`). Spec §4 A3.
+
+The `regex` crate is linear-time by construction (no backtracking, no
+look-around). This bench empirically demonstrates the linear guarantee: input
+doubled in length should produce roughly doubled scan time. The adversarial
+input (`b'9'` × N + `\n`) engages the ipv4/url/timestamp built-in scanners
+(all digits — partly activates prefix DFA states) but never matches, exercising
+the worst-case scan path per line.
+
+- Host: Apple M2 Pro, macOS (Darwin 24.6.0, arm64)
+- Toolchain: rustc 1.95.0 (59807616e 2026-04-14) (Homebrew)
+- Profile: release (`cargo bench`)
+- Samples: criterion default (100 samples, ~5 s measurement)
+- Input shape: `vec![b'9'; N]` + `b'\n'` — never matches any built-in rule.
+
+### Criterion output (verbatim)
+
+```
+redos/linear-scaling/len-1024
+                        time:   [2.0108 µs 2.0153 µs 2.0197 µs]
+                        thrpt:  [483.98 MiB/s 485.04 MiB/s 486.13 MiB/s]
+
+redos/linear-scaling/len-2048
+                        time:   [3.7839 µs 3.7970 µs 3.8097 µs]
+                        thrpt:  [512.93 MiB/s 514.63 MiB/s 516.41 MiB/s]
+
+redos/linear-scaling/len-4096
+                        time:   [7.2330 µs 7.2503 µs 7.2661 µs]
+                        thrpt:  [537.73 MiB/s 538.90 MiB/s 540.19 MiB/s]
+
+redos/linear-scaling/len-8192
+                        time:   [12.676 µs 12.733 µs 12.786 µs]
+                        thrpt:  [611.11 MiB/s 613.64 MiB/s 616.40 MiB/s]
+```
+
+### Per-length summary
+
+| len (bytes) | time (mean) | thrpt (mean) | input×2 → time×? |
+|---|---|---|---|
+| 1 025 (1024+newline) | 2.0153 µs | 485.04 MiB/s | — |
+| 2 049 (2048+newline) | 3.7970 µs | 514.63 MiB/s | ×1.88 (1024→2048) |
+| 4 097 (4096+newline) | 7.2503 µs | 538.90 MiB/s | ×1.91 (2048→4096) |
+| 8 193 (8192+newline) | 12.733 µs | 613.64 MiB/s | ×1.76 (4096→8192) |
+
+### Linearity interpretation
+
+Total scan time grows ~1.76–1.91x per 2x length doubling (sub-2x), i.e.
+slightly sub-linear: throughput RISES across lengths (485.04 -> 514.63 ->
+538.90 -> 613.64 MiB/s), so per-byte cost FALLS as the line grows. This is
+fixed per-line RegexSet/DFA bookkeeping amortized over more bytes — the
+opposite of catastrophic backtracking, consistent with the regex crate's
+linear-time construction.
