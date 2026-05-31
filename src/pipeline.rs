@@ -794,7 +794,10 @@ mod rule_tests {
     }
 
     #[test]
-    fn http_url_match_renders_three_sgrs_with_underline_on_path() {
+    fn http_url_match_renders_single_underlined_sgr() {
+        // url rule uses group_styles: Vec::new() — the whole match is wrapped in
+        // a single Rgb SGR with underline. url renders as a single underlined span —
+        // see docs/superpowers/plans/2026-05-31-tayf-v0.9.1-neon-default-palette.md
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
         let mut scratch = PipelineScratch::default();
@@ -802,12 +805,29 @@ mod rule_tests {
         apply_rules(b"docs at https://example.com/path now\n", &rules, &mut scratch, &mut out)
             .unwrap();
         let s = String::from_utf8(out).unwrap();
-        let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
-        assert!(intro_count >= 3, "expected >= 3 SGRs (scheme/'://'/path); got: {s:?}");
+        // url fg = Rgb(0x5b,0x8c,0xff) = SGR 38;2;91;140;255 + underline (SGR 4).
+        assert!(s.contains("38;2;91;140;255"), "expected url Rgb SGR; got: {s:?}");
         // Underline attribute should appear (SGR code 4 for underline).
         assert!(
             s.contains("4m") || s.contains("4;") || s.contains(";4m"),
-            "expected underline SGR for path; got: {s:?}"
+            "expected underline SGR for url; got: {s:?}"
+        );
+        // Exactly ONE non-reset opening SGR must wrap the url match (regression
+        // guard against the old multi-SGR path that emitted three sequences).
+        let non_reset_sgr_count = s
+            .split("\x1b[")
+            .skip(1) // first split before any escape is the plain prefix
+            .filter(|seg| {
+                // A segment starting with digits followed by 'm' is an SGR;
+                // exclude the reset \x1b[0m.
+                seg.starts_with(|c: char| c.is_ascii_digit())
+                    && seg.split('m').next().is_some_and(|params| params != "0")
+            })
+            .count();
+        assert_eq!(
+            non_reset_sgr_count,
+            1,
+            "url match must emit exactly one non-reset opening SGR; got {non_reset_sgr_count} in: {s:?}"
         );
     }
 
