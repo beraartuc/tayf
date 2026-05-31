@@ -22,9 +22,10 @@ fn sigwinch_to_tayf_resizes_child_pty() {
     // Spawn tayf wrapping /bin/sh; resize the master fd; have the
     // shell report its window via `stty size`.
     let tayf = env!("CARGO_BIN_EXE_tayf");
-    let (master, mut child) = common::spawn_for_interaction(
+    let (master, mut child) = common::spawn_for_interaction_with_env(
         tayf,
         &["--shell", "/bin/sh"],
+        &[("TAYF_DISABLE_BG_DETECT", "1")],
         PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 },
     );
 
