@@ -170,21 +170,24 @@ fn syslog_timestamp_substring_survives_colorization() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. HTTP URL → ≥ 3 non-reset SGRs (scheme / "://" / host+path).
+// 3. HTTP URL → renders as a single underlined span. v0.9.1 (Neon) dropped
+//    the url rule's per-capture-group sub-styles (scheme / "://" / host+path),
+//    so the whole match is now one SGR run rather than three. PTY output is
+//    SGR-fragmented, so we assert the substrings survive + that the URL is
+//    still colorized (>= 1 SGR); the exact single-span count is pinned by the
+//    non-PTY test `pipeline::tests::http_url_match_renders_single_underlined_sgr`.
 // ---------------------------------------------------------------------------
 #[test]
-fn http_url_match_renders_three_sgrs() {
+fn http_url_match_renders_single_underlined_span() {
     let xdg = tempfile::tempdir().expect("tmpdir");
     let bytes = run_in_pty(xdg.path(), "see https://example.com/p", &[]);
     let s = String::from_utf8_lossy(&bytes);
-    // The URL is split across capture-group SGR runs (scheme / "://" /
-    // host+path), so the full literal string is not contiguous. Assert
-    // each capture-group substring survives separately instead.
+    // The URL is one contiguous span now; its substrings still survive.
     assert!(s.contains("https"), "URL scheme must survive: {s:?}");
     assert!(s.contains("://"), "URL separator must survive: {s:?}");
     assert!(s.contains("example.com/p"), "URL host+path must survive: {s:?}");
     let n = count_non_reset_sgrs(&s);
-    assert!(n >= 3, "expected at least 3 non-reset SGRs for URL, got {n} in: {s:?}");
+    assert!(n >= 1, "URL must still be colorized (>= 1 non-reset SGR), got {n} in: {s:?}");
 }
 
 // ---------------------------------------------------------------------------
