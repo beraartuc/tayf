@@ -734,7 +734,7 @@ impl Compiled {
 
         // Layer 3 (Step 3 in spec §5.4): optional preset theme. Applied
         // BEFORE the user config so user rules win on conflict (spec §2
-        // decision 5). Validation runs BEFORE the merge so semantic
+        // Decision 5). Validation runs BEFORE the merge so semantic
         // errors surface against the synthetic theme path rather than
         // mutating the rule set first.
         if let Some((name, loaded)) = loaded_theme {

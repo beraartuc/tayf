@@ -1,4 +1,4 @@
-//! Shell discovery cascade per spec §1 / brainstorming decision 3.
+//! Shell discovery cascade per spec §1 / brainstorming Decision 3.
 
 use std::env;
 use std::path::{Path, PathBuf};
