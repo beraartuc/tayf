@@ -43,11 +43,26 @@ allow = [
 confidence-threshold = 0.93
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 deny = []
+skip-tree = [
+    { crate = "ratatui@0.30.0", depth = 4, reason = "drags hashbrown 0.16 + signal-hook 0.3 + itertools 0.14 via crossterm/kasuari/widgets; upstream-owned, not reducible by us" },
+    { crate = "criterion@0.8.2", depth = 2, reason = "dev-only; pulls itertools 0.13" },
+]
+skip = [
+    { crate = "thiserror-impl@1.0.69", reason = "proc-macro companion to thiserror 1.0 via portable-pty->filedescriptor; we use 2.0 directly" },
+    { crate = "winnow@0.7.15", reason = "toml 0.9 / toml_edit 0.25 winnow split; upstream toml-rs migration in progress" },
+    { crate = "toml_datetime@0.7.5+spec-1.1.0", reason = "same toml/toml_edit split" },
+]
 
 [advisories]
+# NOTE: vulnerability advisories ALWAYS error in cargo-deny >=0.16 — no longer
+# configurable. The old `vulnerability`/`notice`/`severity-threshold` keys were
+# removed and now error if present. Requires cargo-deny >= 0.18.2 for the
+# `unmaintained`/`unsound` scope selectors below.
 yanked = "deny"
+unmaintained = "all"
+unsound = "all"
 ignore = []
 
 [sources]
