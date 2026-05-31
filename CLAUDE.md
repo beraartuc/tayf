@@ -2,7 +2,7 @@
 
 PTY-based, terminal-agnostic, regex-driven output colorizer in Rust. Open-source from day one — every decision should hold up to public scrutiny.
 
-The full design document is in `tayf-tasarim.md` (Turkish). v0.1 scope and decisions are in `docs/superpowers/specs/`.
+The architecture overview is in `ARCHITECTURE.md`. Historical design documents live in git history.
 
 ---
 
@@ -13,7 +13,7 @@ These four rules override convenience and speed. Do not relax them without expli
 ### 1. Language: English in code, Turkish in conversation
 
 - **All identifiers, code comments, doc-comments, commit messages, PR titles/bodies, error messages shown to users, log strings, CLI help text, and CHANGELOG entries MUST be English.** This is an open-source project; future contributors and users read these.
-- **Design documents and the conversation with the user are Turkish.** `tayf-tasarim.md` and specs under `docs/superpowers/specs/` stay in Turkish until the project is public-ready.
+- **Conversation with the user is in Turkish.** Code, comments, docs, and commits are always English.
 - A mixed-language identifier (e.g., `read_satir`) is a bug. Catch and fix on sight.
 - When refactoring, do not leave half-translated files. Rename the whole module in one commit.
 
@@ -81,7 +81,7 @@ This project will be read by strangers. Make it look like it was always meant to
 
 ---
 
-## Project Layout (v0.1)
+## Project Layout
 
 ```
 tayf/
@@ -91,49 +91,90 @@ tayf/
 ├── clippy.toml
 ├── rustfmt.toml
 ├── deny.toml                          # cargo-deny policy (licenses, advisories)
+├── ARCHITECTURE.md                    # architecture overview (English)
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md                          # this file
-├── tayf-tasarim.md                    # master design (Turkish)
+├── SECURITY.md                        # vulnerability reporting policy
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                     # fmt + clippy + test + audit + deny
-├── docs/
-│   └── superpowers/
-│       ├── specs/
-│       │   ├── 2026-05-21-tayf-v0.1-design.md
-│       │   └── 2026-05-21-tayf-v0.2.0-design.md
-│       ├── plans/
-│       │   ├── 2026-05-21-tayf-v0.1.md
-│       │   └── 2026-05-21-tayf-v0.1.1-cleanup.md
-│       └── reviews/
-│           └── 2026-05-21-rust-senior-architecture-review.md
+│       └── ci.yml                     # fmt + clippy + test + audit + deny + fuzz
 ├── src/
 │   ├── main.rs                        # CLI entry, ExitCode mapping
 │   ├── lib.rs                         # Tayf::run facade
-│   ├── cli.rs                         # clap derive Args
+│   ├── cli.rs                         # clap derive Args + subcommands
 │   ├── error.rs                       # tayf::Error enum (thiserror)
 │   ├── shell.rs                       # ShellSpec discovery
 │   ├── pty.rs                         # PtySession + into_parts decomposition
 │   ├── tty_guard.rs                   # RAII raw mode + panic hook
 │   ├── signals.rs                     # signal_hook thread
 │   ├── runtime.rs                     # two-thread I/O loop + shutdown
-│   ├── pipeline.rs                    # TUI mode SM + line buffer + apply_rules
+│   ├── pipeline.rs                    # AnsiSm + line buffer + apply_rules
 │   ├── line_buffer.rs                 # UTF-8 safe accumulator
-│   ├── rules.rs                       # Compiled struct + builtin patterns + filename catalog
+│   ├── ansi.rs                        # ANSI escape-sequence state machine
+│   ├── rules.rs                       # Compiled struct + builtin patterns
 │   ├── style.rs                       # Color + Style + SGR audit gate
+│   ├── themes.rs                      # built-in theme library + disk loader
+│   ├── profiles.rs                    # profile resolution + built-in profiles
+│   ├── reload.rs                      # hot-reload orchestrator
+│   ├── watch.rs                       # notify-based config-file watcher
+│   ├── bg_detect.rs                   # terminal background-color detection
 │   ├── terminfo.rs                    # TTY detection + winsize helper + color depth
+│   ├── config.rs                      # TOML config load + validation
+│   ├── config_tui/                    # interactive `tayf config` TUI
+│   │   ├── mod.rs
+│   │   ├── app.rs
+│   │   ├── events.rs
+│   │   ├── render.rs
+│   │   ├── edit.rs
+│   │   ├── save.rs
+│   │   ├── reconcile.rs
+│   │   ├── snapshot.rs
+│   │   ├── debounce.rs
+│   │   ├── compile_pending.rs
+│   │   ├── merge.rs
+│   │   ├── search.rs
+│   │   ├── style_ratatui.rs
+│   │   ├── dump_cmd.rs
+│   │   ├── status_cmd.rs
+│   │   ├── test_support.rs
+│   │   ├── tabs/
+│   │   │   ├── mod.rs
+│   │   │   ├── patterns.rs
+│   │   │   ├── themes.rs
+│   │   │   ├── profiles.rs
+│   │   │   └── status.rs
+│   │   └── widgets/
+│   │       ├── mod.rs
+│   │       ├── color_picker.rs
+│   │       ├── conflict_list.rs
+│   │       ├── edit_regex.rs
+│   │       ├── help.rs
+│   │       ├── new_pattern.rs
+│   │       ├── preview.rs
+│   │       ├── sample_set.rs
+│   │       ├── save_diff.rs
+│   │       └── search.rs
 │   ├── log.rs                         # env-gated stdlib logger (TAYF_LOG)
 │   └── version.rs                     # build-time SHA + rustc info
 ├── benches/
 │   ├── throughput.rs                  # criterion throughput benches
+│   ├── pipeline_feed.rs               # pipeline micro-bench
+│   ├── e2e_overhead.rs                # end-to-end PTY overhead bench
+│   ├── redos.rs                       # ReDoS adversarial bench
 │   └── BASELINE.md                    # recorded baseline numbers
 └── tests/
     ├── integration_smoke.rs           # spawn shell, send command, assert exit
+    ├── integration_signals.rs         # SIGWINCH / SIGINT / SIGTERM forwarding
+    ├── integration_config.rs          # config load + validation
+    ├── integration_hot_reload.rs      # SIGHUP + file-change reload
+    ├── integration_themes.rs          # theme load + apply
+    ├── integration_profiles.rs        # profile resolution
+    ├── adversarial.rs                 # ReDoS + memory-cap adversarial tests
     └── common/
-        └── mod.rs                     # shared test helpers
+        └── mod.rs                     # shared test helpers + TUI harness
 ```
 
 Each file MUST have a module-level doc-comment explaining its purpose, public API, and invariants.
@@ -142,9 +183,9 @@ Each file MUST have a module-level doc-comment explaining its purpose, public AP
 
 ## Working Conventions for Claude
 
-- **Always read `tayf-tasarim.md` decisions before designing new modules.** Section references in code are encouraged (e.g., `// See tayf-tasarim.md §6.5 — Drop guard requirement`).
+- **Always read `ARCHITECTURE.md` before designing new modules.** Historical design decisions are in git history if deeper context is needed.
 - **Use the `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:systematic-debugging`, and `superpowers:security-review` skills** at the appropriate points. They are not optional.
 - **`cargo fmt && cargo clippy -- -D warnings && cargo test`** is the local pre-commit check. Run it before claiming work is complete.
 - **Commits are small and atomic.** One logical change per commit. Title in imperative present tense, under 70 chars. Body explains *why*, not *what*.
-- **PR descriptions reference the design doc section(s) and the spec.**
+- **PR descriptions reference the relevant `ARCHITECTURE.md` section and the motivation for the change.**
 - **Do not introduce dependencies casually.** New crates require a one-line justification in the commit message and an audit note (maintainer activity, license, `unsafe` lines).
