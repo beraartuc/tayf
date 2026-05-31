@@ -16,6 +16,9 @@ fn main() {
     println!("cargo:rustc-env=TAYF_GIT_SHA={sha}");
     println!("cargo:rustc-env=TAYF_GIT_DIRTY={}", if dirty { "1" } else { "0" });
     println!("cargo:rustc-env=TAYF_RUSTC={rustc}");
+    // Declare `fuzzing` as a known cfg so rustc's check-cfg lint does not
+    // warn when cargo-fuzz passes `--cfg fuzzing` through RUSTFLAGS.
+    println!("cargo:rustc-check-cfg=cfg(fuzzing)");
     // Re-run when HEAD moves (commit, checkout) or the index changes (stage,
     // unstage). Both files are absent in tarball builds; cargo silently
     // ignores missing rerun-if-changed paths, which is the desired behaviour.

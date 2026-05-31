@@ -1176,3 +1176,64 @@ pub mod __bench__ {
         crate::pipeline::apply_rules(line, &rules.0, &mut scratch.0, out)
     }
 }
+
+/// Fuzz-only adapters over `pub(crate)` internals. Compiled ONLY under
+/// `--cfg fuzzing` (cargo-fuzz sets this across the path-dep graph), so it
+/// is absent from normal and `cargo publish` builds — zero public API
+/// surface, clean `cargo metadata`/SBOM. See `fuzz/fuzz_targets/`.
+#[cfg(fuzzing)]
+pub mod __fuzz__ {
+    /// Drive the ANSI state machine byte-by-byte. Invariant: no panic; the
+    /// SM consumes every byte and the sequence cap keeps internal state bounded.
+    pub fn ansi_sm(data: &[u8]) {
+        let mut sm = crate::ansi::AnsiSm::new();
+        for &b in data {
+            let _ = sm.step(b);
+        }
+    }
+
+    /// Drive the line buffer with arbitrary chunking. Invariant: no panic;
+    /// UTF-8 splits never cause invalid slicing (regex::bytes operates on raw
+    /// bytes); the buffer cap bounds memory.
+    pub fn line_buffer(data: &[u8]) {
+        let mut lb = crate::line_buffer::LineBuffer::new();
+        for chunk in data.chunks(7) {
+            let _ = lb.feed_data_run(chunk);
+        }
+        let _ = lb.feed_with_overflow(data);
+    }
+
+    /// Differential passthrough oracle at `apply_rules` granularity: with an
+    /// EMPTY rule set, applying rules to any single line is byte-identical to
+    /// the input. (NOT `Pipeline::feed`-level byte-identity — that injects a
+    /// synthetic ST on cap-overflow; see spec §4 A1.3.)
+    ///
+    /// # Panics
+    /// Panics (the fuzzer's crash signal) iff the byte-identity oracle breaks.
+    pub fn pipeline_apply_rules_identity(line: &[u8]) {
+        use std::sync::Arc;
+        let empty = crate::rules::Compiled::empty();
+        let rules = Arc::new(arc_swap::ArcSwap::from_pointee(empty));
+        let mut scratch = crate::pipeline::PipelineScratch::default();
+        let mut out: Vec<u8> = Vec::new();
+        crate::pipeline::apply_rules(line, &rules, &mut scratch, &mut out)
+            .expect("Vec write is infallible");
+        assert_eq!(out, line, "empty-rules apply_rules must be byte-identical");
+    }
+
+    /// Full pipeline feed over the built-in rule set. Crash-finder only
+    /// (no oracle): invariant is no panic on arbitrary chunked input.
+    pub fn pipeline_feed_builtins(data: &[u8]) {
+        let mut p = crate::__bench__::BenchPipeline::with_builtins();
+        let mut out: Vec<u8> = Vec::new();
+        for chunk in data.chunks(13) {
+            let _ = p.feed(chunk, &mut out);
+        }
+    }
+
+    /// Compile an arbitrary user pattern under the production size limits.
+    /// Invariant: returns (Ok or clean Err) without panic/OOM/timeout.
+    pub fn regex_compile(pattern: &str) {
+        let _ = crate::rules::fuzz_compile_pattern(pattern);
+    }
+}

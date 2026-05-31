@@ -912,6 +912,20 @@ pub(crate) fn compile_from_config(
     )
 }
 
+/// Fuzz-only: compile an arbitrary user pattern through the exact production
+/// builder (1 MiB NFA + DFA size limits). Returns the build result; the fuzz
+/// harness asserts only that this neither panics nor hangs. Compiled ONLY
+/// under `--cfg fuzzing`.
+#[cfg(fuzzing)]
+pub(crate) fn fuzz_compile_pattern(
+    pattern: &str,
+) -> std::result::Result<regex::bytes::Regex, regex::Error> {
+    regex::bytes::RegexBuilder::new(pattern)
+        .size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .dfa_size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .build()
+}
+
 /// Derive a user-facing profile name from a profile source-path label.
 ///
 /// `<embedded:profile/{name}>` → `{name}`. A disk path ending in
