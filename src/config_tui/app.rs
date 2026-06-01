@@ -297,6 +297,10 @@ impl TuiEnv {
 }
 
 /// Top-level App state.
+// reason: `mini_preview_visible`, `should_quit`, `pending_save_and_quit`,
+// and `needs_redraw` are four distinct single-bit sentinel flags; a state
+// machine would add indirection with no clarity gain in a single-threaded TUI.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct App {
     pub(crate) snapshot: ConfigSnapshot,
     pub(crate) edits: PendingEdits,
@@ -323,6 +327,9 @@ pub(crate) struct App {
     /// `SaveDiff` exit path that does NOT set `should_quit`. Enforced by
     /// `test_pending_save_and_quit_resets_on_every_non_commit_exit`.
     pub(crate) pending_save_and_quit: bool,
+    /// Dirty flag for the event loop: draw only when set (spec §8). Start
+    /// `true` so the first frame renders. Set on key/resize/state change.
+    pub(crate) needs_redraw: bool,
 }
 
 impl App {
@@ -377,6 +384,7 @@ impl App {
             sample_set_state: None,
             should_quit: false,
             pending_save_and_quit: false,
+            needs_redraw: true,
         };
         app.preview.recompile(&app.sample_input.text);
         app

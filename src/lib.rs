@@ -679,10 +679,10 @@ pub mod __test_api {
 
     /// Invoke one debounce tick as if the main loop's timer fired.
     ///
-    /// Returns `true` if the pending mark was consumed by this tick
-    /// (i.e., `was_pending` before the tick and `!is_pending` after).
-    /// This does NOT guarantee that a recompile actually ran — use
-    /// `debouncer_pending()` or inspect preview state for that. G1 spec §3.7.
+    /// Returns `true` if this tick consumed a pending edit and ran a recompile
+    /// (a pending mark was set before the tick and cleared by the recompile
+    /// after — the recompile is what clears the mark). Use `debouncer_pending()`
+    /// to inspect the debouncer state independently. G1 spec §3.7.
     pub fn tick_debounce(app: &mut AppHandle) -> bool {
         let was_pending = app.0.preview.debouncer.is_pending();
         crate::config_tui::events::check_debounce(&mut app.0);

@@ -74,23 +74,33 @@ pub(crate) fn run_event_loop(
     mut terminal: Terminal<CrosstermBackend<Stdout>>,
 ) -> std::io::Result<()> {
     while !app.should_quit {
-        terminal.draw(|frame| crate::config_tui::render::frame(frame, &app))?;
+        if app.needs_redraw {
+            terminal.draw(|frame| crate::config_tui::render::frame(frame, &app))?;
+            app.needs_redraw = false;
+        }
         if ratatui::crossterm::event::poll(Duration::from_millis(100))? {
             match ratatui::crossterm::event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(&mut app, k),
-                // All other events are intentionally ignored.
-                // Resize: ratatui recalculates layout on the next draw call.
-                // Mouse / Paste / Focus*: not handled in the current TUI scope.
-                Event::Resize(_, _)
-                | Event::Mouse(_)
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    dispatch_key(&mut app, k);
+                    app.needs_redraw = true;
+                }
+                // A resize invalidates the laid-out frame: ratatui recomputes
+                // on the next draw, so request one explicitly (the old code
+                // relied on the unconditional redraw). Spec §8.
+                Event::Resize(_, _) => app.needs_redraw = true,
+                Event::Mouse(_)
                 | Event::Paste(_)
                 | Event::FocusGained
                 | Event::FocusLost
                 | Event::Key(_) => {}
             }
         } else {
-            check_debounce(&mut app);
-            check_toast(&mut app);
+            // Idle tick: only the timers that actually changed state mark dirty.
+            let recompiled = check_debounce(&mut app);
+            let toast_expired = check_toast(&mut app);
+            if recompiled || toast_expired {
+                app.needs_redraw = true;
+            }
         }
     }
     Ok(())
@@ -548,14 +558,17 @@ fn apply_confirm(app: &mut App, action: &ConfirmAction) {
 }
 
 /// Debounce tick — fires `apply_pending_and_recompile` once per quiescent
-/// window (spec §9.1). The in-progress `EditRegex` buffer is NOT applied
-/// to the compile path until Enter commit — the debounced tick re-runs
-/// against the currently committed `edits.rules` state so the rest of
-/// the preview stays live while the user types.
-pub(crate) fn check_debounce(app: &mut App) {
+/// window (spec §9.1). Returns `true` if a recompile was triggered (state
+/// changed). The in-progress `EditRegex` buffer is NOT applied to the
+/// compile path until Enter commit — the debounced tick re-runs against
+/// the currently committed `edits.rules` state so the rest of the
+/// preview stays live while the user types.
+pub(crate) fn check_debounce(app: &mut App) -> bool {
     if app.preview.debouncer.should_recompile() {
         apply_pending_and_recompile(app);
+        return true;
     }
+    false
 }
 
 /// Recompile the live-preview rule set. Delegates to
@@ -1038,11 +1051,14 @@ pub(crate) fn pattern_for_rule_id(rule_id: &crate::config_tui::edit::RuleId, app
     }
 }
 
-/// Toast expiration tick.
-pub(crate) fn check_toast(app: &mut App) {
+/// Toast expiration tick. Returns `true` if the toast was cleared (state
+/// changed).
+pub(crate) fn check_toast(app: &mut App) -> bool {
     if app.toast.as_ref().is_some_and(crate::config_tui::app::Toast::expired) {
         app.toast = None;
+        return true;
     }
+    false
 }
 
 /// `Search` modal key dispatch + outcome handling.
@@ -1289,12 +1305,26 @@ fn handle_help_key(app: &mut App, _k: KeyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_tui::app::App;
     use crate::config_tui::snapshot::ConfigSnapshot;
     use crate::config_tui::widgets::color_picker::{ColorPickerState, PickerSection};
     use ratatui::crossterm::event::KeyModifiers;
 
     fn mk(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    #[test]
+    fn idle_ticks_without_state_change_request_no_redraw() {
+        let mut app = App::default_for_test();
+        // Clean post-draw state: no toast, no pending debounce, so neither
+        // timer function should report a change.
+        app.needs_redraw = false;
+        let changed = check_debounce(&mut app) || check_toast(&mut app);
+        assert!(!changed, "idle ticks must not request a redraw");
+        // The timer functions must not write needs_redraw directly — the event
+        // loop is its sole writer.
+        assert!(!app.needs_redraw, "timer functions must not write needs_redraw");
     }
 
     #[test]
