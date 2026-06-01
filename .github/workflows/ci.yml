@@ -149,3 +149,31 @@ jobs:
             cargo fuzz build "$t"
             cargo fuzz run "$t" -- -max_total_time=60 -timeout=10
           done
+
+  installer-lint:
+    name: Installer lint + unit test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - name: shellcheck
+        run: shellcheck install.sh tests/install_sh_test.sh
+      - name: Detection unit test
+        run: sh tests/install_sh_test.sh
+
+  installer-e2e:
+    name: Installer e2e (macOS, latest release)
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - name: Install via install.sh + smoke
+        env:
+          GH_TOKEN: ${{ github.token }}   # lets the best-effort attestation path run
+          TAYF_INSTALL_DIR: ${{ runner.temp }}/bin
+        run: |
+          set -euo pipefail
+          sh install.sh
+          "${TAYF_INSTALL_DIR}/tayf" --version | grep -E '^tayf '
