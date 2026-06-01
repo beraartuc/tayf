@@ -41,8 +41,11 @@ impl AccentPalette {
                 tab_inactive_fg: Color::Rgb(0x6b, 0x72, 0x80),
                 border: Color::Rgb(0x56, 0x5f, 0x73),
                 header: Color::Rgb(0xd8, 0xa6, 0x57),
-                selection_bg: Color::Rgb(0x3a, 0x2f, 0x1c),
-                selection_fg: Color::Rgb(0xf0, 0xed, 0xe6),
+                // Brass fill + base-bg text — a clear "this row is selected"
+                // bar, identical to the active-tab chip. A subtle tint here is
+                // near-invisible on a dark terminal (manual-review finding).
+                selection_bg: Color::Rgb(0xd8, 0xa6, 0x57),
+                selection_fg: Color::Rgb(0x0e, 0x0e, 0x12),
                 modal_title: Color::Rgb(0xd8, 0xa6, 0x57),
                 hint_dim: Color::Rgb(0x6b, 0x72, 0x80),
             },
@@ -52,8 +55,10 @@ impl AccentPalette {
                 tab_inactive_fg: Color::Rgb(0x8a, 0x8f, 0x99),
                 border: Color::Rgb(0x8a, 0x93, 0xa3),
                 header: Color::Rgb(0x9a, 0x6b, 0x1e),
-                selection_bg: Color::Rgb(0xf0, 0xe4, 0xcf),
-                selection_fg: Color::Rgb(0x2a, 0x21, 0x18),
+                // Brass fill + light text — clear selected-row bar (a pale tint
+                // is near-invisible on a light terminal too).
+                selection_bg: Color::Rgb(0x9a, 0x6b, 0x1e),
+                selection_fg: Color::Rgb(0xf7, 0xf7, 0xf5),
                 modal_title: Color::Rgb(0x9a, 0x6b, 0x1e),
                 hint_dim: Color::Rgb(0x8a, 0x8f, 0x99),
             },
@@ -80,9 +85,10 @@ impl AccentPalette {
         Style::default().fg(self.header).add_modifier(Modifier::BOLD)
     }
 
-    /// Selected list row: brass-tint fill + high-contrast text.
+    /// Selected list row: brass fill + base-bg text + bold — a clear, high-
+    /// contrast bar matching the active-tab chip (a subtle tint was unreadable).
     pub(crate) fn selection(self) -> Style {
-        Style::default().fg(self.selection_fg).bg(self.selection_bg)
+        Style::default().fg(self.selection_fg).bg(self.selection_bg).add_modifier(Modifier::BOLD)
     }
 
     /// Modal title: brass, bold.
@@ -137,5 +143,27 @@ mod tests {
         let s = AccentPalette::from_bg(BgTheme::Light).tab_active();
         assert_eq!(s.bg, Some(Color::Rgb(0x9a, 0x6b, 0x1e)), "light brass chip bg");
         assert_eq!(s.fg, Some(Color::Rgb(0xf7, 0xf7, 0xf5)), "light chip text");
+    }
+
+    #[test]
+    fn selection_is_a_clear_brass_chip_not_a_subtle_tint() {
+        // Manual-review fix: the selected list row must be an unmistakable brass
+        // bar (like the active-tab chip), not the old near-invisible dark tint.
+        let d = AccentPalette::from_bg(BgTheme::Dark);
+        let s = d.selection();
+        assert_eq!(s.bg, Some(Color::Rgb(0xd8, 0xa6, 0x57)), "dark selection brass bg");
+        assert_eq!(s.fg, Some(Color::Rgb(0x0e, 0x0e, 0x12)), "dark selection base-bg text");
+        assert!(s.add_modifier.contains(Modifier::BOLD), "selection is bold");
+        assert_ne!(
+            d.selection_bg,
+            Color::Rgb(0x3a, 0x2f, 0x1c),
+            "no longer the ~1.45:1 unreadable tint"
+        );
+        // Light variant: brass bar too.
+        assert_eq!(
+            AccentPalette::from_bg(BgTheme::Light).selection().bg,
+            Some(Color::Rgb(0x9a, 0x6b, 0x1e)),
+            "light selection brass bg"
+        );
     }
 }
