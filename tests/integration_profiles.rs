@@ -107,7 +107,7 @@ fn run_in_pty(xdg: &Path, token: &str, extra_args: &[&str]) -> Vec<u8> {
 //
 // The 8-cell theme precedence matrix below uses the built-in `ipv4`
 // rule as a probe. `assets/themes/dark.toml` (Neon dark) styles ipv4 as
-// `#1f9fe6` → SGR `38;2;31;159;230`. `assets/themes/light.toml` (Neon
+// `#33c7ff` → SGR `38;2;51;199;255`. `assets/themes/light.toml` (Neon
 // light-adapted) styles ipv4 as `#0c6b94` → SGR `38;2;12;107;148`. The
 // token `192.168.1.1` triggers the rule; the truecolor SGR signature
 // distinguishes which theme was active. `run_in_pty` forces
@@ -122,18 +122,18 @@ fn probe_ipv4_sgr(xdg: &Path, args: &[&str]) -> String {
 fn assert_light_active(s: &str) {
     // Light Neon ipv4 = #0c6b94 = RGB(12, 107, 148) → 38;2;12;107;148
     let has_light = s.contains("38;2;12;107;148");
-    // Dark Neon ipv4 = #1f9fe6 = RGB(31, 159, 230) → 38;2;31;159;230
-    let has_dark = s.contains("38;2;31;159;230");
+    // Dark Neon ipv4 = #33c7ff = RGB(51, 199, 255) → 38;2;51;199;255
+    let has_dark = s.contains("38;2;51;199;255");
     assert!(has_light, "expected light theme Neon ipv4 SGR (38;2;12;107;148) on ipv4: {s:?}");
-    assert!(!has_dark, "must not see dark theme Neon ipv4 SGR (38;2;31;159;230): {s:?}");
+    assert!(!has_dark, "must not see dark theme Neon ipv4 SGR (38;2;51;199;255): {s:?}");
 }
 
 fn assert_dark_active(s: &str) {
-    // Dark Neon ipv4 = #1f9fe6 = RGB(31, 159, 230) → 38;2;31;159;230
-    let has_dark = s.contains("38;2;31;159;230");
+    // Dark Neon ipv4 = #33c7ff = RGB(51, 199, 255) → 38;2;51;199;255
+    let has_dark = s.contains("38;2;51;199;255");
     // Light Neon ipv4 = #0c6b94 = RGB(12, 107, 148) → 38;2;12;107;148
     let has_light = s.contains("38;2;12;107;148");
-    assert!(has_dark, "expected dark theme Neon ipv4 SGR (38;2;31;159;230) on ipv4: {s:?}");
+    assert!(has_dark, "expected dark theme Neon ipv4 SGR (38;2;51;199;255) on ipv4: {s:?}");
     assert!(!has_light, "must not see light theme Neon ipv4 SGR (38;2;12;107;148): {s:?}");
 }
 
@@ -674,8 +674,8 @@ enabled = false
         "pre-edit: instance_id should be cyan: {pre_region:?}"
     );
     assert!(
-        pre_region.contains("38;2;131;131;141") || pre_region.contains("38;2;255;210;63"),
-        "pre-edit: timestamp should be styled (Neon dark #83838d or date sub-color #ffd23f): {pre_region:?}"
+        pre_region.contains("38;2;131;131;141") || pre_region.contains("38;2;247;209;127"),
+        "pre-edit: timestamp should be styled (Neon dark #83838d or date sub-color #f7d17f): {pre_region:?}"
     );
 
     // Post-edit assertions: instance_id still cyan; timestamp NOT styled
@@ -685,7 +685,7 @@ enabled = false
         "post-edit: instance_id should still be cyan (profile active): {post_region:?}"
     );
     assert!(
-        !post_region.contains("38;2;131;131;141") && !post_region.contains("38;2;255;210;63"),
+        !post_region.contains("38;2;131;131;141") && !post_region.contains("38;2;247;209;127"),
         "post-edit: timestamp should NOT be styled (user-config disabled it): {post_region:?}"
     );
 }

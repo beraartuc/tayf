@@ -370,11 +370,23 @@ fn build_filename_pattern() -> String {
 
 /// Four timestamp formats joined as alternation. Each branch is anchor-
 /// bounded with fixed counts; no backtracking risk under `regex::bytes`.
+///
+/// Every branch carries positional `date`/`time`(/`tz`) capture groups so
+/// all four formats receive the same date/time/tz sub-coloring (only the
+/// ISO branch names its groups; the others use unnamed positional groups
+/// because the `regex` crate forbids duplicate capture-group names). The
+/// numeric group order across the whole alternation is:
+///   1 date, 2 sep, 3 time, 4 ms, 5 tz                      (ISO8601)
+///   6 date, 7 time                                         (syslog)
+///   8 date, 9 time, 10 tz                                  (apache)
+///   11 date, 12 time, 13 tz                                (rfc2822)
+/// Separators that fall between groups (the apache `:`, the spaces) are
+/// left outside any group and inherit the rule's gray top-level style.
 const TS_ISO8601: &str = r"\b(?P<date>\d{4}-\d{2}-\d{2})(?P<sep>[T ])(?P<time>\d{2}:\d{2}:\d{2})(?P<ms>\.\d{1,9})?(?P<tz>[Zz]|[+-]\d{2}:?\d{2})?\b";
 const TS_SYSLOG: &str =
-    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2}\b";
-const TS_APACHE: &str = r"\b\d{1,2}/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4}";
-const TS_RFC2822: &str = r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} (?:GMT|UTC|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[+-]\d{4})";
+    r"\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d) (\d{2}:\d{2}:\d{2})\b";
+const TS_APACHE: &str = r"\b(\d{1,2}/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/\d{4}):(\d{2}:\d{2}:\d{2}) ([+-]\d{4})";
+const TS_RFC2822: &str = r"\b((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}) (\d{2}:\d{2}:\d{2}) ((?:GMT|UTC|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[+-]\d{4}))";
 
 /// Join `TS_ISO8601`, `TS_SYSLOG`, `TS_APACHE`, `TS_RFC2822` as a single
 /// non-capturing alternation suitable for `regex::bytes::Regex`.
@@ -393,13 +405,13 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     vec![
         BuiltinRule {
             name: "permission".into(),
-            pattern: r"(?:^|\s)(?P<perm_type>[dlcbps-])(?P<perm_owner>[rwxsStT-]{3})(?P<perm_group>[rwxsStT-]{3})(?P<perm_other>[rwxsStT-]{3})\+?(?:\s|$)".into(),
+            pattern: r"(?:^|\s)(?P<perm_type>[dlcbps-])(?P<perm_owner>[rwxsStT-]{3})(?P<perm_group>[rwxsStT-]{3})(?P<perm_other>[rwxsStT-]{3})[@+]?(?:\s|$)".into(),
             style: Style { fg: Some(Color::Rgb(0x83, 0x83, 0x8d)), ..Style::DEFAULT },
             group_styles: vec![
-                Some(Style { fg: Some(Color::Rgb(0x5b, 0x8c, 0xff)), ..Style::DEFAULT }),  // perm_type
-                Some(Style { fg: Some(Color::Rgb(0xff, 0x4d, 0x6d)), ..Style::DEFAULT }),  // perm_owner
-                Some(Style { fg: Some(Color::Rgb(0xff, 0xd2, 0x3f)), ..Style::DEFAULT }),  // perm_group
-                Some(Style { fg: Some(Color::Rgb(0xa8, 0xff, 0x3e)), ..Style::DEFAULT }),  // perm_other
+                Some(Style { fg: Some(Color::Rgb(0x5a, 0x8b, 0xff)), ..Style::DEFAULT }),  // perm_type
+                Some(Style { fg: Some(Color::Rgb(0xff, 0x53, 0x72)), ..Style::DEFAULT }),  // perm_owner
+                Some(Style { fg: Some(Color::Rgb(0xf7, 0xd1, 0x7f)), ..Style::DEFAULT }),  // perm_group
+                Some(Style { fg: Some(Color::Rgb(0xae, 0xff, 0x4c)), ..Style::DEFAULT }),  // perm_other
             ],
             styles_override: None,
             priority: 0,
@@ -410,11 +422,23 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             pattern: build_timestamp_pattern(),
             style: Style { fg: Some(Color::Rgb(0x83, 0x83, 0x8d)), ..Style::DEFAULT },
             group_styles: vec![
-                Some(Style { fg: Some(Color::Rgb(0xff, 0xd2, 0x3f)), ..Style::DEFAULT }),  // 1: date
+                // ISO8601 (named groups date/sep/time/ms/tz)
+                Some(Style { fg: Some(Color::Rgb(0xf7, 0xd1, 0x7f)), ..Style::DEFAULT }),  // 1: date
                 Some(Style { fg: Some(Color::Rgb(0x83, 0x83, 0x8d)), ..Style::DEFAULT }),  // 2: T/space sep
-                Some(Style { fg: Some(Color::Rgb(0xa8, 0xff, 0x3e)), ..Style::DEFAULT }),  // 3: time
+                Some(Style { fg: Some(Color::Rgb(0xae, 0xff, 0x4c)), ..Style::DEFAULT }),  // 3: time
                 Some(Style { fg: Some(Color::Rgb(0x83, 0x83, 0x8d)), ..Style::DEFAULT }),  // 4: .ms
-                Some(Style { fg: Some(Color::Rgb(0xb4, 0x83, 0xff)), ..Style::DEFAULT }),  // 5: tz
+                Some(Style { fg: Some(Color::Rgb(0xa7, 0x6e, 0xff)), ..Style::DEFAULT }),  // 5: tz
+                // syslog ("Jun  1 12:35:01")
+                Some(Style { fg: Some(Color::Rgb(0xf7, 0xd1, 0x7f)), ..Style::DEFAULT }),  // 6: date
+                Some(Style { fg: Some(Color::Rgb(0xae, 0xff, 0x4c)), ..Style::DEFAULT }),  // 7: time
+                // apache ("01/Jun/2026:12:45:30 +0300")
+                Some(Style { fg: Some(Color::Rgb(0xf7, 0xd1, 0x7f)), ..Style::DEFAULT }),  // 8: date
+                Some(Style { fg: Some(Color::Rgb(0xae, 0xff, 0x4c)), ..Style::DEFAULT }),  // 9: time
+                Some(Style { fg: Some(Color::Rgb(0xa7, 0x6e, 0xff)), ..Style::DEFAULT }),  // 10: tz
+                // rfc2822 ("Mon, 01 Jun 2026 12:40:00 +0300")
+                Some(Style { fg: Some(Color::Rgb(0xf7, 0xd1, 0x7f)), ..Style::DEFAULT }),  // 11: date
+                Some(Style { fg: Some(Color::Rgb(0xae, 0xff, 0x4c)), ..Style::DEFAULT }),  // 12: time
+                Some(Style { fg: Some(Color::Rgb(0xa7, 0x6e, 0xff)), ..Style::DEFAULT }),  // 13: tz
             ],
             styles_override: None,
             priority: 0,
@@ -423,7 +447,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "uuid".into(),
             pattern: r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b".into(),
-            style: Style { fg: Some(Color::Rgb(0xff, 0x5c, 0xf0)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0xff, 0x5b, 0xf0)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -442,7 +466,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
                 r#"|"#,
                 r#"\bgit@[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]:[^\s<>"\\^`{|}]*[^\s<>"\\^`{|}.,;:!?]"#,
             ).into(),
-            style: Style { fg: Some(Color::Rgb(0x5b, 0x8c, 0xff)), underline: true, ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0x5a, 0x8b, 0xff)), underline: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -451,7 +475,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "email".into(),
             pattern: r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b".into(),
-            style: Style { fg: Some(Color::Rgb(0xa8, 0xff, 0x3e)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0xae, 0xff, 0x4c)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -460,7 +484,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "ipv4".into(),
             pattern: r"\b(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}\b".into(),
-            style: Style { fg: Some(Color::Rgb(0x1f, 0x9f, 0xe6)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0x33, 0xc7, 0xff)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -468,8 +492,8 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         },
         BuiltinRule {
             name: "ipv6".into(),
-            pattern: r"::1|\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|\b[0-9A-Fa-f]{3,4}:(?:[0-9A-Fa-f]{1,4}:){0,5}:[0-9A-Fa-f]{0,4}|::[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){2,}".into(),
-            style: Style { fg: Some(Color::Rgb(0x7c, 0x5c, 0xff)), ..Style::DEFAULT },
+            pattern: r"::1|\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|\b[0-9A-Fa-f]{3,4}:(?:[0-9A-Fa-f]{1,4}:){0,5}:[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{1,4})*|::[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){2,}".into(),
+            style: Style { fg: Some(Color::Rgb(0x7b, 0x5b, 0xff)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -478,7 +502,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "mac".into(),
             pattern: r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b".into(),
-            style: Style { fg: Some(Color::Rgb(0x2e, 0xe6, 0xc4)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0x46, 0xff, 0xdd)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -487,7 +511,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "log_level".into(),
             pattern: r"\b(?:ERROR|FAIL|FATAL|CRITICAL|WARN|WARNING|INFO|DEBUG|TRACE)\b".into(),
-            style: Style { fg: Some(Color::Rgb(0xff, 0x4d, 0x6d)), bold: true, ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0xff, 0x53, 0x72)), bold: true, ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -496,7 +520,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "filename".into(),
             pattern: build_filename_pattern(),
-            style: Style { fg: Some(Color::Rgb(0xff, 0x9f, 0x1c)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0xff, 0xac, 0x3b)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -505,7 +529,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "fqdn".into(),
             pattern: r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.){1,}[A-Za-z]{2,24}\b".into(),
-            style: Style { fg: Some(Color::Rgb(0xb4, 0x83, 0xff)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0xa7, 0x6e, 0xff)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -525,7 +549,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
         BuiltinRule {
             name: "duration".into(),
             pattern: r"\b\d+(?:\.\d+)?(?:\s?(?:ns|us|μs|ms)|[smhd])(?:\d+(?:\.\d+)?(?:\s?(?:ns|us|μs|ms)|[smhd]))*\b".into(),
-            style: Style { fg: Some(Color::Rgb(0xff, 0xd2, 0x3f)), ..Style::DEFAULT },
+            style: Style { fg: Some(Color::Rgb(0xf7, 0xd1, 0x7f)), ..Style::DEFAULT },
             group_styles: Vec::new(),
             styles_override: None,
             priority: 0,
@@ -1720,12 +1744,12 @@ mod tests {
         let mut scratch = PipelineScratch::default();
         let mut out = Vec::new();
         apply_rules(b"\x1b[49m", &rules, &mut scratch, &mut out).unwrap();
-        // Duration style fg is Rgb(0xff,0xd2,0x3f) = SGR 38;2;255;210;63. With
+        // Duration style fg is Rgb(0xf7,0xd1,0x7f) = SGR 38;2;247;209;127. With
         // respect=false, the bare-`m` bit of `49m` matches the duration rule and
         // an SGR wrap appears.
         let s = String::from_utf8_lossy(&out).into_owned();
         assert!(
-            s.contains("38;2;255;210;63"),
+            s.contains("38;2;247;209;127"),
             "expected Neon-amber Rgb SGR somewhere in output (the documented v0.1-class \
              collision): {s:?}"
         );
@@ -1780,9 +1804,9 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"edit claude.md please\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // filename fg = Rgb(0xff,0x9f,0x1c) = SGR 38;2;255;159;28; fqdn Blue dropped.
-        assert!(s.contains("38;2;255;159;28"), "expected filename Rgb SGR, got: {s:?}");
-        assert!(!s.contains("38;2;180;131;255"), "should not contain fqdn Rgb SGR: {s:?}");
+        // filename fg = Rgb(0xff,0xac,0x3b) = SGR 38;2;255;172;59; fqdn Blue dropped.
+        assert!(s.contains("38;2;255;172;59"), "expected filename Rgb SGR, got: {s:?}");
+        assert!(!s.contains("38;2;167;110;255"), "should not contain fqdn Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -1795,8 +1819,8 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"vim src/main.rs and tests.rs\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // filename fg = Rgb(0xff,0x9f,0x1c) = SGR 38;2;255;159;28.
-        assert!(s.contains("38;2;255;159;28"), "expected filename Rgb SGR: {s:?}");
+        // filename fg = Rgb(0xff,0xac,0x3b) = SGR 38;2;255;172;59.
+        assert!(s.contains("38;2;255;172;59"), "expected filename Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -1809,8 +1833,8 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"visit api.example.org today\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // fqdn fg = Rgb(0xb4,0x83,0xff) = SGR 38;2;180;131;255 (no extension to conflict).
-        assert!(s.contains("38;2;180;131;255"), "expected fqdn Rgb SGR: {s:?}");
+        // fqdn fg = Rgb(0xa7,0x6e,0xff) = SGR 38;2;167;110;255 (no extension to conflict).
+        assert!(s.contains("38;2;167;110;255"), "expected fqdn Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -1842,8 +1866,8 @@ mod tests {
         let c =
             Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
         let log_idx = builtin_rules().iter().position(|r| r.name == "log_level").unwrap();
-        // Built-in log_level fg is Rgb(0xff,0x4d,0x6d) — the Neon palette hot-coral.
-        assert_eq!(c.styles[log_idx].fg, Some(crate::style::Color::Rgb(0xff, 0x4d, 0x6d)));
+        // Built-in log_level fg is Rgb(0xff,0x53,0x72) — the Neon palette hot-coral.
+        assert_eq!(c.styles[log_idx].fg, Some(crate::style::Color::Rgb(0xff, 0x53, 0x72)));
     }
 
     #[test]
@@ -1863,16 +1887,16 @@ mod tests {
     fn builtin_neon_color_downgrades_to_expected_ansi_at_basic16() {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
-        // log_level built-in is Rgb(0xff,0x4d,0x6d) = (255,77,109).
+        // log_level built-in is Rgb(0xff,0x53,0x72) = (255,83,114).
         // nearest_ansi_basic distance² to each of the 16 ANSI colors:
-        //   BrightRed (255,85,85): dr=0, dg=-8, db=24 → d²=0+64+576=640  ← winner
-        //   Magenta  (170,0,170): d²=7225+5929+1521=...                   → distant
+        //   BrightRed (255,85,85): dr=0, dg=-2, db=29 → d²=0+4+841=845  ← winner
+        //   Magenta  (170,0,170): d²=7225+6889+3136=...                 → distant
         // Expected: Color::BrightRed.
-        let result = Color::Rgb(0xff, 0x4d, 0x6d).downgrade(ColorDepth::Basic16);
+        let result = Color::Rgb(0xff, 0x53, 0x72).downgrade(ColorDepth::Basic16);
         assert_eq!(
             result,
             Some(Color::BrightRed),
-            "Neon log_level Rgb(255,77,109) must downgrade to BrightRed at Basic16; got: {result:?}"
+            "Neon log_level Rgb(255,83,114) must downgrade to BrightRed at Basic16; got: {result:?}"
         );
     }
 
@@ -2300,9 +2324,9 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"clone git@github.com:u/r.git\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // url fg = Rgb(0x5b,0x8c,0xff) = SGR 38;2;91;140;255; email Rgb dropped.
-        assert!(s.contains("38;2;91;140;255"), "expected url Rgb SGR: {s:?}");
-        assert!(!s.contains("38;2;168;255;62"), "must not contain email Rgb SGR: {s:?}");
+        // url fg = Rgb(0x5a,0x8b,0xff) = SGR 38;2;90;139;255; email Rgb dropped.
+        assert!(s.contains("38;2;90;139;255"), "expected url Rgb SGR: {s:?}");
+        assert!(!s.contains("38;2;174;255;76"), "must not contain email Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -2316,9 +2340,9 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"clone git@github.com\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // email fg = Rgb(0xa8,0xff,0x3e) = SGR 38;2;168;255;62; url Rgb absent.
-        assert!(s.contains("38;2;168;255;62"), "expected email Rgb SGR: {s:?}");
-        assert!(!s.contains("38;2;91;140;255"), "must not contain url Rgb SGR: {s:?}");
+        // email fg = Rgb(0xae,0xff,0x4c) = SGR 38;2;174;255;76; url Rgb absent.
+        assert!(s.contains("38;2;174;255;76"), "expected email Rgb SGR: {s:?}");
+        assert!(!s.contains("38;2;90;139;255"), "must not contain url Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -2412,9 +2436,9 @@ mod tests {
         apply_rules(b"go to https://api.example.com today\n", &rules, &mut scratch, &mut out)
             .unwrap();
         let s = String::from_utf8(out).unwrap();
-        // url fg = Rgb(0x5b,0x8c,0xff) = SGR 38;2;91;140;255 + underline; fqdn Rgb absent.
-        assert!(s.contains("38;2;91;140;255"), "expected url Rgb SGR: {s:?}");
-        assert!(!s.contains("38;2;180;131;255"), "must not contain fqdn Rgb SGR: {s:?}");
+        // url fg = Rgb(0x5a,0x8b,0xff) = SGR 38;2;90;139;255 + underline; fqdn Rgb absent.
+        assert!(s.contains("38;2;90;139;255"), "expected url Rgb SGR: {s:?}");
+        assert!(!s.contains("38;2;167;110;255"), "must not contain fqdn Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -2427,15 +2451,15 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"mail user@example.com soon\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // email fg = Rgb(0xa8,0xff,0x3e) = SGR 38;2;168;255;62; fqdn Rgb absent.
-        assert!(s.contains("38;2;168;255;62"), "expected email Rgb SGR: {s:?}");
-        assert!(!s.contains("38;2;180;131;255"), "must not contain fqdn Rgb SGR: {s:?}");
+        // email fg = Rgb(0xae,0xff,0x4c) = SGR 38;2;174;255;76; fqdn Rgb absent.
+        assert!(s.contains("38;2;174;255;76"), "expected email Rgb SGR: {s:?}");
+        assert!(!s.contains("38;2;167;110;255"), "must not contain fqdn Rgb SGR: {s:?}");
     }
 
     #[test]
     fn permission_does_not_steal_mac_addresses() {
         // A MAC address like aa:bb:cc:dd:ee:ff must still be styled as mac
-        // (Rgb(0x2e,0xe6,0xc4) = SGR 38;2;46;230;196), not consumed by permission
+        // (Rgb(0x46,0xff,0xdd) = SGR 38;2;70;255;221), not consumed by permission
         // (whose char class includes `-` but not `:`).
         use crate::pipeline::{apply_rules, PipelineScratch};
         use arc_swap::ArcSwap;
@@ -2445,8 +2469,8 @@ mod tests {
         let mut out = Vec::new();
         apply_rules(b"iface aa:bb:cc:dd:ee:ff up\n", &rules, &mut scratch, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
-        // mac fg = Rgb(0x2e,0xe6,0xc4) = SGR 38;2;46;230;196.
-        assert!(s.contains("38;2;46;230;196"), "expected mac Rgb SGR: {s:?}");
+        // mac fg = Rgb(0x46,0xff,0xdd) = SGR 38;2;70;255;221.
+        assert!(s.contains("38;2;70;255;221"), "expected mac Rgb SGR: {s:?}");
     }
 
     #[test]
@@ -3554,7 +3578,25 @@ fg = "red"
 
     #[test]
     fn ipv6_matches_compressed_multi_group() {
-        assert!(matches("ipv6", "addr 2001:db8::ff00:42:8329 end"));
+        // match_string (exact span), NOT matches(): the old branch-3 pattern
+        // allowed only ONE group after `::`, so it matched the "2001:db8::ff00"
+        // prefix and left ":42:8329" uncolored. `matches()` returned true on the
+        // partial hit and hid the bug; this pins the FULL span.
+        assert_eq!(
+            match_string("ipv6", "addr 2001:db8::ff00:42:8329 end"),
+            Some("2001:db8::ff00:42:8329".to_owned())
+        );
+    }
+
+    #[test]
+    fn ipv6_matches_link_local_multi_group_stops_before_zone() {
+        // Regression: macOS `ifconfig` link-local address with 4 groups after
+        // `::` plus a `%zone` suffix. The match must cover the whole address and
+        // stop at `%` (the zone id is not part of the address span).
+        assert_eq!(
+            match_string("ipv6", "inet6 fe80::203d:cff:fe0d:898e%awdl0 prefixlen 64"),
+            Some("fe80::203d:cff:fe0d:898e".to_owned())
+        );
     }
 
     #[test]

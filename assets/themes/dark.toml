@@ -18,40 +18,40 @@ style = { fg = "#83838d" }
 
 [[rules]]
 name = "uuid"
-style = { fg = "#ff5cf0" }
+style = { fg = "#ff5bf0" }
 
 [[rules]]
 name = "url"
-style = { fg = "#5b8cff", underline = true }
+style = { fg = "#5a8bff", underline = true }
 
 [[rules]]
 name = "email"
-style = { fg = "#a8ff3e" }
+style = { fg = "#aeff4c" }
 
 [[rules]]
 name = "ipv4"
-style = { fg = "#1f9fe6" }          # no bold
+style = { fg = "#33c7ff" }          # no bold
 
 [[rules]]
 name = "ipv6"
-style = { fg = "#7c5cff" }
+style = { fg = "#7b5bff" }
 
 [[rules]]
 name = "mac"
-style = { fg = "#2ee6c4" }
+style = { fg = "#46ffdd" }
 
 [[rules]]
 name = "log_level"
-style = { fg = "#ff4d6d", bold = true }
+style = { fg = "#ff5372", bold = true }
 
 [[rules]]
 name = "filename"
-style = { fg = "#ff9f1c" }
+style = { fg = "#ffac3b" }
 
 [[rules]]
 name = "fqdn"
-style = { fg = "#b483ff" }
+style = { fg = "#a76eff" }
 
 [[rules]]
 name = "duration"
-style = { fg = "#ffd23f" }
+style = { fg = "#f7d17f" }

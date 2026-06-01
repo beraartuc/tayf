@@ -779,7 +779,7 @@ mod rule_tests {
     }
 
     #[test]
-    fn syslog_timestamp_substring_survives_colorization() {
+    fn syslog_timestamp_renders_date_and_time_sub_colors() {
         let compiled = Compiled::load_builtins().unwrap();
         let rules = ArcSwap::from_pointee(compiled);
         let mut scratch = PipelineScratch::default();
@@ -787,10 +787,71 @@ mod rule_tests {
         apply_rules(b"May 24 10:30:45 host service: msg\n", &rules, &mut scratch, &mut out)
             .unwrap();
         let s = String::from_utf8(out).unwrap();
-        // Syslog branch has no captures -> match wrapped with the rule's default style.
-        // Other rules (e.g., log_level on "msg") may add additional SGRs; this test
-        // only asserts the timestamp substring survives colorization intact.
-        assert!(s.contains("May 24 10:30:45"), "syslog timestamp must survive in output: {s:?}");
+        // Syslog now carries date (group 6) + time (group 7) capture groups, so the
+        // two sub-spans are colored independently. The literal "May 24 10:30:45" no
+        // longer survives whole (an SGR sequence falls between date and time), but
+        // each piece survives intact within its own group.
+        assert!(s.contains("May 24"), "syslog date sub-span must survive: {s:?}");
+        assert!(s.contains("10:30:45"), "syslog time sub-span must survive: {s:?}");
+        let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert!(intro_count >= 2, "expected >= 2 SGRs (date + time); got: {s:?}");
+    }
+
+    #[test]
+    fn apache_timestamp_renders_date_time_tz_sub_colors() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        apply_rules(b"GET / 01/Jun/2026:12:45:30 +0300 ok\n", &rules, &mut scratch, &mut out)
+            .unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // apache branch carries date (group 8) + time (9) + tz (10) sub-colors.
+        assert!(s.contains("01/Jun/2026"), "apache date sub-span must survive: {s:?}");
+        assert!(s.contains("12:45:30"), "apache time sub-span must survive: {s:?}");
+        assert!(s.contains("+0300"), "apache tz sub-span must survive: {s:?}");
+        let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert!(intro_count >= 3, "expected >= 3 SGRs (date/time/tz); got: {s:?}");
+    }
+
+    #[test]
+    fn rfc2822_timestamp_renders_date_time_tz_sub_colors() {
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        let mut out = Vec::new();
+        apply_rules(b"sent Mon, 01 Jun 2026 12:40:00 +0300 ok\n", &rules, &mut scratch, &mut out)
+            .unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // rfc2822 branch carries date (group 11) + time (12) + tz (13) sub-colors.
+        assert!(s.contains("Mon, 01 Jun 2026"), "rfc2822 date sub-span must survive: {s:?}");
+        assert!(s.contains("12:40:00"), "rfc2822 time sub-span must survive: {s:?}");
+        assert!(s.contains("+0300"), "rfc2822 tz sub-span must survive: {s:?}");
+        let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+        assert!(intro_count >= 3, "expected >= 3 SGRs (date/time/tz); got: {s:?}");
+    }
+
+    #[test]
+    fn permission_with_macos_acl_and_xattr_suffix_matches() {
+        // Regression: macOS `ls -la` appends `@` (extended attributes) or `+`
+        // (ACL) to the mode string. The rule must still match and sub-color the
+        // four permission fields despite the trailing marker.
+        let compiled = Compiled::load_builtins().unwrap();
+        let rules = ArcSwap::from_pointee(compiled);
+        let mut scratch = PipelineScratch::default();
+        for line in
+            [b"drwxr-xr-x@ 5 bera staff\n".as_slice(), b"drwxr-x---+ 5 bera staff\n".as_slice()]
+        {
+            let mut out = Vec::new();
+            apply_rules(line, &rules, &mut scratch, &mut out).unwrap();
+            let s = String::from_utf8(out).unwrap();
+            let intro_count = s.matches("\x1b[").count() - s.matches("\x1b[0m").count();
+            assert!(
+                intro_count >= 4,
+                "expected >= 4 perm SGRs (type/owner/group/other) for {:?}; got: {s:?}",
+                String::from_utf8_lossy(line)
+            );
+        }
     }
 
     #[test]
@@ -805,8 +866,8 @@ mod rule_tests {
         apply_rules(b"docs at https://example.com/path now\n", &rules, &mut scratch, &mut out)
             .unwrap();
         let s = String::from_utf8(out).unwrap();
-        // url fg = Rgb(0x5b,0x8c,0xff) = SGR 38;2;91;140;255 + underline (SGR 4).
-        assert!(s.contains("38;2;91;140;255"), "expected url Rgb SGR; got: {s:?}");
+        // url fg = Rgb(0x5a,0x8b,0xff) = SGR 38;2;90;139;255 + underline (SGR 4).
+        assert!(s.contains("38;2;90;139;255"), "expected url Rgb SGR; got: {s:?}");
         // Underline attribute should appear (SGR code 4 for underline).
         assert!(
             s.contains("4m") || s.contains("4;") || s.contains(";4m"),

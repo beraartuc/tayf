@@ -1,0 +1,26 @@
+# tayf built-in rule sampler — every line below triggers at least one rule.
+# Run: cargo run -- cat sample.log   (or: tayf -- cat sample.log)
+2026-06-01T12:34:56.789Z  INFO  server started pid 4821 boot took 1h30m20s
+2026-06-01 12:35:10.001   DEBUG cache warm complete in 250ms (p99 45ms)
+Jun  1 12:35:01 host sshd[1023]: Accepted publickey for admin, retry 5m
+Mon, 01 Jun 2026 12:40:00 +0300  TRACE scheduler tick every 30s
+ERROR   failed to reach db.internal.example.com after 3s
+WARN    disk usage 92% on volume, next check in 2h
+FATAL   panic in pipeline.rs near offset 0x4f
+CRITICAL replication lag 12s on replica node-7
+request_id=550e8400-e29b-41d4-a716-446655440000 session ok
+contact alice.dev@example.com or ops-team@corp.io for access
+GET https://api.example.com/v1/users?id=7 -> 200 in 18ms
+clone git@github.com:openai/tayf.git over ssh://git.example.org/repo
+client 192.168.1.42 gateway 10.0.0.1 dns 8.8.8.8
+loopback ::1 host6 2001:db8::1 uplink fe80::1ff:fe23:4567:890a
+nic 00:1b:44:11:3a:b7 second a4-83-e7-2c-9d-11
+service mesh resolves auth.svc.internal and cdn.assets.example.net
+-rw-r--r--  1 root root  1048576 config.toml
+drwxr-xr-x  2 root root     4096 build.rs
+lrwxr-xr-x  1 root root       12 latest -> release.tar.gz
+drwxr-xr-x@ 3 bera staff       96 Documents
+-rw-------+ 1 bera staff     2048 secrets
+downloaded main.rs lib.rs Cargo.lock and app.json bundle
+rotated server.log after 1d6h uptime, flush 900ms
+deploy v0.12.0 finished at 01/Jun/2026:12:45:30 +0300 in 4m

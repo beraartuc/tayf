@@ -12,11 +12,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   marker block, `--uninstall` to remove). fish and other shells get a printed
   snippet via `--print`. Flags: `--shell`, `--no-shell-hook`, `--print`,
   `--uninstall`, `--force`, `--config`.
+- The syslog (`Jun  1 12:35:01`), Apache common-log
+  (`01/Jun/2026:12:45:30 +0300`) and RFC 2822
+  (`Mon, 01 Jun 2026 12:40:00 +0300`) timestamp formats now receive the same
+  date / time / zone sub-coloring as ISO 8601 timestamps; previously they were
+  colorized as a single flat span.
+
+### Changed
+- Re-toned the default Neon palette to a brighter, softer cyan/amber family:
+  `ipv4` is now `#33c7ff` and `duration` `#f7d17f`, with the other ten rule
+  colors retuned to match. The `permission` / `timestamp` gray (`#83838d`) is
+  unchanged. `assets/themes/dark.toml` mirrors the new defaults.
 
 ### Fixed
 - The `tayf config` TUI no longer dead-ends on a fresh machine: with no config
   file present it binds the default path and `Ctrl+S` / `Shift+D` create the
   file (previously `"first-run save requires init"`).
+- `permission` strings carrying a macOS extended-attribute (`@`) or ACL (`+`)
+  suffix — e.g. `drwxr-xr-x@` — are now colorized. The pattern previously
+  accepted only a trailing `+`, so the common macOS `@` form was skipped
+  entirely.
+- `ipv6` addresses using `::` compression followed by more than one group —
+  e.g. `fe80::203d:cff:fe0d:898e` — are now matched in full instead of only the
+  leading `fe80::203d`.
 
 ## [0.11.0] - 2026-06-01
 

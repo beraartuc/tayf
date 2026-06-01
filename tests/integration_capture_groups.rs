@@ -157,16 +157,23 @@ fn iso_timestamp_match_renders_five_distinct_sgrs() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Syslog timestamp → token survives in output. The syslog branch of
-//    the timestamp alternation has no capture groups; whatever default
-//    style is applied still must not destroy the substring.
+// 2. Syslog timestamp → date + time sub-spans colored. The syslog branch now
+//    carries date (group 6) + time (group 7) capture groups, so the timestamp
+//    is split into independently-colored sub-spans (the whole "May 24 10:30:45"
+//    substring no longer survives intact — an SGR sequence falls between date
+//    and time). PTY output is SGR-fragmented, so we assert each sub-span
+//    survives + that the timestamp is colorized; the exact SGR count is pinned
+//    by the non-PTY pipeline test.
 // ---------------------------------------------------------------------------
 #[test]
-fn syslog_timestamp_substring_survives_colorization() {
+fn syslog_timestamp_renders_date_and_time_sub_colors() {
     let xdg = tempfile::tempdir().expect("tmpdir");
     let bytes = run_in_pty(xdg.path(), "May 24 10:30:45 host msg", &[]);
     let s = String::from_utf8_lossy(&bytes);
-    assert!(s.contains("May 24 10:30:45"), "syslog substring must survive colorization: {s:?}");
+    assert!(s.contains("May 24"), "syslog date sub-span must survive: {s:?}");
+    assert!(s.contains("10:30:45"), "syslog time sub-span must survive: {s:?}");
+    let n = count_non_reset_sgrs(&s);
+    assert!(n >= 2, "syslog timestamp must be colorized (>= 2 non-reset SGRs), got {n} in: {s:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +299,7 @@ styles = { "99" = { fg = "red" } }
 
 // ---------------------------------------------------------------------------
 // 7. Rev2 I-8 — theme `styles."5"` becomes out-of-range AFTER a user
-//    config pattern override drops `timestamp`'s captures_len from 6 to
+//    config pattern override drops `timestamp`'s captures_len from 14 to
 //    3. The effective merged captures_len is what validation must see.
 //    Expected: exit 64 + `valid: 1..=2` (the override has 2 capture
 //    groups, so the valid integer range is 1..=2).
