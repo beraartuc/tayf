@@ -178,9 +178,20 @@ pub(crate) fn commit_bytes(
     let cfg_path = snapshot.source_path.as_deref().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "no source_path; first-run save requires init",
+            "cannot determine a config location: set $HOME or $XDG_CONFIG_HOME, \
+             or run `tayf init --config <path>`",
         )
     })?;
+
+    // First-run: the target file does not exist yet, so there is nothing to
+    // back up or rotate. Create it atomically (write_atomic_to handles
+    // create_dir_all + 0o600 + tmpfile+rename), then rebuild the snapshot.
+    if !cfg_path.exists() {
+        write_atomic_to(cfg_path, body)?;
+        return crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(cfg_path))
+            .map_err(|e| std::io::Error::other(format!("post-save reparse: {e}")));
+    }
+
     let cfg_dir = cfg_path.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "cfg_path has no parent")
     })?;
@@ -767,6 +778,19 @@ mod tests {
         assert!(!target.parent().unwrap().exists());
         write_atomic_to(&target, "ok").expect("atomic write with mkdir");
         assert!(target.exists(), "target written");
+    }
+
+    #[test]
+    fn commit_bytes_first_run_creates_file_in_missing_dir() {
+        use crate::config_tui::snapshot::ConfigSnapshot;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        // Parent dir (tayf/) intentionally does not exist yet.
+        let cfg = tmp.path().join("tayf").join("config.toml");
+        let snap = ConfigSnapshot::empty_at(cfg.clone());
+        let body = "[general]\nrespect_existing_colors = true\n";
+        let new_snap = commit_bytes(&snap, body, SystemTime::now()).expect("first-run save");
+        assert_eq!(std::fs::read_to_string(&cfg).expect("read back"), body);
+        assert_eq!(new_snap.source_path.as_deref(), Some(cfg.as_path()));
     }
 
     #[test]

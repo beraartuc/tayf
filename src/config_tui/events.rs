@@ -844,7 +844,9 @@ fn build_final_doc(
 /// `Shift+D` arm) and reloads the snapshot.
 fn apply_init_from_dump(app: &mut App) {
     let Some(path) = app.snapshot.source_path.clone() else {
-        app.toast = Some(crate::config_tui::app::Toast::warn("Cannot init: no config path bound."));
+        app.toast = Some(crate::config_tui::app::Toast::warn(
+            "Cannot create config: set $HOME or $XDG_CONFIG_HOME, or run `tayf init --config <path>`.",
+        ));
         return;
     };
     let toml = crate::config::default_config_toml();
