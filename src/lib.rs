@@ -73,7 +73,7 @@ pub(crate) mod watch;
 /// `main.rs` can dispatch; subordinate items remain `pub(crate)`.
 pub mod config_tui;
 
-pub use cli::{Args, Cmd, ConfigAction, ConfigArgs, DumpArgs, DumpKind, RunArgs};
+pub use cli::{Args, Cmd, ConfigAction, ConfigArgs, DumpArgs, DumpKind, InitArgs, RunArgs};
 pub use error::{
     Error, ProfileErrorKind, ProfileRuleError, ProfileRuleErrorKind, Result, ThemeRuleError,
     ThemeRuleErrorKind,

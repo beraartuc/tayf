@@ -6,9 +6,10 @@
 //! Public API:
 //! - [`Args`] — top-level parsed CLI arguments (root flags + subcommand).
 //! - [`RunArgs`] — PTY-wrapper flag bag, flatten'd at the root of `Args`.
-//! - [`Cmd`] — top-level subcommand enum (only `Config` for v0.5.4).
+//! - [`Cmd`] — top-level subcommand enum (`Config`, `Init`).
 //! - [`ConfigArgs`] / [`ConfigAction`] / [`DumpArgs`] / [`DumpKind`] —
 //!   `tayf config …` sub-subcommand surface.
+//! - [`InitArgs`] — `tayf init` first-run setup surface.
 //! - [`Args::try_parse_from_env`] — fallible convenience wrapper invoked
 //!   from `main`. Returning `Result` (rather than exiting internally) lets
 //!   `main` own the exit-code policy: BSD `EX_USAGE` (64) on parse failure,
@@ -39,6 +40,7 @@ fn version_str() -> &'static str {
 /// Subcommands:
 /// - (none) — run the PTY wrapper with [`RunArgs`].
 /// - `config` — interactive TUI / dump / status (see [`Cmd::Config`]).
+/// - `init` — first-run setup: default config + shell-rc hook (see [`Cmd::Init`]).
 #[derive(Debug, Parser)]
 #[command(
     name = "tayf",
@@ -133,6 +135,45 @@ pub enum Cmd {
     /// Interactive TUI for browsing and editing tayf config; also `dump`
     /// and `status` sub-subcommands.
     Config(ConfigArgs),
+    /// First-run setup: create the default config and install the always-on
+    /// shell-rc hook so tayf runs automatically in new terminals.
+    Init(InitArgs),
+}
+
+/// `tayf init` arguments. First-run setup: writes the default config and,
+/// for bash/zsh, installs the always-on rc guard (fish/other shells get a
+/// printed snippet via `--print`).
+#[derive(Debug, clap::Args)]
+#[non_exhaustive]
+// reason: each bool maps 1:1 to a user-visible `--flag`; a state machine
+// would obscure the flat CLI surface (same rationale as `RunArgs`).
+#[allow(clippy::struct_excessive_bools)]
+pub struct InitArgs {
+    /// Shell to target for the rc hook (`zsh`, `bash`, `fish`).
+    /// Defaults to the basename of `$SHELL`.
+    #[arg(long, value_name = "SHELL")]
+    pub shell: Option<String>,
+
+    /// Create the config only; do not modify any shell rc file.
+    #[arg(long, default_value_t = false)]
+    pub no_shell_hook: bool,
+
+    /// Print the rc snippet to stdout and exit; write nothing.
+    #[arg(long, default_value_t = false)]
+    pub print: bool,
+
+    /// Remove tayf's managed block from the shell rc file (leaves the
+    /// config untouched).
+    #[arg(long, default_value_t = false)]
+    pub uninstall: bool,
+
+    /// Overwrite an existing config file with built-in defaults.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+
+    /// Target config path. Defaults to `<config-base>/config.toml`.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
 }
 
 /// `config` subcommand arguments.
@@ -352,5 +393,56 @@ mod tests {
         let args = Args::try_parse_from(["tayf", "--theme", "dark", "config"]).unwrap();
         assert_eq!(args.run.theme.as_deref(), Some("dark"));
         assert!(matches!(args.cmd, Some(Cmd::Config(_))));
+    }
+
+    #[test]
+    fn parses_init_bare() {
+        let args = Args::try_parse_from(["tayf", "init"]).unwrap();
+        match args.cmd {
+            Some(Cmd::Init(a)) => {
+                assert!(a.shell.is_none());
+                assert!(!a.no_shell_hook && !a.print && !a.uninstall && !a.force);
+                assert!(a.config.is_none());
+            }
+            other => panic!("expected Cmd::Init; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_init_flags() {
+        let args = Args::try_parse_from([
+            "tayf",
+            "init",
+            "--shell",
+            "fish",
+            "--print",
+            "--config",
+            "/tmp/c.toml",
+        ])
+        .unwrap();
+        match args.cmd {
+            Some(Cmd::Init(a)) => {
+                assert_eq!(a.shell.as_deref(), Some("fish"));
+                assert!(a.print);
+                assert_eq!(a.config.as_deref(), Some(std::path::Path::new("/tmp/c.toml")));
+                // Negative guards: unset flags stay false (regression pin).
+                assert!(!a.no_shell_hook && !a.uninstall && !a.force);
+            }
+            other => panic!("expected Cmd::Init; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_init_uninstall_and_force() {
+        let a = Args::try_parse_from(["tayf", "init", "--uninstall"]).unwrap();
+        assert!(matches!(
+            a.cmd,
+            Some(Cmd::Init(InitArgs { uninstall: true, no_shell_hook: false, force: false, .. }))
+        ));
+        let a = Args::try_parse_from(["tayf", "init", "--no-shell-hook", "--force"]).unwrap();
+        assert!(matches!(
+            a.cmd,
+            Some(Cmd::Init(InitArgs { no_shell_hook: true, force: true, uninstall: false, .. }))
+        ));
     }
 }
