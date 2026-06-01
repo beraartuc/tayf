@@ -29,14 +29,39 @@ jobs:
           # x86_64 macOS is cross-compiled on the (plentiful) arm runner to
           # avoid the capacity-constrained macos-13 (Intel) runners.
           - { os: macos-14,      target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl }
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
+      - name: Set up musl cross toolchain
+        # Installs only the musl cross-linker (+ qemu) for the *-musl targets so
+        # `cargo build --target` links statically; reuses the pinned rustc above.
+        if: contains(matrix.target, 'musl')
+        uses: taiki-e/setup-cross-toolchain-action@3d9770ce98eb7dbcf378563182a5e8031165f75b  # v1.41.0
+        with:
+          target: ${{ matrix.target }}
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --locked
+      - name: Assert static binary (musl)
+        # A successful build does NOT prove staticness; assert it explicitly so a
+        # future flag/dep change can never silently ship a glibc-linked "static".
+        if: contains(matrix.target, 'musl')
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/tayf"
+          file "$bin"
+          file "$bin" | grep -q "statically linked" \
+            || { echo "::error::$bin is not statically linked"; exit 1; }
+          # Arch-independent confirmation (file can be fooled): a static ELF has
+          # no PT_INTERP program header.
+          if readelf -l "$bin" | grep -q INTERP; then
+            echo "::error::$bin has a dynamic interpreter (not static)"; exit 1
+          fi
+          echo "OK: $bin is statically linked"
       - name: Attest build provenance (SLSA v1.0 Build L2, keyless)
         id: attest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3
