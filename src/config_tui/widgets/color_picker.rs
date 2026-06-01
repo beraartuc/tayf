@@ -198,7 +198,10 @@ pub(crate) fn dispatch_key(state: &mut ColorPickerState, k: KeyEvent) -> ColorPi
             state.ansi16_idx = (state.ansi16_idx + 1).min(15);
             ColorPickerOutcome::StayOpen
         }
-        KeyCode::Left if state.section == PickerSection::Hex => {
+        // Backspace (the intuitive delete key) OR `←` removes the last char of
+        // the hex/`@NNN` buffer. Both are accepted; `Backspace` is what users
+        // reach for. `pop()` on an empty buffer is a safe no-op.
+        KeyCode::Backspace | KeyCode::Left if state.section == PickerSection::Hex => {
             state.hex_buf.pop();
             ColorPickerOutcome::StayOpen
         }
@@ -387,7 +390,7 @@ fn render_axis_row(frame: &mut Frame, area: Rect, state: &ColorPickerState) {
 
 fn render_status(frame: &mut Frame, area: Rect, _state: &ColorPickerState) {
     frame.render_widget(
-        Paragraph::new("Tab=field ←→=val Space=toggle c=clear Enter=accept Esc=cancel"),
+        Paragraph::new("Tab=field  ⌫=delete  Space=toggle  c=clear  Enter=accept  Esc=cancel"),
         area,
     );
 }
@@ -478,6 +481,36 @@ mod tests {
             dispatch_key(&mut s, mk(KeyCode::Char(c)));
         }
         assert_eq!(s.selected_color(), None, "partial hex binds nothing");
+    }
+
+    #[test]
+    fn backspace_and_left_delete_hex_chars() {
+        let mut s = ColorPickerState { section: PickerSection::Hex, ..Default::default() };
+        for c in ['1', 'f', '9'] {
+            dispatch_key(&mut s, mk(KeyCode::Char(c)));
+        }
+        assert_eq!(s.hex_buf, "1f9");
+        dispatch_key(&mut s, mk(KeyCode::Backspace));
+        assert_eq!(s.hex_buf, "1f", "Backspace removes the last hex digit");
+        dispatch_key(&mut s, mk(KeyCode::Left));
+        assert_eq!(s.hex_buf, "1", "Left also removes the last hex digit");
+        dispatch_key(&mut s, mk(KeyCode::Backspace));
+        dispatch_key(&mut s, mk(KeyCode::Backspace));
+        assert_eq!(s.hex_buf, "", "Backspace on an empty buffer is a safe no-op");
+    }
+
+    #[test]
+    fn backspace_deletes_the_at_palette_prefix() {
+        let mut s = ColorPickerState { section: PickerSection::Hex, ..Default::default() };
+        for c in ['@', '1', '3'] {
+            dispatch_key(&mut s, mk(KeyCode::Char(c)));
+        }
+        assert_eq!(s.hex_buf, "@13");
+        dispatch_key(&mut s, mk(KeyCode::Backspace));
+        dispatch_key(&mut s, mk(KeyCode::Backspace));
+        assert_eq!(s.hex_buf, "@");
+        dispatch_key(&mut s, mk(KeyCode::Backspace));
+        assert_eq!(s.hex_buf, "", "Backspace clears the @ prefix, returning to hex mode");
     }
 
     #[test]

@@ -40,7 +40,7 @@ Color Picker (when modal open)
   Tab              Cycle: hex → ANSI16 → bold → italic → underline
   Space            Toggle focused boolean axis
   c                Clear focused boolean axis (bold/italic/underline only)
-  ← →              ANSI: move swatch · hex: ← backspaces
+  ← →              ANSI move swatch · hex ⌫/← delete last char
   Enter            Commit
   Esc              Cancel (discards staged edits)
 

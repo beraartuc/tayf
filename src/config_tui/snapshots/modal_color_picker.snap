@@ -5,7 +5,7 @@
 │  ANSI    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15       │
 │                                                                              │
 │Style  [bold: —] [italic: —] [underline: —]                                   │
-│Tab=field ←→=val Space=toggle c=clear Enter=accept Esc=cancel                 │
+│Tab=field  ⌫=delete  Space=toggle  c=clear  Enter=accept  Esc=cancel          │
 │                                                                              │
 │                                                                              │
 │                                                                              │
