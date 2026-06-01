@@ -16,6 +16,27 @@ wrapping.
 
 ## Install
 
+### Quick install (Linux & macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/beraartuc/tayf/main/install.sh | sh
+```
+
+Detects your OS/architecture, downloads the matching signed binary from the
+latest [release](https://github.com/beraartuc/tayf/releases), verifies its
+SHA256 (and its Sigstore provenance if an authenticated `gh` CLI is present),
+and installs it to `~/.local/bin` — no sudo. Linux binaries are static (musl),
+so they run on any distribution (glibc or musl, old or new) and on x86-64 or
+ARM64.
+
+Prefer to read it first? `curl -fsSL https://raw.githubusercontent.com/beraartuc/tayf/main/install.sh | less`
+
+Knobs:
+
+- `TAYF_INSTALL_DIR=/usr/local/bin` — install elsewhere.
+- `TAYF_VERSION=v0.11.0` — pin a specific release (also the escape hatch if the
+  GitHub API rate-limits the latest-version lookup).
+
 ### Homebrew (macOS / Linux)
 
 ```bash
