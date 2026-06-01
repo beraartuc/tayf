@@ -46,6 +46,33 @@ parse_tag_from_json() {
     | sed -e 's/.*"tag_name":[[:space:]]*"//' -e 's/".*//'
 }
 
+# Download $1 to file $2 ("-" = stdout). Prefers curl, falls back to busybox/GNU
+# wget (Alpine ships wget, not curl). Returns non-zero on HTTP/transport error.
+http_get() {
+  url="$1"; out="$2"
+  if command -v curl >/dev/null 2>&1; then
+    if [ "$out" = "-" ]; then curl -fsSL "$url"; else curl -fsSL -o "$out" "$url"; fi
+  elif command -v wget >/dev/null 2>&1; then
+    if [ "$out" = "-" ]; then wget -qO- "$url"; else wget -qO "$out" "$url"; fi
+  else
+    die "need curl or wget to download"
+  fi
+}
+
+# Resolve the tag to install: $TAYF_VERSION if set, else the latest release via
+# the GitHub API. Aborts with a clear message if the tag cannot be resolved
+# (e.g. the unauthenticated API rate-limited the request).
+resolve_version() {
+  if [ -n "${TAYF_VERSION:-}" ]; then
+    printf '%s' "$TAYF_VERSION"
+    return 0
+  fi
+  body="$(http_get "https://api.github.com/repos/${REPO}/releases/latest" - || true)"
+  tag="$(parse_tag_from_json "$body")"
+  [ -n "$tag" ] || die "could not resolve the latest release tag (GitHub API rate limit?) — set TAYF_VERSION=vX.Y.Z"
+  printf '%s' "$tag"
+}
+
 main() {
   die "install.sh is not fully implemented yet"
 }
