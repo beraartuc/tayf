@@ -73,6 +73,10 @@ pub(crate) mod watch;
 /// `main.rs` can dispatch; subordinate items remain `pub(crate)`.
 pub mod config_tui;
 
+/// First-run setup (`tayf init`). Public so `main.rs` can dispatch;
+/// subordinate items remain `pub(crate)`.
+pub mod init;
+
 pub use cli::{Args, Cmd, ConfigAction, ConfigArgs, DumpArgs, DumpKind, InitArgs, RunArgs};
 pub use error::{
     Error, ProfileErrorKind, ProfileRuleError, ProfileRuleErrorKind, Result, ThemeRuleError,
