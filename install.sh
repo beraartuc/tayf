@@ -11,8 +11,8 @@
 # shellcheck shell=sh
 set -eu
 
-export REPO="beraartuc/tayf"
-export BIN_NAME="tayf"
+readonly REPO="beraartuc/tayf"
+readonly BIN_NAME="tayf"
 
 log() { printf 'tayf-install: %s\n' "$1" >&2; }
 die() { printf 'tayf-install: error: %s\n' "$1" >&2; exit 1; }
@@ -114,6 +114,7 @@ verify_attestation() {
   fi
   if [ ! -f "$bundle" ]; then
     log "provenance check skipped (attestation bundle not available)"
+    log "  verify manually: gh attestation verify ${bin} --repo ${REPO}"
     return 0
   fi
   if gh attestation verify "$bin" --repo "$REPO" --bundle "$bundle" >/dev/null 2>&1; then

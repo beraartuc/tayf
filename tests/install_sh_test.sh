@@ -5,6 +5,7 @@ set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=../install.sh
+# shellcheck disable=SC1091  # reason: sourced at runtime; path not statically resolvable under plain shellcheck (CI runs `shellcheck` without -x)
 TAYF_INSTALL_NO_MAIN=1 . "${here}/../install.sh"
 
 fail=0
@@ -33,6 +34,16 @@ if [ "$got_tag" = "$want_tag" ]; then
   printf 'ok:   parse_tag_from_json -> %s\n' "$got_tag"
 else
   printf 'FAIL: parse_tag_from_json -> %s (want %s)\n' "$got_tag" "$want_tag"
+  fail=1
+fi
+
+# parse_tag_from_json on an error body (no tag_name) must yield empty — this is
+# the precondition for resolve_version's rate-limit empty-tag guard.
+got_empty="$(parse_tag_from_json '{"message":"API rate limit exceeded","documentation_url":"https://docs.github.com"}')"
+if [ -z "$got_empty" ]; then
+  printf 'ok:   parse_tag_from_json empty on no-tag body\n'
+else
+  printf 'FAIL: parse_tag_from_json returned non-empty on no-tag body: %s\n' "$got_empty"
   fail=1
 fi
 
