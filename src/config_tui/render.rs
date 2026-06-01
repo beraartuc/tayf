@@ -146,6 +146,37 @@ mod tests {
     }
 
     #[test]
+    fn navigation_does_not_leave_a_selection_ghost() {
+        // Repro for the manual-review "trail" (issue 4): after moving the
+        // selection, only ONE list row may carry the brass highlight bg. A
+        // ghost shows as >1 row retaining it.
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+        use ratatui::Terminal;
+        let brass = Color::Rgb(0xd8, 0xa6, 0x57);
+        let mut app = App::default_for_test();
+        let mut term = Terminal::new(TestBackend::new(124, 35)).expect("backend");
+        app.focus.patterns.selected_idx = 8;
+        term.draw(|f| frame(f, &app)).expect("draw 1");
+        app.focus.patterns.selected_idx = 2;
+        term.draw(|f| frame(f, &app)).expect("draw 2");
+        let buf = term.backend().buffer();
+        let mut rows_with_brass = std::collections::BTreeSet::new();
+        for y in 2..33u16 {
+            for x in 1..48u16 {
+                if buf[(x, y)].style().bg == Some(brass) {
+                    rows_with_brass.insert(y);
+                }
+            }
+        }
+        assert_eq!(
+            rows_with_brass.len(),
+            1,
+            "exactly one selected row keeps the brass highlight; ghost = >1, rows={rows_with_brass:?}"
+        );
+    }
+
+    #[test]
     fn default_preview_sample_has_4_lines_unicode_coverage() {
         // Spec §9.3 + 🔵 #9 fold — 4 lines, line 4 holds Unicode probes.
         let lines: Vec<&str> = DEFAULT_PREVIEW_SAMPLE.lines().collect();
