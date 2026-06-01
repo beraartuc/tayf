@@ -49,16 +49,21 @@ jobs:
       - name: Assert static binary (musl)
         # A successful build does NOT prove staticness; assert it explicitly so a
         # future flag/dep change can never silently ship a glibc-linked "static".
+        # Rust emits static-PIE for x86_64-musl, which `file` labels "static-pie
+        # linked" (not "statically linked"), so assert on ELF structure instead:
+        # a static binary has no NEEDED shared libraries and no dynamic
+        # interpreter. readelf parses headers, so this is arch-independent — it
+        # works for the cross-built aarch64 binary on the x86_64 runner (ldd,
+        # which runs the loader, would not).
         if: contains(matrix.target, 'musl')
         run: |
           set -euo pipefail
           bin="target/${{ matrix.target }}/release/tayf"
           file "$bin"
-          file "$bin" | grep -q "statically linked" \
-            || { echo "::error::$bin is not statically linked"; exit 1; }
-          # Arch-independent confirmation (file can be fooled): a static ELF has
-          # no PT_INTERP program header.
-          if readelf -l "$bin" | grep -q INTERP; then
+          if readelf -d "$bin" 2>/dev/null | grep -q 'NEEDED'; then
+            echo "::error::$bin links shared libraries (not static)"; exit 1
+          fi
+          if readelf -l "$bin" | grep -q 'INTERP'; then
             echo "::error::$bin has a dynamic interpreter (not static)"; exit 1
           fi
           echo "OK: $bin is statically linked"
