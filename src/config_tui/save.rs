@@ -269,15 +269,6 @@ pub(crate) fn commit_save(
     commit_bytes(snapshot, &body, now)
 }
 
-/// Atomically write `content` to `target` using a tmpfile + rename
-/// strategy. Mirrors [`TmpFileGuard::persist`] semantics applied to a
-/// string body. Used by the `Shift+D` init-from-dump flow (v0.6.1 §3.3).
-///
-/// Creates `target.parent()` if it does not exist. The tmpfile is
-/// created in the target's parent directory (EXDEV safety) with mode
-/// `0o600` (init-from-dump is the only path that creates a fresh
-/// config file; preserved-mode does not apply because no prior file
-/// exists to read the mode from).
 /// Verify `dest` is safe to write through, given `tayf_root` as the
 /// canonical config-tree root (e.g. `~/.config/tayf/`). Two-layer gate:
 ///
@@ -347,6 +338,15 @@ pub(crate) fn tayf_config_root() -> Option<PathBuf> {
     Some(base.join("tayf"))
 }
 
+/// Atomically write `content` to `target` using a tmpfile + rename
+/// strategy. Mirrors [`TmpFileGuard::persist`] semantics applied to a
+/// string body. Used by the `Shift+D` init-from-dump flow (v0.6.1 §3.3).
+///
+/// Creates `target.parent()` if it does not exist. The tmpfile is
+/// created in the target's parent directory (EXDEV safety) with mode
+/// `0o600` (init-from-dump is the only path that creates a fresh
+/// config file; preserved-mode does not apply because no prior file
+/// exists to read the mode from).
 pub(crate) fn write_atomic_to(target: &Path, content: &str) -> std::io::Result<()> {
     let parent = target.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "target path has no parent directory")

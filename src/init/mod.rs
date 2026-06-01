@@ -58,11 +58,9 @@ fn print_manual_snippet(shell: Shell, home: Option<&Path>, zdotdir: Option<&Path
 }
 
 /// Install the shell hook into the resolved rc file for bash/zsh, printing
-/// status messages. Returns `Err(ExitCode)` if the edit fails.
-fn install_hook_to_rc(
-    rc: &Path,
-    shell: Shell,
-) -> Result<(), ExitCode> {
+/// status messages. Returns `Ok(true)` when the hook is now active in the rc
+/// (freshly installed or already present), `Err(ExitCode)` if the edit fails.
+fn install_hook_to_rc(rc: &Path, shell: Shell) -> Result<bool, ExitCode> {
     match shell_hook::install_to_rc(rc, shell, SystemTime::now()) {
         Ok(out) if out.already_present => {
             println!("tayf init: shell hook already present in {}", rc.display());
@@ -84,7 +82,7 @@ fn install_hook_to_rc(
             return Err(ExitCode::from(70));
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// `tayf init` entry point. See [`InitArgs`] for the surface.
@@ -93,16 +91,14 @@ fn install_hook_to_rc(
 // contract type taken by value, matching the config_tui::run shape.
 pub fn run(args: InitArgs) -> ExitCode {
     // Resolve the shell first; an explicit bad --shell is a usage error.
-    let shell = match shell_hook::detect(
-        args.shell.as_deref(),
-        std::env::var("SHELL").ok().as_deref(),
-    ) {
-        Ok(s) => s,
-        Err(msg) => {
-            eprintln!("tayf init: {msg}");
-            return ExitCode::from(64);
-        }
-    };
+    let shell =
+        match shell_hook::detect(args.shell.as_deref(), std::env::var("SHELL").ok().as_deref()) {
+            Ok(s) => s,
+            Err(msg) => {
+                eprintln!("tayf init: {msg}");
+                return ExitCode::from(64);
+            }
+        };
 
     if args.print && args.uninstall {
         eprintln!("tayf init: --print and --uninstall cannot be combined");
@@ -167,15 +163,15 @@ pub fn run(args: InitArgs) -> ExitCode {
         }
     }
 
+    let mut hook_active = false;
     if !args.no_shell_hook {
         match shell {
             Shell::Zsh | Shell::Bash => {
                 match shell_hook::rc_path(shell, home.as_deref(), zdotdir.as_deref()) {
-                    Some(rc) => {
-                        if let Err(code) = install_hook_to_rc(&rc, shell) {
-                            return code;
-                        }
-                    }
+                    Some(rc) => match install_hook_to_rc(&rc, shell) {
+                        Ok(active) => hook_active = active,
+                        Err(code) => return code,
+                    },
                     None => print_manual_snippet(shell, home.as_deref(), zdotdir.as_deref()),
                 }
             }
@@ -185,7 +181,22 @@ pub fn run(args: InitArgs) -> ExitCode {
         }
     }
 
-    println!("tayf init: done. tayf will start in new terminals. To start now: exec tayf");
+    if hook_active {
+        println!(
+            "tayf init: done \u{2014} tayf will start in new terminals (or run `exec tayf` now)."
+        );
+    } else if !args.no_shell_hook {
+        println!(
+            "tayf init: done \u{2014} once the snippet above is in your startup file, \
+             tayf will start in new terminals."
+        );
+    } else {
+        println!(
+            "tayf init: done \u{2014} config ready. tayf is not set to auto-run \
+             (--no-shell-hook); run `exec tayf` to start it, or re-run `tayf init` \
+             to install the hook."
+        );
+    }
     ExitCode::SUCCESS
 }
 
@@ -202,7 +213,9 @@ mod tests {
         let r = run_config_step(&target, false).expect("first create");
         assert!(matches!(r, ConfigStep::Created));
         assert!(target.exists());
-        assert!(std::fs::read_to_string(&target).unwrap().starts_with("# tayf default configuration"));
+        assert!(std::fs::read_to_string(&target)
+            .unwrap()
+            .starts_with("# tayf default configuration"));
 
         // Second call without --force: reported as already existing.
         let r = run_config_step(&target, false).expect("second");
@@ -212,6 +225,8 @@ mod tests {
         std::fs::write(&target, "# clobbered\n").expect("clobber");
         let r = run_config_step(&target, true).expect("force");
         assert!(matches!(r, ConfigStep::Created));
-        assert!(std::fs::read_to_string(&target).unwrap().starts_with("# tayf default configuration"));
+        assert!(std::fs::read_to_string(&target)
+            .unwrap()
+            .starts_with("# tayf default configuration"));
     }
 }

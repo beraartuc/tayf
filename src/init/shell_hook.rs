@@ -9,6 +9,56 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// Atomically write `content` to `rc`, preserving a symlinked rc (write
+/// through to the link target so dotfile-manager symlinks survive) and the
+/// existing file's permission mode. New rc files default to 0o644 (rc files
+/// are conventionally group/world-readable, unlike tayf's own 0o600 config).
+fn write_rc_atomic(rc: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+    // Resolve through a symlink (handles dangling links too — read_link does
+    // not require the target to exist) so we update the real file and keep
+    // the link itself intact. Relative link targets resolve against rc's dir.
+    let target = match std::fs::read_link(rc) {
+        Ok(link) if link.is_absolute() => link,
+        Ok(link) => rc.parent().unwrap_or_else(|| Path::new(".")).join(link),
+        Err(_) => rc.to_path_buf(), // not a symlink (or unreadable) → write rc directly
+    };
+
+    // Preserve the existing file's mode; default 0o644 for a brand-new rc.
+    let mode = std::fs::metadata(&target)
+        .map_or(0o644, |m| m.permissions().mode() & 0o777);
+
+    let parent = target.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "rc path has no parent directory")
+    })?;
+    std::fs::create_dir_all(parent)?;
+
+    // tmpfile in the target's own dir (EXDEV-safe rename), then atomic rename.
+    let pid = std::process::id();
+    let stamp =
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let stem = target.file_name().and_then(|s| s.to_str()).unwrap_or("rc");
+    let tmp = parent.join(format!("{stem}.tayf-tmp-{pid}-{stamp}"));
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, &target)
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&tmp); // best-effort cleanup; don't mask the real error
+    }
+    write_result
+}
+
 /// The shells `tayf init` knows how to set up. `Other` covers anything we
 /// will not auto-edit (we print a snippet instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,9 +78,9 @@ pub(crate) fn detect(flag: Option<&str>, shell_env: Option<&str>) -> Result<Shel
             "zsh" => Ok(Shell::Zsh),
             "bash" => Ok(Shell::Bash),
             "fish" => Ok(Shell::Fish),
-            other => Err(format!(
-                "unknown --shell value '{other}': expected one of zsh, bash, fish"
-            )),
+            other => {
+                Err(format!("unknown --shell value '{other}': expected one of zsh, bash, fish"))
+            }
         };
     }
     let Some(path) = shell_env else { return Ok(Shell::Other) };
@@ -45,11 +95,13 @@ pub(crate) fn detect(flag: Option<&str>, shell_env: Option<&str>) -> Result<Shel
 
 /// Resolve the rc file to edit for `shell`. `zsh` honors `$ZDOTDIR`, then
 /// falls back to `$HOME/.zshrc`. `Other` has no auto-edit target.
-pub(crate) fn rc_path(shell: Shell, home: Option<&Path>, zdotdir: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn rc_path(
+    shell: Shell,
+    home: Option<&Path>,
+    zdotdir: Option<&Path>,
+) -> Option<PathBuf> {
     match shell {
-        Shell::Zsh => zdotdir
-            .map(|z| z.join(".zshrc"))
-            .or_else(|| home.map(|h| h.join(".zshrc"))),
+        Shell::Zsh => zdotdir.map(|z| z.join(".zshrc")).or_else(|| home.map(|h| h.join(".zshrc"))),
         Shell::Bash => home.map(|h| h.join(".bashrc")),
         Shell::Fish => home.map(|h| h.join(".config").join("fish").join("config.fish")),
         Shell::Other => None,
@@ -159,7 +211,7 @@ pub(crate) fn install_to_rc(
         None
     };
     let new_content = append_block(&existing, &managed_block(shell));
-    crate::config_tui::save::write_atomic_to(rc, &new_content)?;
+    write_rc_atomic(rc, &new_content)?;
     Ok(InstallOutcome { backup, already_present: false })
 }
 
@@ -174,7 +226,7 @@ pub(crate) fn uninstall_from_rc(rc: &Path, now: SystemTime) -> std::io::Result<b
         return Ok(false);
     }
     let _ = std::fs::copy(rc, backup_path(rc, now))?;
-    crate::config_tui::save::write_atomic_to(rc, &new_content)?;
+    write_rc_atomic(rc, &new_content)?;
     Ok(true)
 }
 
@@ -216,7 +268,9 @@ mod tests {
         assert!(z.contains("[[ $- == *i* && -t 1 && -z $TAYF_SESSION ]] && exec tayf"));
         assert_eq!(guard_line(Shell::Bash), guard_line(Shell::Zsh));
         let f = managed_block(Shell::Fish);
-        assert!(f.contains("status is-interactive; and not set -q TAYF_SESSION; and test -t 1; and exec tayf"));
+        assert!(f.contains(
+            "status is-interactive; and not set -q TAYF_SESSION; and test -t 1; and exec tayf"
+        ));
         assert!(z.ends_with('\n') && f.ends_with('\n'));
     }
 
@@ -264,5 +318,49 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&rc).unwrap(), original);
 
         assert!(!uninstall_from_rc(&rc, now).expect("uninstall-again"));
+    }
+
+    #[test]
+    fn install_through_symlink_preserves_the_link_and_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        // Real rc lives in a "dotfiles" dir; ~/.zshrc is a symlink to it.
+        let dotfiles = tmp.path().join("dotfiles");
+        std::fs::create_dir_all(&dotfiles).expect("mkdir dotfiles");
+        let real = dotfiles.join("zshrc");
+        std::fs::write(&real, "# real zshrc\nexport FOO=1\n").expect("seed real");
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let link = tmp.path().join(".zshrc");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        let out = install_to_rc(&link, Shell::Zsh, SystemTime::now()).expect("install");
+        assert!(!out.already_present);
+
+        // The link is still a symlink (NOT clobbered into a regular file).
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        // The block landed in the real target (through the link).
+        assert!(std::fs::read_to_string(&real).unwrap().contains("# >>> tayf init >>>"));
+        // The real file's mode is preserved (0o644), not tightened to 0o600.
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    #[test]
+    fn install_into_new_rc_uses_0o644() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let rc = tmp.path().join(".bashrc"); // does not exist yet
+        let out = install_to_rc(&rc, Shell::Bash, SystemTime::now()).expect("install");
+        assert!(out.backup.is_none()); // nothing to back up
+        assert!(rc.exists());
+        assert_eq!(std::fs::metadata(&rc).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    #[test]
+    fn append_block_adds_separating_newline_when_not_terminated() {
+        let block = managed_block(Shell::Zsh);
+        // content without a trailing newline gets one inserted before the block.
+        let out = append_block("export FOO=1", &block);
+        assert_eq!(out, format!("export FOO=1\n{block}"));
+        assert!(is_installed(&out));
     }
 }
