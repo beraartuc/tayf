@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-06-01
+
+### Added
+- One-line installer `install.sh` (`curl … | sh`): detects OS/arch, downloads
+  the matching signed release binary, verifies SHA256 (mandatory) and Sigstore
+  provenance (best-effort via an authenticated `gh`), and installs to
+  `~/.local/bin` (no sudo; `TAYF_INSTALL_DIR` / `TAYF_VERSION` overrides).
+- Static (musl) Linux release binaries for `x86_64-unknown-linux-musl` and
+  `aarch64-unknown-linux-musl` — glibc-independent, run on any distribution and
+  on x86-64 or ARM64.
+
+### Changed
+- The existing `x86_64-unknown-linux-gnu` binary is still published alongside
+  the new musl binaries; the installer selects the musl binary on Linux.
+
+### Security
+- The installer's trust model: SHA256 guarantees integrity; authenticity is
+  anchored by the per-binary Sigstore attestation (verified best-effort in the
+  script, with the exact manual command printed when an authenticated `gh` is
+  absent). A genuine attestation mismatch aborts the install.
+
 ## [0.10.0] - 2026-06-01
 
 The first public release. tayf is now published on crates.io and Homebrew, with
