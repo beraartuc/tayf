@@ -1,0 +1,39 @@
+#!/bin/sh
+# Unit tests for install.sh pure functions. Sources install.sh with the main
+# entrypoint disabled, then exercises the detection/parse helpers. No network.
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../install.sh
+TAYF_INSTALL_NO_MAIN=1 . "${here}/../install.sh"
+
+fail=0
+expect_target() { # os arch want
+  got="$(detect_target "$1" "$2" 2>/dev/null || echo ERR)"
+  if [ "$got" = "$3" ]; then
+    printf 'ok:   detect_target %s %s -> %s\n' "$1" "$2" "$got"
+  else
+    printf 'FAIL: detect_target %s %s -> %s (want %s)\n' "$1" "$2" "$got" "$3"
+    fail=1
+  fi
+}
+
+expect_target Darwin arm64   aarch64-apple-darwin
+expect_target Darwin x86_64  x86_64-apple-darwin
+expect_target Linux  x86_64  x86_64-unknown-linux-musl
+expect_target Linux  amd64   x86_64-unknown-linux-musl
+expect_target Linux  aarch64 aarch64-unknown-linux-musl
+expect_target Linux  arm64   aarch64-unknown-linux-musl
+expect_target Linux  armv7l  ERR
+expect_target FreeBSD x86_64 ERR
+
+want_tag="v0.11.0"
+got_tag="$(parse_tag_from_json '{"url":"x","tag_name": "v0.11.0", "name":"tayf v0.11.0"}')"
+if [ "$got_tag" = "$want_tag" ]; then
+  printf 'ok:   parse_tag_from_json -> %s\n' "$got_tag"
+else
+  printf 'FAIL: parse_tag_from_json -> %s (want %s)\n' "$got_tag" "$want_tag"
+  fail=1
+fi
+
+if [ "$fail" = 0 ]; then printf 'ALL PASS\n'; else printf 'FAILURES\n'; exit 1; fi
