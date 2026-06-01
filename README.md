@@ -99,6 +99,27 @@ request a login shell with `--login`.
 When stdout is not a TTY (e.g. `tayf | tee log.txt`), colorization is
 disabled automatically.
 
+## Get started (`tayf init`)
+
+After installing, run once:
+
+```bash
+tayf init
+```
+
+This writes a default config to `~/.config/tayf/config.toml` (a starting point
+you can customize) and, for **bash/zsh**, adds an always-on guard to your
+`~/.zshrc` / `~/.bashrc` so tayf wraps every new interactive terminal
+automatically. It backs up your rc first and is safe to re-run (idempotent).
+For **fish** and other shells it prints the snippet to add manually.
+
+tayf takes effect in new terminals — open one, or run `exec tayf` to start now.
+Built-in colors work immediately; use `tayf config` (below) to customize.
+
+Useful flags: `--print` (show the snippet without editing anything),
+`--no-shell-hook` (create the config only), `--uninstall` (remove the guard),
+`--force` (overwrite the config with defaults).
+
 ## Configure interactively (`tayf config`)
 
 `tayf` ships a full-screen TUI for browsing and editing your colorization
@@ -152,6 +173,8 @@ Set your terminal's shell/command to `tayf` so every new window uses it:
   `tayf` (or its full path).
 
 ### Shell rc (works for all terminals at once)
+
+`tayf init` adds this for you (bash/zsh). To do it by hand instead:
 
 Add this guard to `~/.zshrc` or `~/.bashrc`:
 
