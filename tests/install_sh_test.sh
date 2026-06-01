@@ -36,4 +36,22 @@ else
   fail=1
 fi
 
+# verify_checksum round-trip: a matching .sha256 passes, a wrong one aborts.
+tmpd="$(mktemp -d)"
+printf 'hello tayf\n' > "${tmpd}/blob"
+real="$(sha256_of "${tmpd}/blob")"
+printf '%s  blob\n' "$real" > "${tmpd}/blob.sha256"
+if ( verify_checksum "${tmpd}/blob" "${tmpd}/blob.sha256" ) >/dev/null 2>&1; then
+  printf 'ok:   verify_checksum matches\n'
+else
+  printf 'FAIL: verify_checksum rejected a correct checksum\n'; fail=1
+fi
+printf '%s  blob\n' "0000000000000000000000000000000000000000000000000000000000000000" > "${tmpd}/blob.sha256"
+if ( verify_checksum "${tmpd}/blob" "${tmpd}/blob.sha256" ) >/dev/null 2>&1; then
+  printf 'FAIL: verify_checksum accepted a wrong checksum\n'; fail=1
+else
+  printf 'ok:   verify_checksum rejects a mismatch\n'
+fi
+rm -rf "$tmpd"
+
 if [ "$fail" = 0 ]; then printf 'ALL PASS\n'; else printf 'FAILURES\n'; exit 1; fi

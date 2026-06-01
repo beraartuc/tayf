@@ -73,6 +73,56 @@ resolve_version() {
   printf '%s' "$tag"
 }
 
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    die "need sha256sum or shasum to verify the download"
+  fi
+}
+
+# Mandatory integrity check. $1 = binary, $2 = .sha256 file ("<hash>  <name>").
+# Aborts (no install) on mismatch.
+verify_checksum() {
+  want="$(awk '{print $1}' "$2")"
+  got="$(sha256_of "$1")"
+  [ -n "$want" ] || die "checksum file was empty"
+  if [ "$want" != "$got" ]; then
+    die "checksum mismatch: expected ${want}, got ${got} — refusing to install"
+  fi
+  log "checksum OK (${got})"
+}
+
+# Best-effort provenance check. $1 = binary, $2 = .sigstore.json bundle.
+#  - gh missing or not authenticated -> skip (non-fatal) + print the manual cmd.
+#  - verifies -> proceed.
+#  - gh authenticated but verification FAILS -> abort (genuine red flag).
+# (gh attestation verify requires an authenticated gh even for public repos.)
+verify_attestation() {
+  bin="$1"; bundle="$2"
+  if ! command -v gh >/dev/null 2>&1; then
+    log "provenance check skipped (gh CLI not found)"
+    log "  verify manually: gh attestation verify ${bin} --repo ${REPO}"
+    return 0
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    log "provenance check skipped (gh not authenticated)"
+    log "  verify manually: gh attestation verify ${bin} --repo ${REPO}"
+    return 0
+  fi
+  if [ ! -f "$bundle" ]; then
+    log "provenance check skipped (attestation bundle not available)"
+    return 0
+  fi
+  if gh attestation verify "$bin" --repo "$REPO" --bundle "$bundle" >/dev/null 2>&1; then
+    log "provenance verified (Sigstore build attestation)"
+    return 0
+  fi
+  die "provenance verification FAILED for ${bin} — refusing to install. This may be a transient Sigstore/TUF fetch issue or a real mismatch; re-run, or pin TAYF_VERSION and verify manually: gh attestation verify ${bin} --repo ${REPO}"
+}
+
 main() {
   die "install.sh is not fully implemented yet"
 }
