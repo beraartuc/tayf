@@ -115,13 +115,23 @@ jobs:
             echo "::error::tag version ($ver) != Cargo.toml version ($crate_ver)"
             exit 1
           fi
-          # Advisory fast-path; cargo's own duplicate-version rejection is the
-          # authoritative idempotency backstop (the read API is cache-laggy and
-          # returns 200 for yanked versions).
-          if curl -sf --retry 3 "https://crates.io/api/v1/crates/tayf/${ver}" >/dev/null 2>&1; then
-            echo "v${ver} already on crates.io; skipping publish."
+          # Idempotent publish: cargo exits non-zero when the version is already
+          # on the index, so capture its output and treat that single outcome as
+          # success. Every other failure (auth, packaging, network) propagates.
+          # (A prior crates.io read-API pre-check was unreliable — the API
+          # enforces a descriptive User-Agent and 403s curl's default UA.)
+          set +e
+          out="$(cargo publish --locked 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "Published v${ver} to crates.io."
+          elif printf '%s' "$out" | grep -q "already exists on crates.io"; then
+            echo "v${ver} already on crates.io; idempotent skip."
           else
-            cargo publish --locked
+            echo "::error::cargo publish failed (exit $status)"
+            exit "$status"
           fi
 
   github-release:
