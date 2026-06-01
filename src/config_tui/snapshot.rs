@@ -102,6 +102,17 @@ impl ConfigSnapshot {
             },
         }
     }
+
+    /// Like [`empty`], but bound to `path` (which need not exist yet). Used
+    /// by the TUI on first run so `Ctrl+S` / `Shift+D` can create the config
+    /// file at the resolved default location.
+    ///
+    /// [`empty`]: ConfigSnapshot::empty
+    // reason: caller added in a subsequent v0.12.0 task (first-run TUI init path)
+    #[allow(dead_code)]
+    pub(crate) fn empty_at(path: PathBuf) -> Self {
+        Self { source_path: Some(path), ..Self::empty() }
+    }
 }
 
 /// FIPS 180-4 §4.2.2 round constants — first 32 bits of the fractional
@@ -269,5 +280,16 @@ mod tests {
         let err = ConfigSnapshot::read_from_disk(Some(&cfg_path)).expect_err("must error");
         // Must be Error::Config (not Tty) — surfaces toml_edit's diagnostic.
         assert!(matches!(err, crate::error::Error::Config { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn empty_at_binds_path_with_empty_body() {
+        let p = std::path::PathBuf::from("/tmp/does-not-exist/tayf/config.toml");
+        let snap = ConfigSnapshot::empty_at(p.clone());
+        assert_eq!(snap.source_path.as_deref(), Some(p.as_path()));
+        // Same empty shape as empty(): zero rules, empty doc, empty-input hash.
+        assert!(snap.raw_bytes.is_empty());
+        assert!(snap.parsed.rules.is_empty());
+        assert_eq!(snap.source_hash, ConfigSnapshot::empty().source_hash);
     }
 }
