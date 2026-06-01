@@ -45,7 +45,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dark-tuned built-in colors, so on a light-background terminal (which the
   runtime colorizes with the `light` theme) the preview disagreed with the real
   output. The preview now resolves the effective theme with the same precedence
-  as the runtime (config theme > profile theme > background detection).
+  as the runtime (config theme > profile theme > background detection) **and**
+  compiles at the terminal's detected color depth, so on a 256/16-color
+  terminal it downsamples exactly as `tayf` does rather than showing full RGB.
 - The `tayf config` TUI no longer dead-ends on a fresh machine: with no config
   file present it binds the default path and `Ctrl+S` / `Shift+D` create the
   file (previously `"first-run save requires init"`).
