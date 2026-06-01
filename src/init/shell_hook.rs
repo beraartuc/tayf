@@ -27,8 +27,7 @@ fn write_rc_atomic(rc: &Path, content: &str) -> std::io::Result<()> {
     };
 
     // Preserve the existing file's mode; default 0o644 for a brand-new rc.
-    let mode = std::fs::metadata(&target)
-        .map_or(0o644, |m| m.permissions().mode() & 0o777);
+    let mode = std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode() & 0o777);
 
     let parent = target.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "rc path has no parent directory")
