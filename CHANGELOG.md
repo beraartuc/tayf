@@ -22,10 +22,9 @@ is unchanged — this cycle is distribution, CI hardening, and public documentat
 
 ### Changed
 
-- **CI is hardened for a public repository.** The self-hosted runner jobs run
-  only in trusted contexts (push / same-repo PR); fork PRs instead run a
-  GitHub-hosted smoke check (fmt + clippy + test). Workflow token permissions
-  are default-deny.
+- **CI runs entirely on ephemeral GitHub-hosted runners** (the self-hosted
+  runner was retired for the public flip). Workflow token permissions are
+  default-deny; the heavier bench and fuzz jobs run on push only.
 - **`release.yml` is live.** A tag push (`v*`) builds, signs (keyless Sigstore,
   SLSA Build L2), publishes to crates.io (idempotent, in a protected
   environment), and creates a signed GitHub Release; `workflow_dispatch` stays a
@@ -45,9 +44,9 @@ is unchanged — this cycle is distribution, CI hardening, and public documentat
 
 ### Security
 
-- Fork-PR code can never execute on the self-hosted runner: the workflow uses
-  `pull_request` (not `pull_request_target`) with job-level trusted-context
-  gates and least-privilege tokens.
+- CI has no self-hosted runner: every job runs on ephemeral GitHub-hosted
+  infrastructure, and fork PRs get a read-only token and no secrets (the
+  workflow uses `pull_request`, not `pull_request_target`).
 - The crates.io publish token is crate-scoped, expiring, and confined to a
   protected release environment with a required reviewer.
 - `SECURITY.md` now documents the benign signal-teardown `killpg` window and the

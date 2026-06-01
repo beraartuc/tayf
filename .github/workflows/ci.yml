@@ -7,24 +7,17 @@ on:
     branches: [main]
 
 # Default-deny token permissions; each job opts into the minimum it needs.
+# CI runs entirely on ephemeral GitHub-hosted runners — fork PRs carry a
+# read-only token and no secrets (the `pull_request` trigger, not
+# `pull_request_target`), so there is no self-hosted runner to protect.
 permissions: {}
 
 jobs:
   test:
-    name: Test (${{ matrix.host }})
-    # Trusted context only: fork PRs must NEVER run on the self-hosted runner.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+    name: Test
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: ${{ matrix.runs-on }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - host: linux
-            runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
@@ -39,64 +32,26 @@ jobs:
       - name: Build
         run: cargo build --release
       - name: Test
-        timeout-minutes: 10
-        env:
-          # OSC 11 hang root cause investigation deferred (spec §4.4 D-fallback);
-          # integration tests bypass bg_detect entirely. Production behavior
-          # unchanged. See CHANGELOG [0.3.2] for the investigation summary.
-          TAYF_DISABLE_BG_DETECT: "1"
-          # reload::tests::orchestrator_* hang indefinitely on this self-hosted
-          # Linux runner when threads run in parallel (local: <2s; CI: >10min
-          # timeout). Likely a runner-state / fs-watcher interaction; v0.6+
-          # root cause investigation deferred. For now serialize test execution.
-          RUST_TEST_THREADS: "1"
-        # `cargo test` (default scope) covers lib + bins + integration tests
-        # + examples + doctests.  Benches run in the dedicated bench-regression
-        # job below via `cargo bench`, which is the correct invocation for
-        # criterion — `cargo test --all-targets` triggers criterion's test
-        # mode, which hangs indefinitely on the self-hosted Linux runner
-        # (likely a plotters / system-font interaction); the bench-regression
-        # job still exercises full compilation + execution of every bench.
-        run: cargo test
-
-  # Fork PRs (untrusted) run a fast check on GitHub-hosted infra ONLY — never on
-  # the self-hosted runner. Gated to fork PRs so same-repo pushes/PRs (which run
-  # the full self-hosted matrix) don't double-run.
-  smoke:
-    name: Smoke (fork PR, GitHub-hosted)
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - name: Test
         timeout-minutes: 15
         env:
-          # OSC 11 background-detect hang is environment-general (not just the
-          # self-hosted runner); integration tests bypass bg_detect with this.
+          # Integration tests bypass startup background-color detection: OSC 11
+          # has no answer on a CI pseudo-terminal. Production behavior unchanged.
           TAYF_DISABLE_BG_DETECT: "1"
-        # Deliberately WITHOUT RUST_TEST_THREADS=1 — the reload-orchestrator hang
-        # was self-hosted-specific. If it reproduces on ubuntu-latest, add it.
+          # Serialize tests defensively: a reload-orchestrator / fs-watcher hang
+          # was seen on the old self-hosted runner. It may not reproduce on
+          # GitHub-hosted; drop this once a few green runs confirm it.
+          RUST_TEST_THREADS: "1"
+        # `cargo test` (default scope) covers lib + bins + integration + doctests.
+        # Benches run in the dedicated `bench` job via `cargo bench` (the correct
+        # criterion invocation; `cargo test --all-targets` triggers criterion's
+        # test mode).
         run: cargo test
 
   audit:
     name: Security audit
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
@@ -109,34 +64,37 @@ jobs:
       - name: cargo deny
         run: cargo deny check
 
-  bench-regression:
-    name: Bench regression (${{ matrix.host }})
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+  msrv:
+    name: MSRV (1.88)
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: ${{ matrix.runs-on }}
-    needs: test  # only run if test passes (don't bench broken code)
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - host: linux
-            runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 1.88
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - run: cargo check --locked --all-targets
+
+  bench:
+    name: Bench (informational)
+    # Push-only: benchmarks are a main-branch regression signal, not a per-PR
+    # gate. GitHub-hosted runners are timing-noisy and cost minutes.
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # stable
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-
-      # jq must be preinstalled on the self-hosted runner (apt install jq).
-
       - name: Run benches
         run: cargo bench --bench throughput
-
-      - name: Smoke test estimates.json + baseline JSON shape
+      - name: Smoke-test estimates.json shape
         shell: bash
         run: |
           set -euo pipefail
@@ -147,102 +105,27 @@ jobs:
               echo "::error::unexpected schema in $file (mean.point_estimate missing)"; exit 1
             }
           done
-
-          baseline="benches/baselines/latest/${{ matrix.host }}.json"
-          if [[ -f "$baseline" ]]; then
-            for bench in apply_rules/ipv4-heavy apply_rules/mixed-syslog apply_rules/captures-heavy passthrough/write_all; do
-              jq -e --arg b "$bench" '.benches[$b].mean_ns' "$baseline" > /dev/null || {
-                echo "::error::baseline $baseline missing benches[\"$bench\"].mean_ns"; exit 1
-              }
-            done
-          fi
-
-      - name: Compare against baseline
-        id: compare
-        shell: bash
-        env:
-          LC_NUMERIC: C
-          STRICT_MODE: ${{ contains(github.event.pull_request.labels.*.name, 'bench-ci-strict') }}
-        run: |
-          set -euo pipefail
-          baseline="benches/baselines/latest/${{ matrix.host }}.json"
-          if [[ ! -f "$baseline" ]]; then
-            echo "::warning::no baseline at $baseline; skipping comparison"
-            exit 0
-          fi
-
-          breach_found=0
-          for bench in apply_rules/ipv4-heavy apply_rules/mixed-syslog apply_rules/captures-heavy passthrough/write_all; do
-            new_mean=$(jq -e '.mean.point_estimate' "target/criterion/${bench}/new/estimates.json") || {
-              echo "::error::failed to read mean.point_estimate from ${bench}'s estimates.json"; exit 1
-            }
-            base_mean=$(jq -e --arg b "$bench" '.benches[$b].mean_ns' "$baseline") || {
-              echo "::error::baseline $baseline missing benches[\"$bench\"].mean_ns"; exit 1
-            }
-
-            if [[ "$base_mean" == "0" ]]; then
-              echo "::warning::baseline for $bench is placeholder (mean_ns=0); skipping comparison"
-              continue
-            fi
-
-            if [[ "$bench" == "passthrough/write_all" ]]; then
-              threshold_pct=30
-            else
-              threshold_pct=20
-            fi
-
-            read -r delta_pct breach < <(awk -v new="$new_mean" -v base="$base_mean" -v t="$threshold_pct" '
-              BEGIN {
-                d = (new - base) / base * 100
-                printf "%.2f %d\n", d, (d > t) ? 1 : 0
-              }')
-
-            if [[ "$breach" == "1" ]]; then
-              breach_found=1
-              if [[ "$STRICT_MODE" == "true" ]]; then
-                echo "::error::${bench} regressed +${delta_pct}% vs baseline (threshold: ${threshold_pct}%)"
-              else
-                echo "::warning::${bench} regressed +${delta_pct}% vs baseline (threshold: ${threshold_pct}%) — strict mode opt-in via [bench-ci-strict] label"
-              fi
-            fi
-          done
-
-          if [[ "$breach_found" == "1" && "$STRICT_MODE" == "true" ]]; then
-            exit 1
-          fi
-
+      # The baseline comparison is intentionally omitted after the move to
+      # GitHub-hosted runners: the committed baselines (benches/baselines/) were
+      # measured on the previous self-hosted machine and are not comparable to
+      # GitHub-hosted timings. Re-establish a GitHub-hosted baseline from this
+      # job's uploaded criterion artifacts, then restore the comparison + gate.
       - name: Upload criterion artifacts (for baseline extraction)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
-          name: criterion-${{ matrix.host }}
+          name: criterion
           path: target/criterion/
           retention-days: 14
 
-  msrv:
-    name: MSRV (1.88)
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: read
-    runs-on: [self-hosted, Linux, X64]
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 1.88
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
-      - run: cargo check --locked --all-targets
-
   fuzz-smoke:
     name: Fuzz smoke (nightly)
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+    # Push-only: a main-branch regression signal. The stable adversarial guard
+    # (tests/adversarial.rs) runs in the `test` job on every PR.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # nightly
@@ -251,20 +134,12 @@ jobs:
       # cargo-fuzz install: VERSION-pinned (@0.13.1, the latest release) but
       # intentionally NOT --locked. Supply-chain tradeoff (accepted): the tool
       # version is pinned, but its transitive deps float to the latest
-      # semver-compatible — the idiomatic `cargo install` form (the cargo-fuzz
-      # README installs this way). Rationale & rejected alternatives:
+      # semver-compatible — the idiomatic `cargo install` form. Rationale:
       #  - --locked forces cargo-fuzz 0.13.1's bundled lockfile, which pins
       #    rustix 0.36.5; its Linux raw backend uses reserved `rustc_attrs` and
       #    no longer compiles on current nightly.
-      #  - Bumping to a newer cargo-fuzz with a clean lockfile is impossible:
-      #    0.13.1 IS the latest release.
-      #  - Pinning nightly to an old known-good date to keep --locked trades a
-      #    floating dep set for a stale-toolchain liability and can't be
-      #    validated locally (the failing rustix backend is Linux-only).
-      #  - `[patch.crates-io] rustix` doesn't apply: `cargo install` of an
-      #    external tool ignores the project's patch table.
-      # Exposure is limited: cargo-fuzz is a non-shipped dev tool, installed
-      # only on the CI runner (a nightly hard-gate job; fork PRs are excluded).
+      #  - 0.13.1 IS the latest release (can't bump to a clean lockfile).
+      # cargo-fuzz is a non-shipped dev tool, installed only on the CI runner.
       - run: cargo install cargo-fuzz@0.13.1
       - name: Build + short-run each fuzz target
         run: |
