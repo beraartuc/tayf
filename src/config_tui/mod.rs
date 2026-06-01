@@ -57,6 +57,7 @@ pub(crate) mod widgets;
 pub(crate) mod test_support;
 
 use std::io::stdout;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ratatui::backend::CrosstermBackend;
@@ -67,6 +68,16 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use crate::cli::{DumpKind, RunArgs};
+
+/// Resolve where a first-run config file should be created (the file need
+/// not exist). `None` only when neither `$XDG_CONFIG_HOME` nor `$HOME` is
+/// available — a degenerate environment where the TUI cannot save.
+pub(crate) fn first_run_config_path(
+    xdg: impl FnOnce() -> Option<PathBuf>,
+    home: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    crate::config::config_base(xdg, home).map(|b| b.join("config.toml"))
+}
 
 /// RAII guard around raw mode + alt-screen. Drop restores both.
 /// Mirrors `src/tty_guard.rs` pattern (CLAUDE.md §3 — restore on every exit path).
@@ -119,7 +130,13 @@ pub fn run(args: RunArgs) -> ExitCode {
                 return ExitCode::from(70);
             }
         },
-        Ok(None) => snapshot::ConfigSnapshot::empty(),
+        Ok(None) => match first_run_config_path(
+            || std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            || std::env::var_os("HOME").map(PathBuf::from),
+        ) {
+            Some(p) => snapshot::ConfigSnapshot::empty_at(p),
+            None => snapshot::ConfigSnapshot::empty(),
+        },
         Err(e) => {
             eprintln!("tayf config: config parse error: {e}");
             return ExitCode::from(64);
@@ -169,4 +186,25 @@ pub fn dump(kind: Option<DumpKind>) -> ExitCode {
 // function's primary effect is writing to stdout, so #[must_use] adds noise.
 pub fn status(args: RunArgs) -> ExitCode {
     status_cmd::run(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn first_run_path_prefers_xdg_then_home() {
+        let p = first_run_config_path(
+            || Some(PathBuf::from("/xdg")),
+            || Some(PathBuf::from("/home/u")),
+        );
+        assert_eq!(p, Some(PathBuf::from("/xdg/tayf/config.toml")));
+
+        let p = first_run_config_path(|| None, || Some(PathBuf::from("/home/u")));
+        assert_eq!(p, Some(PathBuf::from("/home/u/.config/tayf/config.toml")));
+
+        let p = first_run_config_path(|| None, || None);
+        assert_eq!(p, None);
+    }
 }

@@ -108,8 +108,6 @@ impl ConfigSnapshot {
     /// file at the resolved default location.
     ///
     /// [`empty`]: ConfigSnapshot::empty
-    // reason: caller added in a subsequent v0.12.0 task (first-run TUI init path)
-    #[allow(dead_code)]
     pub(crate) fn empty_at(path: PathBuf) -> Self {
         Self { source_path: Some(path), ..Self::empty() }
     }
