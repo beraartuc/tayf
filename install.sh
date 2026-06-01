@@ -123,8 +123,88 @@ verify_attestation() {
   die "provenance verification FAILED for ${bin} — refusing to install. This may be a transient Sigstore/TUF fetch issue or a real mismatch; re-run, or pin TAYF_VERSION and verify manually: gh attestation verify ${bin} --repo ${REPO}"
 }
 
+# Print a PATH hint if $1 is not already on PATH. Generic (does not guess the
+# rc file from $SHELL — login shell != running shell, rc-file choice ambiguous).
+path_hint() {
+  dir="$1"
+  case ":${PATH}:" in
+    *":${dir}:"*) : ;;
+    *)
+      log "note: ${dir} is not on your PATH"
+      log "  add this to your shell's startup file:"
+      log "    export PATH=\"${dir}:\$PATH\""
+      ;;
+  esac
+}
+
+# Warn if a different tayf is earlier on PATH and shadows the fresh install.
+shadow_warn() {
+  dest="$1"
+  resolved="$(command -v "$BIN_NAME" 2>/dev/null || true)"
+  if [ -n "$resolved" ] && [ "$resolved" != "${dest}/${BIN_NAME}" ]; then
+    log "warning: a different ${BIN_NAME} is earlier on PATH: ${resolved}"
+    log "  the install at ${dest}/${BIN_NAME} is shadowed in new shells"
+  fi
+}
+
+usage() {
+  cat >&2 <<EOF
+tayf installer
+
+Usage:
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh
+
+Environment:
+  TAYF_VERSION       install a specific tag (e.g. v0.11.0); default: latest release
+                     (also the escape hatch if the GitHub API rate-limits you)
+  TAYF_INSTALL_DIR   install directory; default: \$HOME/.local/bin
+
+Detects your OS/arch, downloads the matching signed binary from the GitHub
+release, verifies its SHA256 (mandatory) and — if an authenticated gh CLI is
+present — its Sigstore provenance, then installs it. No sudo.
+EOF
+}
+
 main() {
-  die "install.sh is not fully implemented yet"
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+  esac
+
+  os="$(uname -s)"; arch="$(uname -m)"
+  target="$(detect_target "$os" "$arch")" \
+    || die "unsupported platform: ${os} ${arch} — install manually from https://github.com/${REPO}/releases"
+  log "platform: ${os} ${arch} -> ${target}"
+
+  version="$(resolve_version)"
+  log "version: ${version}"
+
+  dest="${TAYF_INSTALL_DIR:-$HOME/.local/bin}"
+  base="https://github.com/${REPO}/releases/download/${version}"
+  asset="${BIN_NAME}-${target}"
+
+  mkdir -p "$dest" || die "cannot create install dir: ${dest}"
+  # Temp dir on the SAME filesystem as $dest so the final mv is an atomic rename.
+  tmp="$(mktemp -d "${dest}/.tayf-install.XXXXXX")" || die "mktemp failed"
+  trap 'rm -rf "$tmp"' EXIT
+
+  log "downloading ${asset} ..."
+  http_get "${base}/${asset}"        "${tmp}/${asset}"        || die "download failed: ${base}/${asset}"
+  http_get "${base}/${asset}.sha256" "${tmp}/${asset}.sha256" || die "download failed: ${asset}.sha256"
+  http_get "${base}/${asset}.sigstore.json" "${tmp}/${asset}.sigstore.json" 2>/dev/null \
+    || log "note: attestation bundle not downloaded"
+
+  verify_checksum   "${tmp}/${asset}" "${tmp}/${asset}.sha256"
+  verify_attestation "${tmp}/${asset}" "${tmp}/${asset}.sigstore.json"
+
+  chmod +x "${tmp}/${asset}"
+  mv -f "${tmp}/${asset}" "${dest}/${BIN_NAME}"   # atomic rename (same filesystem)
+  log "installed ${BIN_NAME} -> ${dest}/${BIN_NAME}"
+
+  path_hint  "$dest"
+  shadow_warn "$dest"
+
+  log "version check:"
+  "${dest}/${BIN_NAME}" --version || true
 }
 
 [ "${TAYF_INSTALL_NO_MAIN:-}" = "1" ] || main "$@"
