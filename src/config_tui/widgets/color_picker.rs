@@ -124,6 +124,56 @@ impl ColorPickerState {
             }
         }
     }
+
+    /// Seed a picker from an existing color so it opens already showing that
+    /// color (Patterns `c` on a rule that has a current color). `Rgb` pre-fills
+    /// the hex field, `Indexed` pre-fills `@NNN`, a named ANSI color selects its
+    /// swatch, and `None` yields the empty default.
+    pub(crate) fn from_color(color: Option<crate::style::Color>) -> Self {
+        use crate::style::Color;
+        match color {
+            Some(Color::Rgb(r, g, b)) => Self {
+                section: PickerSection::Hex,
+                hex_buf: format!("{r:02x}{g:02x}{b:02x}"),
+                ..Self::default()
+            },
+            Some(Color::Indexed(n)) => {
+                Self { section: PickerSection::Hex, hex_buf: format!("@{n}"), ..Self::default() }
+            }
+            Some(named) => match ansi16_idx_of(named) {
+                Some(idx) => {
+                    Self { section: PickerSection::Ansi16, ansi16_idx: idx, ..Self::default() }
+                }
+                None => Self::default(),
+            },
+            None => Self::default(),
+        }
+    }
+}
+
+/// Inverse of [`ansi16_color`]: a named ANSI `Color` → its 0-15 index, or
+/// `None` for `Rgb` / `Indexed` (which are not ANSI16 swatches).
+fn ansi16_idx_of(c: crate::style::Color) -> Option<u8> {
+    use crate::style::Color;
+    Some(match c {
+        Color::Black => 0,
+        Color::Red => 1,
+        Color::Green => 2,
+        Color::Yellow => 3,
+        Color::Blue => 4,
+        Color::Magenta => 5,
+        Color::Cyan => 6,
+        Color::White => 7,
+        Color::BrightBlack => 8,
+        Color::BrightRed => 9,
+        Color::BrightGreen => 10,
+        Color::BrightYellow => 11,
+        Color::BrightBlue => 12,
+        Color::BrightMagenta => 13,
+        Color::BrightCyan => 14,
+        Color::BrightWhite => 15,
+        Color::Rgb(..) | Color::Indexed(..) => return None,
+    })
 }
 
 /// Map ANSI index (0-15) to a `crate::style::Color` variant.
@@ -511,6 +561,38 @@ mod tests {
         assert_eq!(s.hex_buf, "@");
         dispatch_key(&mut s, mk(KeyCode::Backspace));
         assert_eq!(s.hex_buf, "", "Backspace clears the @ prefix, returning to hex mode");
+    }
+
+    #[test]
+    fn from_color_rgb_prefills_hex_field() {
+        let s = ColorPickerState::from_color(Some(crate::style::Color::Rgb(0x7c, 0x5c, 0xff)));
+        assert_eq!(s.section, PickerSection::Hex);
+        assert_eq!(s.hex_buf, "7c5cff");
+        assert_eq!(s.selected_color(), Some(crate::style::Color::Rgb(0x7c, 0x5c, 0xff)));
+    }
+
+    #[test]
+    fn from_color_indexed_prefills_at_palette() {
+        let s = ColorPickerState::from_color(Some(crate::style::Color::Indexed(178)));
+        assert_eq!(s.section, PickerSection::Hex);
+        assert_eq!(s.hex_buf, "@178");
+        assert_eq!(s.selected_color(), Some(crate::style::Color::Indexed(178)));
+    }
+
+    #[test]
+    fn from_color_named_selects_its_ansi_swatch() {
+        let s = ColorPickerState::from_color(Some(crate::style::Color::Cyan));
+        assert_eq!(s.section, PickerSection::Ansi16);
+        assert_eq!(s.ansi16_idx, 6);
+        assert_eq!(s.selected_color(), Some(crate::style::Color::Cyan));
+    }
+
+    #[test]
+    fn from_color_none_is_empty_default() {
+        let s = ColorPickerState::from_color(None);
+        assert_eq!(s.section, PickerSection::Hex);
+        assert!(s.hex_buf.is_empty());
+        assert_eq!(s.selected_color(), None);
     }
 
     #[test]

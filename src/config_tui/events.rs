@@ -1015,6 +1015,38 @@ pub(crate) fn resolve_selected_rule_id(app: &App) -> Option<crate::config_tui::e
     }
 }
 
+/// Resolve the foreground color currently bound to `rule_id`, in the same
+/// precedence compilation uses: pending edit > user config > built-in default.
+/// Returns `None` when the rule has no fg (explicitly cleared, or a user rule
+/// with no colour). Drives the Patterns Detail "Color:" line and the
+/// color-picker pre-fill so the user can see and edit the current colour.
+pub(crate) fn current_fg_for_rule(
+    app: &App,
+    rule_id: &crate::config_tui::edit::RuleId,
+) -> Option<crate::style::Color> {
+    use crate::config_tui::edit::StyleKey;
+    let name = rule_id_display_name(rule_id);
+    // 1. Pending edit (highest precedence). `fg: Option<Option<Color>>` —
+    //    Some(inner) means fg was edited this session: `inner` is the new
+    //    colour (Some) or an explicit clear (None). Outer None = unedited.
+    if let Some(ns) = app.edits.rules.get(rule_id).and_then(|re| re.styles.get(&StyleKey::Default))
+    {
+        if let Some(inner) = ns.fg {
+            return inner;
+        }
+    }
+    // 2. Snapshot user-config entry by name.
+    if let Some(us) =
+        app.snapshot.parsed.rules.iter().find(|r| r.name == name).and_then(|r| r.style.as_ref())
+    {
+        if let Some(fg) = &us.fg {
+            return crate::style::Color::parse_str(fg).ok();
+        }
+    }
+    // 3. Built-in default.
+    crate::rules::builtin_rules().into_iter().find(|r| r.name == name).and_then(|r| r.style.fg)
+}
+
 /// Look up the current pattern source for a `RuleId`, applying any
 /// `PendingEdits` overlay. Used by the `e` keystroke to initialize the
 /// `EditRegex` modal buffer. Embedded / disk-profile rule sources are
@@ -1307,6 +1339,42 @@ mod tests {
 
     fn mk(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    #[test]
+    fn current_fg_for_builtin_returns_its_default_color() {
+        use crate::config_tui::edit::RuleId;
+        let app = App::default_for_test();
+        let want = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "ipv6")
+            .and_then(|r| r.style.fg);
+        assert!(want.is_some(), "ipv6 ships with a default fg");
+        assert_eq!(
+            current_fg_for_rule(&app, &RuleId::Builtin("ipv6")),
+            want,
+            "builtin Detail color = its default style fg"
+        );
+    }
+
+    #[test]
+    fn current_fg_pending_edit_overrides_builtin_default() {
+        use crate::config_tui::edit::{RuleId, StyleKey};
+        let mut app = App::default_for_test();
+        let id = RuleId::Builtin("ipv6");
+        app.edits
+            .rules
+            .entry(id.clone())
+            .or_default()
+            .styles
+            .entry(StyleKey::Default)
+            .or_default()
+            .fg = Some(Some(crate::style::Color::Red));
+        assert_eq!(
+            current_fg_for_rule(&app, &id),
+            Some(crate::style::Color::Red),
+            "a staged color edit wins over the builtin default"
+        );
     }
 
     #[test]

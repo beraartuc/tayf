@@ -23,6 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content and the live-preview strip keep your real rule colors.
 - The color picker shows a **Current** indicator — a live swatch plus the
   selected color's value and kind — so you can see what you are about to bind.
+- The Patterns Detail pane shows the selected rule's current color (a swatch
+  plus its code, e.g. `#7c5cff`), and pressing `c` opens the color picker
+  pre-filled with that color instead of empty.
 - The Patterns tab shows a contextual key-hint row
   (`n:new  e:edit  c:color  o:override  r:reset  d:delete`) so the new-pattern
   action is discoverable without opening the help modal.

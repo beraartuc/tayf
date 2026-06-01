@@ -8,6 +8,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
@@ -152,43 +153,54 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     let layout =
         patterns_list_layout(&app.catalog.builtin_rule_names, &app.snapshot.parsed.rules, filter);
     let total = layout.builtin_count + layout.user_count;
-    let body = if total == 0 {
-        "(no pattern selected)".to_owned()
+    let mut lines: Vec<Line> = Vec::new();
+    if total == 0 {
+        lines.push(Line::raw("(no pattern selected)"));
     } else {
         let sel = app.focus.patterns.selected_idx.min(total - 1);
         if sel < layout.builtin_count {
             let name = layout.builtin_names[sel];
-            let builtin = crate::rules::builtin_rules().into_iter().find(|r| r.name == name);
-            match builtin {
-                Some(r) => format!(
-                    "Pattern: {}\n\nSource: built-in\nRegex: {}\nStyle: (default — Edit with 'e' or 'c' for color picker)\n\n\
-                     Press 'o' to override (copy into user-config so you can edit)\n\
-                     Press 'e' to edit the regex source (inline editor)\n\
-                     Press 'c' to open color picker (C4)",
-                    r.name, r.pattern,
-                ),
-                None => "(detail not found)".to_owned(),
+            match crate::rules::builtin_rules().into_iter().find(|r| r.name == name) {
+                Some(r) => {
+                    lines.push(Line::raw(format!("Pattern: {}", r.name)));
+                    lines.push(Line::raw(""));
+                    lines.push(Line::raw("Source: built-in"));
+                    lines.push(Line::raw(format!("Regex: {}", r.pattern)));
+                    lines.push(color_detail_line(app));
+                    lines.push(Line::raw(""));
+                    lines.push(Line::raw(
+                        "Press 'o' to override (copy into user-config so you can edit)",
+                    ));
+                    lines.push(Line::raw("Press 'e' to edit the regex source (inline editor)"));
+                    lines.push(Line::raw("Press 'c' to open the color picker"));
+                }
+                None => lines.push(Line::raw("(detail not found)")),
             }
         } else {
             let user_pos = sel - layout.builtin_count;
             let name = &layout.user_names[user_pos];
-            let user_rule = app.snapshot.parsed.rules.iter().find(|r| &r.name == name);
-            match user_rule {
-                Some(r) => format!(
-                    "Pattern: {name}\n\nSource: user config\nRegex: {regex}\n\n\
-                     Press 'e' to edit the regex source (inline editor)\n\
-                     Press 'c' to open color picker (C4)\n\
-                     Press 'd' to delete this user rule",
-                    name = r.name,
-                    regex = r.pattern.as_deref().unwrap_or("(none)"),
-                ),
-                None => "(detail not found)".to_owned(),
+            match app.snapshot.parsed.rules.iter().find(|r| &r.name == name) {
+                Some(r) => {
+                    lines.push(Line::raw(format!("Pattern: {}", r.name)));
+                    lines.push(Line::raw(""));
+                    lines.push(Line::raw("Source: user config"));
+                    lines.push(Line::raw(format!(
+                        "Regex: {}",
+                        r.pattern.as_deref().unwrap_or("(none)")
+                    )));
+                    lines.push(color_detail_line(app));
+                    lines.push(Line::raw(""));
+                    lines.push(Line::raw("Press 'e' to edit the regex source (inline editor)"));
+                    lines.push(Line::raw("Press 'c' to open the color picker"));
+                    lines.push(Line::raw("Press 'd' to delete this user rule"));
+                }
+                None => lines.push(Line::raw("(detail not found)")),
             }
         }
-    };
+    }
     let accent = app.tui_env.accent;
     frame.render_widget(
-        Paragraph::new(body).block(
+        Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(accent.border())
@@ -197,6 +209,33 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         ),
         area,
     );
+}
+
+/// Build the Detail "Color:" line for the selected rule: a swatch (its current
+/// fg as the background) followed by the colour code (`#rrggbb` / `color(N)` /
+/// an ANSI name), or `(none)` when the rule has no foreground colour. The
+/// effective colour is resolved via [`crate::config_tui::events::current_fg_for_rule`]
+/// (pending edit > user config > built-in default).
+fn color_detail_line(app: &App) -> Line<'static> {
+    let fg = crate::config_tui::events::resolve_selected_rule_id(app)
+        .and_then(|rid| crate::config_tui::events::current_fg_for_rule(app, &rid));
+    match fg {
+        Some(c) => {
+            let swatch = Span::styled(
+                "  ",
+                crate::config_tui::style_ratatui::to_ratatui(crate::style::Style {
+                    bg: Some(c),
+                    ..crate::style::Style::DEFAULT
+                }),
+            );
+            Line::from(vec![
+                Span::raw("Color: "),
+                swatch,
+                Span::raw(format!("  {}", c.to_toml_str())),
+            ])
+        }
+        None => Line::raw("Color: (none)"),
+    }
 }
 
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
@@ -267,8 +306,12 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             });
         }
         KeyCode::Char('c') if app.modal.is_none() => {
+            // Pre-fill the picker with the rule's current colour so it opens
+            // showing what is bound (Current indicator + hex field), not empty.
+            let current = crate::config_tui::events::resolve_selected_rule_id(app)
+                .and_then(|rid| crate::config_tui::events::current_fg_for_rule(app, &rid));
             app.modal = Some(Modal::ColorPicker(
-                crate::config_tui::widgets::color_picker::ColorPickerState::default(),
+                crate::config_tui::widgets::color_picker::ColorPickerState::from_color(current),
             ));
         }
         KeyCode::Char('e') if app.modal.is_none() => {
