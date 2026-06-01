@@ -42,6 +42,7 @@ fn main() -> ExitCode {
                     ExitCode::from(64) // EX_USAGE
                 }
             },
+            Some(Cmd::Init(init_args)) => tayf::init::run(init_args),
             // Same forward-compat catch-all for Cmd::* additions.
             Some(_) => {
                 eprintln!("tayf: unknown subcommand");
