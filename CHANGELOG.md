@@ -17,14 +17,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`Mon, 01 Jun 2026 12:40:00 +0300`) timestamp formats now receive the same
   date / time / zone sub-coloring as ISO 8601 timestamps; previously they were
   colorized as a single flat span.
+- A chrome accent theme ("Brass & Slate") for the `tayf config` TUI: the tab
+  strip, pane borders, section headers, selected-row highlight, and modal titles
+  are now colored, adapting to a light or dark terminal background. Colorized
+  content and the live-preview strip keep your real rule colors.
+- The color picker shows a **Current** indicator — a live swatch plus the
+  selected color's value and kind — so you can see what you are about to bind.
+- The Patterns tab shows a contextual key-hint row
+  (`n:new  e:edit  c:color  o:override  r:reset  d:delete`) so the new-pattern
+  action is discoverable without opening the help modal.
 
 ### Changed
+- **Color picker reworked** in the `tayf config` TUI: hex is now the primary
+  input (type `#rrggbb`, or `@0-255` for a 256-palette index); the large
+  256-color swatch grid was removed. ANSI-16 swatches and the
+  bold/italic/underline toggles remain.
+- The `tayf config` TUI redraws only on a state change (key, resize, debounce,
+  or toast) instead of ten times a second while idle, lowering idle CPU.
 - Re-toned the default Neon palette to a brighter, softer cyan/amber family:
   `ipv4` is now `#33c7ff` and `duration` `#f7d17f`, with the other ten rule
   colors retuned to match. The `permission` / `timestamp` gray (`#83838d`) is
   unchanged. `assets/themes/dark.toml` mirrors the new defaults.
 
 ### Fixed
+- The `tayf config` live preview now matches what `tayf` actually renders.
+  Previously it ignored terminal background detection and always previewed the
+  dark-tuned built-in colors, so on a light-background terminal (which the
+  runtime colorizes with the `light` theme) the preview disagreed with the real
+  output. The preview now resolves the effective theme with the same precedence
+  as the runtime (config theme > profile theme > background detection).
 - The `tayf config` TUI no longer dead-ends on a fresh machine: with no config
   file present it binds the default path and `Ctrl+S` / `Shift+D` create the
   file (previously `"first-run save requires init"`).
