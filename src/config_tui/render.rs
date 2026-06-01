@@ -2,7 +2,6 @@
 //! degradation gate §7.4.
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -66,13 +65,10 @@ fn render_tab_strip(frame: &mut Frame, area: Rect, app: &App, width: u16) {
             ("Status", Tab::Status),
         ]
     };
+    let accent = app.tui_env.accent;
     let mut spans: Vec<Span> = Vec::new();
     for (i, (label, t)) in labels.iter().enumerate() {
-        let style = if *t == app.tab {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
+        let style = if *t == app.tab { accent.tab_active() } else { accent.tab_inactive() };
         if i > 0 {
             spans.push(Span::raw(" │ "));
         }
@@ -134,6 +130,20 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, width: u16, previ
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_tab_cell_carries_brass_accent_bg() {
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+        use ratatui::Terminal;
+        let app = App::default_for_test(); // Dark env
+        let mut term = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+        term.draw(|f| frame(f, &app)).expect("draw");
+        let buf = term.backend().buffer();
+        // The active tab is "Patterns" at the start of row 0.
+        let cell = &buf[(0, 0)];
+        assert_eq!(cell.style().bg, Some(Color::Rgb(0xd8, 0xa6, 0x57)), "active tab brass bg");
+    }
 
     #[test]
     fn default_preview_sample_has_4_lines_unicode_coverage() {

@@ -16,7 +16,11 @@ use crate::pipeline::StyleSpan;
 /// Render the 5-row mini-preview strip.
 pub(crate) fn render_mini(frame: &mut Frame, area: Rect, app: &App) {
     let header = "─── live preview ─── [s] sample [P] hide [Shift+P] full ──";
-    let block = Block::default().borders(Borders::TOP).title(header);
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(app.tui_env.accent.border())
+        .title(header)
+        .title_style(app.tui_env.accent.header());
     let body = colorize_sample(app);
     frame.render_widget(Paragraph::new(body).block(block), area);
 }
@@ -25,7 +29,11 @@ pub(crate) fn render_mini(frame: &mut Frame, area: Rect, app: &App) {
 pub(crate) fn render_full_overlay(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Clear, area);
     let body = colorize_sample(app);
-    let block = Block::default().borders(Borders::ALL).title("Full preview — Esc to close");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.tui_env.accent.border())
+        .title("Full preview — Esc to close")
+        .title_style(app.tui_env.accent.modal_title());
     frame.render_widget(Paragraph::new(body).block(block), area);
 }
 

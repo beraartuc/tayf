@@ -3,7 +3,6 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
@@ -41,9 +40,16 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
     if !items.is_empty() {
         state.select(Some(app.focus.profiles.selected_idx.min(items.len() - 1)));
     }
+    let accent = app.tui_env.accent;
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Profiles (embedded)"))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(accent.border())
+                .title("Profiles (embedded)")
+                .title_style(accent.header()),
+        )
+        .highlight_style(accent.selection());
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -61,8 +67,15 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
             "Profile: {selected}\n\nSource: embedded\n\nPress Space to set as active\nPress 'o' to copy to disk for editing"
         )
     };
+    let accent = app.tui_env.accent;
     frame.render_widget(
-        Paragraph::new(body).block(Block::default().borders(Borders::ALL).title("Detail")),
+        Paragraph::new(body).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(accent.border())
+                .title("Detail")
+                .title_style(accent.header()),
+        ),
         area,
     );
 }

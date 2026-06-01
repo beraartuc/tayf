@@ -18,23 +18,14 @@ use ratatui::style::{Color, Modifier, Style};
 use crate::bg_detect::BgTheme;
 
 /// The "Brass & Slate" chrome palette for one background polarity.
-// reason: most fields are read only through role helpers; those not yet tested need
-// the allow in test builds too (wired into renderers in T3; remove all allows then).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AccentPalette {
     pub(crate) tab_active_bg: Color,
     pub(crate) tab_active_fg: Color,
     pub(crate) tab_inactive_fg: Color,
-    // reason: only read by border/selection helpers, not yet called in tests; wired in T3.
-    #[allow(dead_code)]
     pub(crate) border: Color,
     pub(crate) header: Color,
-    // reason: only read by selection helper, not yet called in tests; wired in T3.
-    #[allow(dead_code)]
     pub(crate) selection_bg: Color,
-    // reason: only read by selection helper, not yet called in tests; wired in T3.
-    #[allow(dead_code)]
     pub(crate) selection_fg: Color,
     pub(crate) modal_title: Color,
     pub(crate) hint_dim: Color,
@@ -42,8 +33,6 @@ pub(crate) struct AccentPalette {
 
 impl AccentPalette {
     /// Build the per-background "Brass & Slate" palette (spec §7.2).
-    // reason: wired into TuiEnv in T2; remove the allow when wired.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn from_bg(bg: BgTheme) -> Self {
         match bg {
             BgTheme::Dark => Self {
@@ -72,49 +61,37 @@ impl AccentPalette {
     }
 
     /// Active-tab chip: brass fill, base-bg text, bold.
-    // reason: wired into renderers in T3; remove the allow when wired.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn tab_active(self) -> Style {
         Style::default().fg(self.tab_active_fg).bg(self.tab_active_bg).add_modifier(Modifier::BOLD)
     }
 
     /// Inactive tab: muted slate, recedes.
-    // reason: wired into renderers in T3; remove the allow when wired.
-    #[allow(dead_code)]
     pub(crate) fn tab_inactive(self) -> Style {
         Style::default().fg(self.tab_inactive_fg)
     }
 
     /// Pane / modal / divider border.
-    // reason: wired into renderers in T3; remove the allow when wired.
-    #[allow(dead_code)]
     pub(crate) fn border(self) -> Style {
         Style::default().fg(self.border)
     }
 
     /// Section title: brass, bold.
-    // reason: wired into renderers in T3; remove the allow when wired.
-    #[allow(dead_code)]
     pub(crate) fn header(self) -> Style {
         Style::default().fg(self.header).add_modifier(Modifier::BOLD)
     }
 
     /// Selected list row: brass-tint fill + high-contrast text.
-    // reason: wired into renderers in T3; remove the allow when wired.
-    #[allow(dead_code)]
     pub(crate) fn selection(self) -> Style {
         Style::default().fg(self.selection_fg).bg(self.selection_bg)
     }
 
     /// Modal title: brass, bold.
-    // reason: wired into renderers in T3; remove the allow when wired.
-    #[allow(dead_code)]
     pub(crate) fn modal_title(self) -> Style {
         Style::default().fg(self.modal_title).add_modifier(Modifier::BOLD)
     }
 
     /// Dim contextual key-hint line.
-    // reason: wired into renderers in T3; remove the allow when wired.
+    // reason: wired by the Patterns key-hint in T6; remove when wired.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn hint(self) -> Style {
         Style::default().fg(self.hint_dim).add_modifier(Modifier::DIM)

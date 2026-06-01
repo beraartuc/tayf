@@ -28,9 +28,9 @@ pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
         Modal::ColorPicker(state) => color_picker::render(frame, area, state),
         Modal::FullPreview => preview::render_full_overlay(frame, full, app),
         Modal::SaveDiff => save_diff::render(frame, area, app),
-        Modal::QuitWithUnsavedEdits => render_quit_confirm(frame, area),
-        Modal::Confirm { msg, .. } => render_confirm(frame, area, msg),
-        Modal::Error(msg) => render_error(frame, area, msg),
+        Modal::QuitWithUnsavedEdits => render_quit_confirm(frame, area, app),
+        Modal::Confirm { msg, .. } => render_confirm(frame, area, msg, app),
+        Modal::Error(msg) => render_error(frame, area, msg, app),
         Modal::Search => {
             if let Some(state) = app.search_state.as_ref() {
                 search::render(frame, area, state);
@@ -84,25 +84,37 @@ fn centered_rect(width_pct: u16, height_pct: u16, area: Rect) -> Rect {
     .split(vertical[1])[1]
 }
 
-fn render_quit_confirm(frame: &mut Frame, area: Rect) {
+fn render_quit_confirm(frame: &mut Frame, area: Rect, app: &App) {
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
     frame.render_widget(Clear, area);
     let body = "You have unsaved changes.\n\n  [n / Esc / Enter]  Cancel (return to editor)\n  [s]                Save and quit\n  [d]                Discard and quit";
-    let block = Block::default().borders(Borders::ALL).title("Quit");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.tui_env.accent.border())
+        .title("Quit")
+        .title_style(app.tui_env.accent.modal_title());
     frame.render_widget(Paragraph::new(body).block(block), area);
 }
 
-fn render_confirm(frame: &mut Frame, area: Rect, msg: &str) {
+fn render_confirm(frame: &mut Frame, area: Rect, msg: &str, app: &App) {
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
     frame.render_widget(Clear, area);
     let body = format!("{msg}\n\n[y] Yes    [n / Esc] No (default)");
-    let block = Block::default().borders(Borders::ALL).title("Confirm");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.tui_env.accent.border())
+        .title("Confirm")
+        .title_style(app.tui_env.accent.modal_title());
     frame.render_widget(Paragraph::new(body).block(block), area);
 }
 
-fn render_error(frame: &mut Frame, area: Rect, msg: &str) {
+fn render_error(frame: &mut Frame, area: Rect, msg: &str, app: &App) {
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
     frame.render_widget(Clear, area);
-    let block = Block::default().borders(Borders::ALL).title("Error — Esc to dismiss");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.tui_env.accent.border())
+        .title("Error — Esc to dismiss")
+        .title_style(app.tui_env.accent.modal_title());
     frame.render_widget(Paragraph::new(msg.to_owned()).block(block), area);
 }

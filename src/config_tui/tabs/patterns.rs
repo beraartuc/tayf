@@ -126,9 +126,16 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
         state.select(selectable_to_render_idx(clamped, &layout));
     }
 
+    let accent = app.tui_env.accent;
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Patterns"))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(accent.border())
+                .title("Patterns")
+                .title_style(accent.header()),
+        )
+        .highlight_style(accent.selection());
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -171,8 +178,15 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
             }
         }
     };
+    let accent = app.tui_env.accent;
     frame.render_widget(
-        Paragraph::new(body).block(Block::default().borders(Borders::ALL).title("Detail")),
+        Paragraph::new(body).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(accent.border())
+                .title("Detail")
+                .title_style(accent.header()),
+        ),
         area,
     );
 }

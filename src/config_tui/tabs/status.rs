@@ -58,7 +58,11 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         lines.push(Line::from("  (no config dir; nothing to tail)"));
     }
-    let block = Block::default().borders(Borders::ALL).title("Status");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.tui_env.accent.border())
+        .title("Status")
+        .title_style(app.tui_env.accent.header());
     let p = Paragraph::new(lines)
         .block(block)
         .scroll((u16::try_from(app.focus.status.scroll).unwrap_or(0), 0));

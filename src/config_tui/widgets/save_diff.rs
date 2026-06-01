@@ -82,8 +82,11 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
         ),
         None => ("Save".to_owned(), "(no save state)".to_owned()),
         Some(SaveDiffState::ReconcileError { message }) => {
-            let block =
-                Block::default().borders(Borders::ALL).title("Reconcile error — fix and retry");
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.tui_env.accent.border())
+                .title("Reconcile error — fix and retry")
+                .title_style(app.tui_env.accent.modal_title());
             frame.render_widget(
                 Paragraph::new(message.as_str())
                     .style(Style::default().fg(Color::Red))
@@ -94,7 +97,11 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
             return;
         }
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.tui_env.accent.border())
+        .title(title)
+        .title_style(app.tui_env.accent.modal_title());
     frame.render_widget(Paragraph::new(body).scroll((app.save_diff_scroll, 0)).block(block), area);
 }
 

@@ -277,8 +277,6 @@ impl Default for SampleInput {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TuiEnv {
     pub(crate) bg: BgTheme,
-    // reason: accent is wired into renderers in T3; allow until then.
-    #[allow(dead_code)]
     pub(crate) accent: AccentPalette,
 }
 
