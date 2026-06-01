@@ -78,6 +78,37 @@ request a login shell with `--login`.
 When stdout is not a TTY (e.g. `tayf | tee log.txt`), colorization is
 disabled automatically.
 
+## Configure interactively (`tayf config`)
+
+`tayf` ships a full-screen TUI for browsing and editing your colorization
+rules live — no need to hand-edit TOML:
+
+```bash
+tayf config
+```
+
+Four tabs (switch with `Tab` / `Shift+Tab` or the number keys `1`–`4`):
+
+- **Patterns** — toggle, override, reset, or delete any of the twelve built-in
+  rules, add your own regex patterns, and pick colors interactively (ANSI 16,
+  256-color, or 24-bit hex, plus bold / italic / underline).
+- **Themes** — browse and select a built-in or on-disk theme.
+- **Profiles** — browse the built-in and on-disk profiles.
+- **Status** — the resolved config state and recent hot-reload events.
+
+A live preview strip shows how your changes colorize a sample line as you
+edit. `Ctrl+S` saves back to `config.toml` (atomic write with a timestamped
+backup; if the file changed on disk in the meantime, a three-way merge view
+lets you resolve each conflict). Press `?` or `F1` for the full keybinding
+cheat-sheet, and `Ctrl+C` or `q` to quit.
+
+Two non-interactive helpers share the same subcommand:
+
+```bash
+tayf config dump      # print the built-in pattern / theme / profile catalog as TOML
+tayf config status    # print the resolved config + recent reload events
+```
+
 ## Always-on (run tayf automatically)
 
 ### Terminal emulator startup command (recommended)
