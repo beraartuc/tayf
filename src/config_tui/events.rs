@@ -10,6 +10,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Terminal;
 
+#[cfg(test)]
+use crate::config_tui::app::TuiEnv;
 use crate::config_tui::app::{App, ConfirmAction, Modal, Tab};
 
 /// Canonical keybinding cheat-sheet rendered by `Modal::Help` (spec §12.4 D4).
@@ -571,12 +573,19 @@ pub(crate) fn recompile_preview(app: &mut App) {
 /// banner; existing `preview.runs` are preserved for visual continuity
 /// (spec §9.4 — last-good preview survives transient compile errors).
 pub(crate) fn apply_pending_and_recompile(app: &mut App) {
-    let theme = app.snapshot.parsed.theme.as_deref();
+    let config_theme = app.snapshot.parsed.theme.as_deref();
     let profile = app.snapshot.parsed.profile.as_deref();
+    // Same effective-theme precedence as the initial compile (spec §5) so the
+    // debounced recompile keeps matching real tayf.
+    let effective_theme = crate::config_tui::theme_resolve::resolve_from_snapshot(
+        config_theme,
+        profile,
+        app.tui_env.bg,
+    );
     match crate::config_tui::compile_pending::compile_pending(
         &app.snapshot,
         &app.edits,
-        theme,
+        Some(effective_theme.as_str()),
         profile,
     ) {
         Ok(new_compiled) => {
@@ -1294,7 +1303,7 @@ mod tests {
         // tier-2 (modal close). Without the tier-1 branch, the modal would
         // close on the first Esc and the goto-input buffer would be lost.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         app.modal = Some(Modal::ColorPicker(ColorPickerState {
             section: PickerSection::Palette256,
             goto_buf: Some(String::from("13")),
@@ -1319,7 +1328,7 @@ mod tests {
         // Without the matches! guard in handle_esc, app.save_diff would leak
         // past Esc dismissal and the next Ctrl+S would see stale state.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         app.save_diff = Some(crate::config_tui::widgets::save_diff::SaveDiffState::Clean {
             tui_diff: "(stub)".to_owned(),
         });
@@ -1339,7 +1348,7 @@ mod tests {
         // → 's' path) would leak past Esc into a surprise should_quit on
         // the next save-success commit.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         // Fabricate a MergePending state — only the variant tag matters
         // for the side-channel reset assertion.
         let empty_doc = toml_edit::DocumentMut::new();
@@ -1498,7 +1507,7 @@ mod tests {
         let cfg_path = tmp.path().join("config.toml");
         std::fs::write(&cfg_path, b"[general]\ntheme = \"dark\"\n").expect("seed cfg");
         let snap = ConfigSnapshot::read_from_disk(Some(&cfg_path)).expect("read snapshot");
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
 
         let base: toml_edit::DocumentMut = "[general]\ntheme = \"dark\"\n".parse().expect("base");
         let ours: toml_edit::DocumentMut = "[general]\ntheme = \"tokyo\"\n".parse().expect("ours");
@@ -1560,7 +1569,7 @@ mod tests {
             shape: ConflictValueShape::Block,
             is_array_block: false,
         }];
-        let mut app = App::from_snapshot(ConfigSnapshot::empty());
+        let mut app = App::from_snapshot(ConfigSnapshot::empty(), TuiEnv::deterministic());
         app.save_diff = Some(make_merge_pending_state(conflicts));
         app.modal =
             Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
@@ -1622,7 +1631,7 @@ mod tests {
                 is_array_block: false,
             },
         ];
-        let mut app = App::from_snapshot(ConfigSnapshot::empty());
+        let mut app = App::from_snapshot(ConfigSnapshot::empty(), TuiEnv::deterministic());
         app.save_diff = Some(make_merge_pending_state(conflicts));
         app.modal =
             Some(Modal::ConflictList(crate::config_tui::widgets::conflict_list::ConflictListState));
@@ -1648,7 +1657,7 @@ mod tests {
     #[test]
     fn slash_opens_search_modal_and_enter_commits_filter() {
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
 
         dispatch_key(&mut app, mk(KeyCode::Char('/')));
         assert!(matches!(app.modal, Some(Modal::Search)));
@@ -1666,7 +1675,7 @@ mod tests {
     #[test]
     fn esc_tier3_clears_search_filter_when_no_modal_open() {
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         app.search_filter = Some("foo".to_owned());
 
         dispatch_key(&mut app, mk(KeyCode::Esc));
@@ -1676,7 +1685,7 @@ mod tests {
     #[test]
     fn s_opens_sample_set_modal_with_buffer_prefilled() {
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         let original = app.sample_input.text.clone();
 
         dispatch_key(&mut app, mk(KeyCode::Char('s')));
@@ -1688,7 +1697,7 @@ mod tests {
     #[test]
     fn color_picker_commit_binds_to_selected_rule_via_styles_default_key() {
         let snapshot = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snapshot);
+        let mut app = App::from_snapshot(snapshot, TuiEnv::deterministic());
         // Default tab is Patterns; first builtin is at index 0.
         app.focus.patterns.selected_idx = 0;
         let color = crate::style::Color::Cyan;
@@ -1704,7 +1713,7 @@ mod tests {
     #[test]
     fn color_picker_commit_invokes_recompile_preview() {
         let snapshot = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snapshot);
+        let mut app = App::from_snapshot(snapshot, TuiEnv::deterministic());
         app.sample_input.text = "see 192.168.1.1 here".to_owned();
         app.preview.recompile(&app.sample_input.text);
         let runs_before = app.preview.runs.len();
@@ -1720,7 +1729,7 @@ mod tests {
         // Render re-applies preview.compiled to the new sample on the next
         // frame; a debouncer.mark_edit() here would over-trigger a recompile.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         dispatch_key(&mut app, mk(KeyCode::Char('s')));
         // Clear the pre-filled buffer.
         let state = app.sample_set_state.as_mut().expect("state set");
@@ -1770,7 +1779,7 @@ mod tests {
         // timer slides. Without mark_edit the live preview would never
         // recompile while the user is typing.
         let snapshot = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snapshot);
+        let mut app = App::from_snapshot(snapshot, TuiEnv::deterministic());
         app.modal = Some(Modal::EditRegex {
             rule_id: crate::config_tui::edit::RuleId::UserConfig("test".to_owned()),
             buffer: String::new(),
@@ -1790,7 +1799,7 @@ mod tests {
         // D3 commit path: Enter on a valid buffer writes the new pattern
         // into edits.rules[rule_id].pattern and closes the modal.
         let snapshot = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snapshot);
+        let mut app = App::from_snapshot(snapshot, TuiEnv::deterministic());
         app.modal = Some(Modal::EditRegex {
             rule_id: crate::config_tui::edit::RuleId::Builtin("ipv4"),
             buffer: r"\d+\.\d+".to_owned(),
@@ -1812,7 +1821,7 @@ mod tests {
         // D3 error path: Enter on an invalid buffer reopens the modal
         // with the error string set; PendingEdits is NOT mutated.
         let snapshot = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snapshot);
+        let mut app = App::from_snapshot(snapshot, TuiEnv::deterministic());
         app.modal = Some(Modal::EditRegex {
             rule_id: crate::config_tui::edit::RuleId::UserConfig("test".to_owned()),
             buffer: "[unbalanced".to_owned(),
@@ -1839,7 +1848,7 @@ mod tests {
     fn new_pattern_modal_commit_appends_added_new_rule() {
         use crate::config_tui::app::{Modal, NewPatternPhase, PatternDraft};
         let snapshot = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snapshot);
+        let mut app = App::from_snapshot(snapshot, TuiEnv::deterministic());
         let mut draft = PatternDraft::new();
         draft.name = "test_rule".to_owned();
         draft.pattern = r"\bX\b".to_owned();
@@ -1860,7 +1869,7 @@ mod tests {
     fn question_mark_opens_help_modal_when_no_modal_is_open() {
         // D4 dispatch: `?` from the global key arm constructs Modal::Help.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         assert!(app.modal.is_none(), "precondition: no modal at boot");
 
         dispatch_key(&mut app, mk(KeyCode::Char('?')));
@@ -1875,7 +1884,7 @@ mod tests {
     fn f1_opens_help_modal_as_alt_binding() {
         // D4 alt-binding parity: F1 is equivalent to `?` for opening Help.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
 
         dispatch_key(&mut app, mk(KeyCode::F(1)));
 
@@ -1893,7 +1902,7 @@ mod tests {
         // the quit flow (which would open Modal::QuitWithUnsavedEdits if
         // edits were dirty, or set should_quit otherwise).
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         app.modal = Some(Modal::Help);
 
         dispatch_key(&mut app, mk(KeyCode::Char('q')));
@@ -1909,7 +1918,7 @@ mod tests {
         // hit handle_save_diff_key (a no-op for `?`), NOT the global
         // dispatch arm that would replace the modal with Help.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         app.save_diff = Some(crate::config_tui::widgets::save_diff::SaveDiffState::Clean {
             tui_diff: "(stub)".to_owned(),
         });
@@ -1934,7 +1943,7 @@ mod tests {
         use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
         use std::collections::HashMap;
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         // Pre-populate an edit so the clear assertion is meaningful.
         let mut styles: HashMap<StyleKey, NewStyle> = HashMap::new();
         styles.insert(
@@ -1956,7 +1965,7 @@ mod tests {
         use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
         use std::collections::HashMap;
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         let mut styles: HashMap<StyleKey, NewStyle> = HashMap::new();
         styles.insert(
             StyleKey::Default,
@@ -1978,7 +1987,7 @@ mod tests {
         // v0.6.1 §3.3: Ctrl+R with no pending edits reloads inline (no
         // confirm) and surfaces an Ok toast.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         assert!(!app.edits.is_dirty(), "precondition: clean");
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(app.modal.is_none(), "no modal on clean Ctrl+R");
@@ -1995,7 +2004,7 @@ mod tests {
         file.write_all(b"# existing\n").expect("seed");
         let path = file.path().to_path_buf();
         let snap = ConfigSnapshot::read_from_disk(Some(&path)).expect("read");
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         dispatch_key(&mut app, mk(KeyCode::Char('D')));
         assert!(app.modal.is_none(), "no modal when config file exists");
         let toast = app.toast.as_ref().expect("warn toast set");
@@ -2015,7 +2024,7 @@ mod tests {
         assert!(!cfg_path.exists(), "precondition: config absent");
         let mut snap = ConfigSnapshot::empty();
         snap.source_path = Some(cfg_path);
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         dispatch_key(&mut app, mk(KeyCode::Char('D')));
         assert!(
             matches!(app.modal, Some(Modal::Confirm { action: ConfirmAction::InitFromDump, .. })),
@@ -2028,7 +2037,7 @@ mod tests {
         // v0.6.1 §3.3: Shift+D on an empty snapshot (source_path = None)
         // surfaces a warn toast — no Confirm modal.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         dispatch_key(&mut app, mk(KeyCode::Char('D')));
         assert!(app.modal.is_none(), "no modal when source_path is None");
         let toast = app.toast.as_ref().expect("warn toast set");
@@ -2043,7 +2052,7 @@ mod tests {
     fn v_keystroke_opens_full_preview_modal_as_shift_p_alias() {
         // v0.6.1 §3.5: V is an alias for Shift+P — both open Modal::FullPreview.
         let snap = ConfigSnapshot::empty();
-        let mut app = App::from_snapshot(snap);
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
         dispatch_key(&mut app, mk(KeyCode::Char('V')));
         assert!(matches!(app.modal, Some(Modal::FullPreview)), "V must open Modal::FullPreview");
     }

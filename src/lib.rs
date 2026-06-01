@@ -365,12 +365,13 @@ pub mod __test_api {
 
     /// Boot a fresh App on an empty snapshot, with the provided sample
     /// text seeded into the live-preview pipeline. Equivalent to the
-    /// production `App::from_snapshot(ConfigSnapshot::empty())` path
-    /// plus a sample swap + recompile.
+    /// production `App::from_snapshot(ConfigSnapshot::empty(), TuiEnv::deterministic())`
+    /// path plus a sample swap + recompile.
     #[must_use]
     pub fn boot_app_with_sample(sample: &str) -> AppHandle {
         let snapshot = crate::config_tui::snapshot::ConfigSnapshot::empty();
-        let mut app = crate::config_tui::app::App::from_snapshot(snapshot);
+        let tui_env = crate::config_tui::app::TuiEnv::deterministic();
+        let mut app = crate::config_tui::app::App::from_snapshot(snapshot, tui_env);
         sample.clone_into(&mut app.sample_input.text);
         app.preview.recompile(&app.sample_input.text);
         AppHandle(app)
@@ -449,7 +450,8 @@ pub mod __test_api {
     pub fn boot_app_with_bound_empty_snapshot(cfg_path: std::path::PathBuf) -> AppHandle {
         let mut snap = crate::config_tui::snapshot::ConfigSnapshot::empty();
         snap.source_path = Some(cfg_path);
-        AppHandle(crate::config_tui::app::App::from_snapshot(snap))
+        let tui_env = crate::config_tui::app::TuiEnv::deterministic();
+        AppHandle(crate::config_tui::app::App::from_snapshot(snap, tui_env))
     }
 
     /// Boot a fresh App by reading the snapshot from `cfg_path` on disk.
@@ -463,7 +465,8 @@ pub mod __test_api {
         cfg_path: &std::path::Path,
     ) -> Result<AppHandle, crate::error::Error> {
         let snap = crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(cfg_path))?;
-        Ok(AppHandle(crate::config_tui::app::App::from_snapshot(snap)))
+        let tui_env = crate::config_tui::app::TuiEnv::deterministic();
+        Ok(AppHandle(crate::config_tui::app::App::from_snapshot(snap, tui_env)))
     }
 
     /// Boot a fresh App on an empty snapshot whose `parsed.rules` is
@@ -500,7 +503,8 @@ pub mod __test_api {
                 priority: None,
             });
         }
-        let mut app = crate::config_tui::app::App::from_snapshot(snapshot);
+        let tui_env = crate::config_tui::app::TuiEnv::deterministic();
+        let mut app = crate::config_tui::app::App::from_snapshot(snapshot, tui_env);
         sample.clone_into(&mut app.sample_input.text);
         app.preview.recompile(&app.sample_input.text);
 

@@ -52,6 +52,7 @@ pub(crate) mod snapshot;
 pub(crate) mod status_cmd;
 pub(crate) mod style_ratatui;
 pub(crate) mod tabs;
+pub(crate) mod theme_resolve;
 pub(crate) mod widgets;
 
 #[cfg(test)]
@@ -144,6 +145,11 @@ pub fn run(args: RunArgs) -> ExitCode {
         }
     };
 
+    // 1b. Resolve the terminal environment (bg-detect) BEFORE raw mode + alt
+    //     screen — mirrors the runtime's early bg-detect; TuiEnv carries the
+    //     background polarity + derived chrome accent. Spec §4.
+    let tui_env = app::TuiEnv::resolve();
+
     // 2. Engage TUI guard + ratatui terminal.
     let _guard = match TuiGuard::enter() {
         Ok(g) => g,
@@ -162,7 +168,7 @@ pub fn run(args: RunArgs) -> ExitCode {
     };
 
     // 3. Build App + run loop.
-    let app = app::App::from_snapshot(snapshot);
+    let app = app::App::from_snapshot(snapshot, tui_env);
     match events::run_event_loop(app, terminal) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

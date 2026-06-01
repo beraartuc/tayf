@@ -4,6 +4,8 @@
 
 use std::time::Instant;
 
+use crate::bg_detect::BgTheme;
+use crate::config_tui::chrome::AccentPalette;
 use crate::config_tui::edit::{PendingEdits, RuleId};
 use crate::config_tui::snapshot::ConfigSnapshot;
 
@@ -269,12 +271,40 @@ impl Default for SampleInput {
     }
 }
 
+/// Terminal environment snapshot, resolved ONCE at TUI startup (before raw
+/// mode) and threaded into [`App`]. Carries the background polarity + the
+/// derived chrome accent. Powers preview fidelity (§5) and chrome color (§7).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TuiEnv {
+    pub(crate) bg: BgTheme,
+    // reason: accent is wired into renderers in T3; allow until then.
+    #[allow(dead_code)]
+    pub(crate) accent: AccentPalette,
+}
+
+impl TuiEnv {
+    /// Resolve from the real terminal. MUST be called before raw mode / alt
+    /// screen — `bg_detect::resolve()` manages its own `/dev/tty` termios.
+    pub(crate) fn resolve() -> Self {
+        let bg = crate::bg_detect::resolve();
+        Self { bg, accent: AccentPalette::from_bg(bg) }
+    }
+
+    /// Deterministic env (always Dark, no `/dev/tty` I/O). Used by snapshot/unit
+    /// tests AND by `crate::__test_api` integration-test boot helpers.
+    pub(crate) fn deterministic() -> Self {
+        let bg = BgTheme::Dark;
+        Self { bg, accent: AccentPalette::from_bg(bg) }
+    }
+}
+
 /// Top-level App state.
 pub(crate) struct App {
     pub(crate) snapshot: ConfigSnapshot,
     pub(crate) edits: PendingEdits,
     pub(crate) catalog: Catalog,
     pub(crate) preview: PreviewState,
+    pub(crate) tui_env: TuiEnv,
     pub(crate) tab: Tab,
     pub(crate) focus: TabFocus,
     pub(crate) modal: Option<Modal>,
@@ -300,23 +330,33 @@ pub(crate) struct App {
 impl App {
     /// Build the `App` from a snapshot. Catalog populated from existing
     /// tayf accessors.
-    pub(crate) fn from_snapshot(snapshot: ConfigSnapshot) -> Self {
+    pub(crate) fn from_snapshot(snapshot: ConfigSnapshot, tui_env: TuiEnv) -> Self {
         let builtin_rule_names: Vec<&'static str> = crate::rules::BUILTIN_NAMES.to_vec();
         let builtin_theme_names: Vec<&'static str> = crate::themes::names().to_vec();
         let embedded_profile_names: Vec<&'static str> =
             crate::profiles::embedded_profile_names().collect();
 
-        let theme = snapshot.parsed.theme.as_deref();
+        let config_theme = snapshot.parsed.theme.as_deref();
         let profile = snapshot.parsed.profile.as_deref();
+        // Mirror the runtime theme precedence so the preview matches real tayf
+        // (spec §5): config theme > profile.theme > bg-detect default.
+        let effective_theme = crate::config_tui::theme_resolve::resolve_from_snapshot(
+            config_theme,
+            profile,
+            tui_env.bg,
+        );
         let synth_config = crate::config::Config {
             general: snapshot.parsed.general.clone(),
             rules: snapshot.parsed.rules.clone(),
         };
-        let (compiled, compile_error) =
-            match crate::rules::compile_from_config(&synth_config, theme, profile) {
-                Ok(c) => (c, None),
-                Err(e) => (crate::rules::Compiled::empty(), Some(e.to_string())),
-            };
+        let (compiled, compile_error) = match crate::rules::compile_from_config(
+            &synth_config,
+            Some(effective_theme.as_str()),
+            profile,
+        ) {
+            Ok(c) => (c, None),
+            Err(e) => (crate::rules::Compiled::empty(), Some(e.to_string())),
+        };
         let mut preview = PreviewState::new(compiled);
         preview.compile_error = compile_error;
 
@@ -325,6 +365,7 @@ impl App {
             edits: PendingEdits::default(),
             catalog: Catalog { builtin_rule_names, builtin_theme_names, embedded_profile_names },
             preview,
+            tui_env,
             tab: Tab::Patterns,
             focus: TabFocus::default(),
             modal: None,
@@ -349,13 +390,81 @@ impl App {
     #[must_use]
     pub(crate) fn default_for_test() -> Self {
         let snapshot = crate::config_tui::snapshot::ConfigSnapshot::empty();
-        Self::from_snapshot(snapshot)
+        Self::from_snapshot(snapshot, TuiEnv::deterministic())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// fg color of the preview span that starts at `needle` on sample line
+    /// `line_idx`, or None.
+    // Assumes the matched rule produces one span starting exactly at `needle`'s
+    // byte offset (true for the builtin ipv4 full-address rule).
+    fn preview_fg(app: &App, line_idx: usize, needle: &str) -> Option<crate::style::Color> {
+        let line = app.sample_input.text.lines().nth(line_idx)?;
+        let start = line.find(needle)?;
+        app.preview.runs.get(line_idx)?.iter().find(|s| s.start == start).and_then(|s| s.style.fg)
+    }
+
+    /// Runtime reference: the fg the real `tayf` pipeline assigns to the ipv4
+    /// span of the default sample's first line under an explicit theme. Read
+    /// LIVE from the compiler — never a hardcoded hex — so it survives default
+    /// palette re-tones (e.g. commit 06c11c8 ipv4 → #33c7ff).
+    fn runtime_ipv4_fg(theme: &str) -> Option<crate::style::Color> {
+        let cfg = crate::config::Config {
+            general: crate::config::GeneralSection::default(),
+            rules: Vec::new(),
+        };
+        let compiled =
+            crate::rules::compile_from_config(&cfg, Some(theme), None).expect("compile theme");
+        let handle = arc_swap::ArcSwap::from_pointee(compiled);
+        let mut scratch = crate::pipeline::PipelineScratch::default();
+        let line =
+            crate::config_tui::render::DEFAULT_PREVIEW_SAMPLE.lines().next().expect("line 0");
+        let spans = crate::pipeline::apply_rules_spans(line.as_bytes(), &handle, &mut scratch);
+        let start = line.find("192.168.1.42").expect("ip in sample");
+        spans.iter().find(|s| s.start == start).and_then(|s| s.style.fg)
+    }
+
+    fn app_with_bg(bg: crate::bg_detect::BgTheme) -> App {
+        let env = TuiEnv { bg, accent: crate::config_tui::chrome::AccentPalette::from_bg(bg) };
+        App::from_snapshot(crate::config_tui::snapshot::ConfigSnapshot::empty(), env)
+    }
+
+    #[test]
+    fn preview_matches_runtime_under_light_bg() {
+        // Spec §5.2 oracle: on a light terminal the preview must EQUAL the
+        // runtime's light-theme colorization, and must DIFFER from the dark
+        // built-ins (proving the theme is actually applied). Palette-agnostic —
+        // no hardcoded hex, survives default re-tones.
+        let app = app_with_bg(crate::bg_detect::BgTheme::Light);
+        assert_eq!(
+            preview_fg(&app, 0, "192.168.1.42"),
+            runtime_ipv4_fg("light"),
+            "light-bg preview ipv4 must equal the runtime light-theme color"
+        );
+        assert_ne!(
+            preview_fg(&app, 0, "192.168.1.42"),
+            runtime_ipv4_fg("dark"),
+            "light-bg preview must NOT fall back to the dark built-ins (the bug)"
+        );
+    }
+
+    #[test]
+    fn preview_matches_runtime_under_dark_bg() {
+        // Dark path stays equal to the runtime dark theme (== built-ins): guards
+        // that the fidelity fix does not regress the dark terminal.
+        let app = app_with_bg(crate::bg_detect::BgTheme::Dark);
+        let dark_runtime = runtime_ipv4_fg("dark");
+        assert!(dark_runtime.is_some(), "dark theme must assign a color to the ipv4 span");
+        assert_eq!(
+            preview_fg(&app, 0, "192.168.1.42"),
+            dark_runtime,
+            "dark-bg preview ipv4 equals the runtime dark-theme color"
+        );
+    }
 
     #[test]
     fn tab_cycle_forward_and_backward() {
@@ -378,7 +487,7 @@ mod tests {
     #[test]
     fn app_init_no_dirty_no_modal_patterns_tab_default() {
         let snap = crate::config_tui::snapshot::ConfigSnapshot::empty();
-        let app = App::from_snapshot(snap);
+        let app = App::from_snapshot(snap, TuiEnv::deterministic());
         assert_eq!(app.tab, Tab::Patterns);
         assert!(app.modal.is_none());
         assert!(!app.edits.is_dirty());
