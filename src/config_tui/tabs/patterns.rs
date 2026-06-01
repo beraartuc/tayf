@@ -97,10 +97,18 @@ pub(crate) fn selectable_to_render_idx(
 }
 
 pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
     let chunks =
-        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
+        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(rows[0]);
     render_list(frame, chunks[0], app);
     render_detail(frame, chunks[1], app);
+    render_hint(frame, rows[1], app);
+}
+
+/// Dim contextual key-hint advertising the Patterns-tab actions (spec §9).
+fn render_hint(frame: &mut Frame, area: Rect, app: &App) {
+    let line = "  n:new  e:edit  c:color  o:override  r:reset  d:delete";
+    frame.render_widget(Paragraph::new(line).style(app.tui_env.accent.hint()), area);
 }
 
 fn render_list(frame: &mut Frame, area: Rect, app: &App) {
@@ -280,6 +288,22 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patterns_render_includes_key_hint_row() {
+        use crate::config_tui::app::App;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let app = App::default_for_test();
+        let mut term = Terminal::new(TestBackend::new(80, 20)).expect("backend");
+        term.draw(|f| render(f, ratatui::layout::Rect::new(0, 0, 80, 20), &app)).expect("draw");
+        let buf = term.backend().buffer();
+        let mut text = String::new();
+        for x in 0..80u16 {
+            text.push_str(buf[(x, 19)].symbol()); // bottom row
+        }
+        assert!(text.contains("n:new"), "Patterns hint row advertises n:new, got: {text:?}");
+    }
 
     fn user_rule(name: &str) -> UserRule {
         UserRule {

@@ -91,8 +91,6 @@ impl AccentPalette {
     }
 
     /// Dim contextual key-hint line.
-    // reason: wired by the Patterns key-hint in T6; remove when wired.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn hint(self) -> Style {
         Style::default().fg(self.hint_dim).add_modifier(Modifier::DIM)
     }
