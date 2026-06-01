@@ -272,12 +272,18 @@ impl Default for SampleInput {
 }
 
 /// Terminal environment snapshot, resolved ONCE at TUI startup (before raw
-/// mode) and threaded into [`App`]. Carries the background polarity + the
-/// derived chrome accent. Powers preview fidelity (§5) and chrome color (§7).
+/// mode) and threaded into [`App`]. Carries the background polarity, the
+/// derived chrome accent, and the terminal color depth. Powers preview
+/// fidelity (§5) and chrome color (§7).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TuiEnv {
     pub(crate) bg: BgTheme,
     pub(crate) accent: AccentPalette,
+    /// Detected terminal color depth. The live preview compiles at THIS depth
+    /// (not always Truecolor) so its colors match what real `tayf` renders on
+    /// the same terminal — at 256/16 depth the runtime downsamples, so the
+    /// preview must too. Manual-review fidelity finding.
+    pub(crate) depth: crate::terminfo::ColorDepth,
 }
 
 impl TuiEnv {
@@ -285,14 +291,19 @@ impl TuiEnv {
     /// screen — `bg_detect::resolve()` manages its own `/dev/tty` termios.
     pub(crate) fn resolve() -> Self {
         let bg = crate::bg_detect::resolve();
-        Self { bg, accent: AccentPalette::from_bg(bg) }
+        Self { bg, accent: AccentPalette::from_bg(bg), depth: crate::terminfo::detect_depth() }
     }
 
-    /// Deterministic env (always Dark, no `/dev/tty` I/O). Used by snapshot/unit
-    /// tests AND by `crate::__test_api` integration-test boot helpers.
+    /// Deterministic env (always Dark, fixed Truecolor depth, no `/dev/tty`
+    /// I/O). Used by snapshot/unit tests AND by `crate::__test_api`
+    /// integration-test boot helpers.
     pub(crate) fn deterministic() -> Self {
         let bg = BgTheme::Dark;
-        Self { bg, accent: AccentPalette::from_bg(bg) }
+        Self {
+            bg,
+            accent: AccentPalette::from_bg(bg),
+            depth: crate::terminfo::ColorDepth::Truecolor,
+        }
     }
 }
 
@@ -358,6 +369,7 @@ impl App {
             &synth_config,
             Some(effective_theme.as_str()),
             profile,
+            tui_env.depth,
         ) {
             Ok(c) => (c, None),
             Err(e) => (crate::rules::Compiled::empty(), Some(e.to_string())),
@@ -423,8 +435,15 @@ mod tests {
             general: crate::config::GeneralSection::default(),
             rules: Vec::new(),
         };
-        let compiled =
-            crate::rules::compile_from_config(&cfg, Some(theme), None).expect("compile theme");
+        // Truecolor here mirrors `app_with_bg`'s deterministic depth, so this
+        // oracle isolates THEME resolution (depth fidelity is covered separately).
+        let compiled = crate::rules::compile_from_config(
+            &cfg,
+            Some(theme),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile theme");
         let handle = arc_swap::ArcSwap::from_pointee(compiled);
         let mut scratch = crate::pipeline::PipelineScratch::default();
         let line =
@@ -435,8 +454,33 @@ mod tests {
     }
 
     fn app_with_bg(bg: crate::bg_detect::BgTheme) -> App {
-        let env = TuiEnv { bg, accent: crate::config_tui::chrome::AccentPalette::from_bg(bg) };
+        let env = TuiEnv {
+            bg,
+            accent: crate::config_tui::chrome::AccentPalette::from_bg(bg),
+            depth: crate::terminfo::ColorDepth::Truecolor,
+        };
         App::from_snapshot(crate::config_tui::snapshot::ConfigSnapshot::empty(), env)
+    }
+
+    #[test]
+    fn preview_compiles_at_the_tui_color_depth_not_always_truecolor() {
+        // Manual-review fidelity: the preview must downsample to the terminal's
+        // detected depth so it matches `tayf cat` on the same terminal. At
+        // Indexed256 the ipv4 fg must be a downsampled `Indexed`, not full Rgb
+        // (the previous hardcoded-Truecolor preview showed Rgb → mismatch).
+        let env = TuiEnv {
+            bg: crate::bg_detect::BgTheme::Dark,
+            accent: crate::config_tui::chrome::AccentPalette::from_bg(
+                crate::bg_detect::BgTheme::Dark,
+            ),
+            depth: crate::terminfo::ColorDepth::Indexed256,
+        };
+        let app = App::from_snapshot(crate::config_tui::snapshot::ConfigSnapshot::empty(), env);
+        let fg = preview_fg(&app, 0, "192.168.1.42");
+        assert!(
+            matches!(fg, Some(crate::style::Color::Indexed(_))),
+            "preview ipv4 must downsample to Indexed at 256-color depth, got {fg:?}"
+        );
     }
 
     #[test]

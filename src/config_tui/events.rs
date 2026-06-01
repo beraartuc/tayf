@@ -594,6 +594,7 @@ pub(crate) fn apply_pending_and_recompile(app: &mut App) {
         &app.edits,
         Some(effective_theme.as_str()),
         profile,
+        app.tui_env.depth,
     ) {
         Ok(new_compiled) => {
             app.preview.compiled.store(std::sync::Arc::new(new_compiled));

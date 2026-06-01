@@ -97,6 +97,7 @@ pub(crate) fn compile_pending(
     edits: &PendingEdits,
     theme_name: Option<&str>,
     profile_name: Option<&str>,
+    depth: crate::terminfo::ColorDepth,
 ) -> Result<Compiled, CompileError> {
     // 1. Clone the snapshot's user_rules as the base.
     let mut user_rules = snapshot.parsed.rules.clone();
@@ -225,7 +226,7 @@ pub(crate) fn compile_pending(
     // 5. Synthesize Config + delegate compilation.
     let synth =
         crate::config::Config { general: snapshot.parsed.general.clone(), rules: user_rules };
-    compile_from_config(&synth, theme_name, profile_name)
+    compile_from_config(&synth, theme_name, profile_name, depth)
         .map_err(|e| CompileError::CompileFailed(Box::new(e)))
 }
 
@@ -347,7 +348,9 @@ mod tests {
     fn compile_pending_empty_edits_returns_compiled_with_builtins() {
         let snapshot = ConfigSnapshot::empty();
         let edits = PendingEdits::default();
-        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         assert!(compiled.individuals.len() >= 12, "at least 12 builtins");
     }
 
@@ -360,7 +363,9 @@ mod tests {
             pattern: r"\bTEST\b".to_owned(),
             style: visible_new_style(),
         });
-        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         let found = compiled.individuals.iter().any(|re| re.as_str() == r"\bTEST\b");
         assert!(found, "added pattern present in compiled individuals");
     }
@@ -374,7 +379,9 @@ mod tests {
             pattern: r"[invalid".to_owned(),
             style: NewStyle::default(),
         });
-        let err = compile_pending(&snapshot, &edits, None, None).expect_err("must err");
+        let err =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect_err("must err");
         match err {
             CompileError::InvalidPattern { rule_name, .. } => {
                 assert_eq!(rule_name, "bad_pattern");
@@ -396,7 +403,9 @@ mod tests {
             pattern: "[01]{4,1000000}".to_owned(),
             style: NewStyle::default(),
         });
-        let err = compile_pending(&snapshot, &edits, None, None).expect_err("must err");
+        let err =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect_err("must err");
         match err {
             CompileError::InvalidPattern { rule_name, source } => {
                 assert_eq!(rule_name, "redos_attempt");
@@ -418,7 +427,9 @@ mod tests {
             RuleId::UserConfig("foo".to_owned()),
             RuleEdit { pattern: Some(r"\bFOO\b".to_owned()), styles: HashMap::new() },
         );
-        let compiled = compile_pending(&snap, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snap, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         let found = compiled.individuals.iter().any(|re| re.as_str() == r"\bFOO\b");
         assert!(found, "override pattern \\bFOO\\b present");
         let still_old = compiled.individuals.iter().any(|re| re.as_str() == r"\bfoo\b");
@@ -430,7 +441,9 @@ mod tests {
         let snap = snapshot_with_one_user_rule("to_delete", r"\bdelete_me\b");
         let mut edits = PendingEdits::default();
         edits.deleted.insert(RuleId::UserConfig("to_delete".to_owned()));
-        let compiled = compile_pending(&snap, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snap, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         let found = compiled.individuals.iter().any(|re| re.as_str() == r"\bdelete_me\b");
         assert!(!found, "deleted rule pattern absent from compiled");
     }
@@ -451,7 +464,9 @@ mod tests {
             pattern: r"\bADDED\b".to_owned(),
             style: visible_new_style(),
         });
-        let compiled = compile_pending(&snap, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snap, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         let has_new = compiled.individuals.iter().any(|re| re.as_str() == r"\bnew\b");
         let has_added = compiled.individuals.iter().any(|re| re.as_str() == r"\bADDED\b");
         let has_old = compiled.individuals.iter().any(|re| re.as_str() == r"\bold\b");
@@ -471,7 +486,9 @@ mod tests {
             RuleId::Builtin("ipv4"),
             RuleEdit { pattern: Some(r"\b1\.2\.3\.4\b".to_owned()), styles: HashMap::new() },
         );
-        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         let has_new = compiled.individuals.iter().any(|re| re.as_str() == r"\b1\.2\.3\.4\b");
         let has_old = compiled
             .individuals
@@ -493,7 +510,9 @@ mod tests {
             NewStyle { fg: Some(Some(Color::Red)), ..Default::default() },
         );
         edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
-        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         // Locate the ipv4 entry by name in BUILTIN_NAMES order.
         let ipv4_idx = crate::rules::BUILTIN_NAMES
             .iter()
@@ -508,8 +527,14 @@ mod tests {
         // Pattern override; no style override. The resulting rule should
         // have the new pattern AND the shipped default style for ipv4.
         let snapshot = ConfigSnapshot::empty();
-        let baseline = compile_pending(&snapshot, &PendingEdits::default(), None, None)
-            .expect("baseline compile");
+        let baseline = compile_pending(
+            &snapshot,
+            &PendingEdits::default(),
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("baseline compile");
         let ipv4_idx = crate::rules::BUILTIN_NAMES
             .iter()
             .position(|n| *n == "ipv4")
@@ -521,7 +546,9 @@ mod tests {
             RuleId::Builtin("ipv4"),
             RuleEdit { pattern: Some(r"\bxxx\b".to_owned()), styles: HashMap::new() },
         );
-        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         assert!(
             compiled.individuals.iter().any(|re| re.as_str() == r"\bxxx\b"),
             "new pattern present"
@@ -537,8 +564,14 @@ mod tests {
         // Style override; no pattern override. The compiled rule must
         // keep the shipped pattern AND apply the new style.
         let snapshot = ConfigSnapshot::empty();
-        let baseline = compile_pending(&snapshot, &PendingEdits::default(), None, None)
-            .expect("baseline compile");
+        let baseline = compile_pending(
+            &snapshot,
+            &PendingEdits::default(),
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("baseline compile");
         let ipv4_idx = crate::rules::BUILTIN_NAMES
             .iter()
             .position(|n| *n == "ipv4")
@@ -552,7 +585,9 @@ mod tests {
             NewStyle { fg: Some(Some(Color::Green)), ..Default::default() },
         );
         edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
-        let compiled = compile_pending(&snapshot, &edits, None, None).expect("compile");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         assert_eq!(
             compiled.individuals[ipv4_idx].as_str(),
             original_pattern,
@@ -579,8 +614,12 @@ mod tests {
             general: crate::config::GeneralSection::default(),
             rules: Vec::new(),
         };
-        let Ok(probe) = crate::rules::compile_from_config(&empty_config, None, Some(profile))
-        else {
+        let Ok(probe) = crate::rules::compile_from_config(
+            &empty_config,
+            None,
+            Some(profile),
+            crate::terminfo::ColorDepth::Truecolor,
+        ) else {
             return;
         };
         let baseline_names: Vec<String> =
@@ -602,8 +641,14 @@ mod tests {
             RuleId::Embedded { profile, rule: "ipv4".to_owned() },
             RuleEdit { pattern: None, styles },
         );
-        let compiled = compile_pending(&snapshot, &edits, None, Some(profile))
-            .expect("compile under embedded profile");
+        let compiled = compile_pending(
+            &snapshot,
+            &edits,
+            None,
+            Some(profile),
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile under embedded profile");
         // We assert at minimum the compile succeeded with the overlay
         // applied (no `Error::Config "defined more than once..."`).
         assert!(
@@ -639,8 +684,9 @@ mod tests {
             NewStyle { fg: Some(Some(Color::Red)), ..Default::default() },
         );
         edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
-        let compiled = compile_pending(&snap, &edits, None, None)
-            .expect("dedupe-then-mutate must avoid `seen` duplicate error");
+        let compiled =
+            compile_pending(&snap, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("dedupe-then-mutate must avoid `seen` duplicate error");
         let ipv4_idx = crate::rules::BUILTIN_NAMES.iter().position(|n| *n == "ipv4").expect("ipv4");
         assert_eq!(
             compiled.styles[ipv4_idx].fg,
@@ -674,8 +720,9 @@ mod tests {
             RuleId::DiskProfile { profile: "synthetic".to_owned(), rule: "ipv4".to_owned() },
             RuleEdit { pattern: None, styles },
         );
-        let compiled = compile_pending(&snapshot, &edits, None, None)
-            .expect("compile with DiskProfile overlay does not error");
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile with DiskProfile overlay does not error");
         // Locate ipv4 by BUILTIN_NAMES index.
         let ipv4_idx = crate::rules::BUILTIN_NAMES
             .iter()

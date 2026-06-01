@@ -899,12 +899,14 @@ impl Compiled {
 }
 
 /// Build a [`Compiled`] from an in-memory [`crate::config::Config`] + optional
-/// theme name + optional profile name. Additive entry-point: wraps
-/// [`Compiled::load_with_theme`] by resolving theme/profile-by-name and
-/// defaulting `depth` to `ColorDepth::Truecolor` (TUI preview hint).
+/// theme name + optional profile name, at the given color `depth`. Additive
+/// entry-point: wraps [`Compiled::load_with_theme`] by resolving
+/// theme/profile-by-name.
 ///
-/// Used by Config TUI live-preview (`compile_pending`) to recompile from
-/// `PendingEdits` + `ConfigSnapshot` deltas without touching disk.
+/// Used by the Config TUI live-preview (`compile_pending`) to recompile from
+/// `PendingEdits` + `ConfigSnapshot` deltas without touching disk. The TUI
+/// passes the terminal's DETECTED depth (not always Truecolor) so the preview's
+/// downsampled colors match what real `tayf` renders on the same terminal.
 ///
 /// All validation, merge ordering, and error-routing semantics are
 /// identical to [`Compiled::load_with_theme`].
@@ -917,6 +919,7 @@ pub(crate) fn compile_from_config(
     config: &crate::config::Config,
     theme_name: Option<&str>,
     profile_name: Option<&str>,
+    depth: crate::terminfo::ColorDepth,
 ) -> Result<Compiled> {
     let loaded_profile = match profile_name {
         Some(name) => Some(crate::profiles::load(name)?),
@@ -928,7 +931,7 @@ pub(crate) fn compile_from_config(
         theme_name,
         loaded_profile.as_ref().map(|lp| &lp.profile),
         None, // profile_path: embedded only
-        crate::terminfo::ColorDepth::Truecolor,
+        depth,
     )
 }
 
@@ -3650,7 +3653,9 @@ fg = "red"
         use crate::config::{Config, GeneralSection};
 
         let config = Config { general: GeneralSection::default(), rules: Vec::new() };
-        let compiled = compile_from_config(&config, None, None).expect("compile");
+        let compiled =
+            compile_from_config(&config, None, None, crate::terminfo::ColorDepth::Truecolor)
+                .expect("compile");
         assert!(compiled.individuals.len() >= 12, "at least 12 builtins compiled");
         assert!(compiled.priorities.iter().all(|&p| p == 0), "all builtins priority 0");
     }
@@ -3660,7 +3665,12 @@ fg = "red"
         use crate::config::{Config, GeneralSection};
 
         let config = Config { general: GeneralSection::default(), rules: Vec::new() };
-        let result = compile_from_config(&config, Some("nonexistent_theme"), None);
+        let result = compile_from_config(
+            &config,
+            Some("nonexistent_theme"),
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        );
         assert!(result.is_err(), "unknown theme name surfaces as Error");
     }
 }

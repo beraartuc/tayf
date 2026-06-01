@@ -875,6 +875,7 @@ pub mod __test_api {
             &app.0.edits,
             theme,
             profile,
+            app.0.tui_env.depth,
         )
         .expect("compile_pending_individual_patterns: unexpected compile error");
         compiled.individuals.iter().map(|r| r.as_str().to_owned()).collect()
