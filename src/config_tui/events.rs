@@ -847,7 +847,7 @@ fn apply_init_from_dump(app: &mut App) {
         app.toast = Some(crate::config_tui::app::Toast::warn("Cannot init: no config path bound."));
         return;
     };
-    let toml = crate::config_tui::save::default_config_toml();
+    let toml = crate::config::default_config_toml();
     if let Err(e) = crate::config_tui::save::write_atomic_to(&path, &toml) {
         app.toast = Some(crate::config_tui::app::Toast::warn(format!("Init failed: {e}")));
         return;
