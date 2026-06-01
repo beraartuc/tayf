@@ -18,7 +18,7 @@
 │  d / Delete       Delete user override (confirm)                             │
 │                                                                              │
 │Color Picker (when modal open)                                                │
-│  Tab              Cycle: ANSI16 → 256 → hex → bold → italic → underline      │
+│  Tab              Cycle: hex → ANSI16 → bold → italic → underline            │
 │  Space            Toggle focused boolean axis                                │
 │  c                Clear focused boolean axis (bold/italic/underline only)    │
 └──────────────────────────────────────────────────────────────────────────────┘

@@ -37,10 +37,10 @@ Editing (Patterns tab)
   d / Delete       Delete user override (confirm)
 
 Color Picker (when modal open)
-  Tab              Cycle: ANSI16 → 256 → hex → bold → italic → underline
+  Tab              Cycle: hex → ANSI16 → bold → italic → underline
   Space            Toggle focused boolean axis
   c                Clear focused boolean axis (bold/italic/underline only)
-  ← →              Adjust focused color value
+  ← →              ANSI: move swatch · hex: ← backspaces
   Enter            Commit
   Esc              Cancel (discards staged edits)
 
@@ -381,18 +381,12 @@ fn handle_save_diff_key(app: &mut App, k: KeyEvent) {
 }
 
 /// Esc precedence (§12.1):
-/// 1. close active edit field (incl. color-picker goto-input — UI/UX nit #5 fold),
+/// 1. close active edit field,
 /// 2. close modal (drops matching side-channel: `SaveDiff` / `Search` / `SampleSet`),
 /// 3. clear active sticky search filter,
 /// 4. no-op.
 fn handle_esc(app: &mut App) {
-    // Tier 1: color-picker goto-input clears first, modal stays open.
-    if let Some(Modal::ColorPicker(state)) = app.modal.as_mut() {
-        if state.goto_buf.take().is_some() {
-            return;
-        }
-    }
-    // Tier 1b: NewPattern phase-aware back-out (TUI reviewer I4 fold —
+    // Tier 1: NewPattern phase-aware back-out (TUI reviewer I4 fold —
     // Esc rewinds through Style → Regex → Name, only closing the modal
     // on Esc from the Name phase. Draft buffers are preserved across
     // back-steps so an accidental rewind doesn't lose input.
@@ -1307,7 +1301,7 @@ mod tests {
     use super::*;
     use crate::config_tui::app::App;
     use crate::config_tui::snapshot::ConfigSnapshot;
-    use crate::config_tui::widgets::color_picker::{ColorPickerState, PickerSection};
+    use crate::config_tui::widgets::color_picker::ColorPickerState;
     use ratatui::crossterm::event::KeyModifiers;
 
     fn mk(code: KeyCode) -> KeyEvent {
@@ -1328,28 +1322,15 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_color_picker_clears_goto_buf_first_then_closes_modal() {
-        // Integration path: dispatch_key → handle_esc → tier-1 (goto clear) /
-        // tier-2 (modal close). Without the tier-1 branch, the modal would
-        // close on the first Esc and the goto-input buffer would be lost.
+    fn esc_in_color_picker_closes_modal() {
+        // Esc on an open color picker closes it in a single press (the old
+        // tier-1 goto-input-clear step is gone with the 256-grid removal).
         let snap = ConfigSnapshot::empty();
         let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
-        app.modal = Some(Modal::ColorPicker(ColorPickerState {
-            section: PickerSection::Palette256,
-            goto_buf: Some(String::from("13")),
-            ..Default::default()
-        }));
+        app.modal = Some(Modal::ColorPicker(ColorPickerState::default()));
 
         dispatch_key(&mut app, mk(KeyCode::Esc));
-        match &app.modal {
-            Some(Modal::ColorPicker(s)) => {
-                assert!(s.goto_buf.is_none(), "first Esc must clear goto_buf");
-            }
-            other => panic!("modal must remain open after first Esc; got {other:?}"),
-        }
-
-        dispatch_key(&mut app, mk(KeyCode::Esc));
-        assert!(app.modal.is_none(), "second Esc must close the modal");
+        assert!(app.modal.is_none(), "Esc must close the color picker modal");
     }
 
     #[test]
@@ -2112,6 +2093,9 @@ mod tests {
         // v0.6.1 §3.3: Ctrl+R reload + Shift+D init keybindings pinned.
         assert!(HELP_MODAL_CONTENT.contains("Ctrl+R"), "Ctrl+R reload listed");
         assert!(HELP_MODAL_CONTENT.contains("Shift+D"), "Shift+D init listed");
+        // Spec §6: picker Tab cycle text updated; old 256-grid cycle removed.
+        assert!(HELP_MODAL_CONTENT.contains("hex → ANSI16"), "picker cycle lists hex → ANSI16");
+        assert!(!HELP_MODAL_CONTENT.contains("→ 256 →"), "256-grid cycle text must be gone");
     }
 
     #[test]

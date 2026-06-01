@@ -754,18 +754,16 @@ pub mod __test_api {
         })
     }
 
-    /// String tag for the picker's current `section`: `"ansi16"`,
-    /// `"palette256"`, or `"truehex"`. Returns `None` if no `ColorPicker`
-    /// modal is open. G3 §3.1.
+    /// String tag for the picker's current `section`: `"hex"` or `"ansi16"`.
+    /// Returns `None` if no `ColorPicker` modal is open. Spec §6.
     #[must_use]
     pub fn color_picker_section_tag(app: &AppHandle) -> Option<&'static str> {
         use crate::config_tui::app::Modal;
         use crate::config_tui::widgets::color_picker::PickerSection;
         let Some(Modal::ColorPicker(state)) = &app.0.modal else { return None };
         Some(match state.section {
+            PickerSection::Hex => "hex",
             PickerSection::Ansi16 => "ansi16",
-            PickerSection::Palette256 => "palette256",
-            PickerSection::TrueHex => "truehex",
         })
     }
 

@@ -1,24 +1,24 @@
-┌Color picker — Tab section, ←→ value, Enter accept, Esc cancel────────────────┐
-│▶ ANSI16:   0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15     │
+┌Color picker — Tab field, ←→ value, Enter accept, Esc cancel──────────────────┐
+│Current:      —  (none)                                                       │
 │                                                                              │
+│▶ Hex   #            (6 hex digits · @0-255 = palette)                        │
+│  ANSI    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15       │
 │                                                                              │
-│  256-palette                                                                 │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│Style  [bold: —] [italic: —] [underline: —]                                   │
+│Tab=field ←→=val Space=toggle c=clear Enter=accept Esc=cancel                 │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│  #                                                                           │
 │                                                                              │
 │                                                                              │
-│[bold: —] [italic: —] [underline: —]                                          │
-│Tab=section ←→=val Space=toggle c=clear Enter=accept Esc=cancel               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
