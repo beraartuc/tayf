@@ -53,3 +53,27 @@ style = { fg = "blue" }
 [[rules]]
 name = "duration"
 style = { fg = "green" }
+
+[[rules]]
+name = "instance_id"
+style = { fg = "red" }
+
+[[rules]]
+name = "region"
+style = { fg = "magenta" }
+
+[[rules]]
+name = "arn"
+style = { fg = "bright_white" }
+
+[[rules]]
+name = "container_id"
+style = { fg = "black" }
+
+[[rules]]
+name = "image_tag"
+style = { fg = "bright_green", bold = true }
+
+[[rules]]
+name = "pod_name"
+style = { fg = "blue", bold = true }

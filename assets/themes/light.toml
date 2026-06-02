@@ -57,3 +57,27 @@ style = { fg = "#7c1d9e" }
 [[rules]]
 name = "duration"
 style = { fg = "#8a5a00" }
+
+[[rules]]
+name = "instance_id"
+style = { fg = "#c05c00" }
+
+[[rules]]
+name = "region"
+style = { fg = "#1a7a40" }
+
+[[rules]]
+name = "arn"
+style = { fg = "#0a6b7a" }
+
+[[rules]]
+name = "container_id"
+style = { fg = "#7a3b00" }
+
+[[rules]]
+name = "image_tag"
+style = { fg = "#85107a" }
+
+[[rules]]
+name = "pod_name"
+style = { fg = "#2b4db0" }

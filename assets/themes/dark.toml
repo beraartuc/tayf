@@ -1,6 +1,6 @@
 # tayf — dark-background preset theme.
 #
-# Spells out the 12 built-in Neon default styles explicitly so users can copy
+# Spells out all 18 built-in Neon default styles explicitly so users can copy
 # this file as a starting template. Applying `--theme dark` is a no-op compared
 # to running tayf with no theme: every style here matches the built-in default.
 #
@@ -55,3 +55,27 @@ style = { fg = "#a76eff" }
 [[rules]]
 name = "duration"
 style = { fg = "#f7d17f" }
+
+[[rules]]
+name = "instance_id"
+style = { fg = "#ff7a4d" }
+
+[[rules]]
+name = "region"
+style = { fg = "#36e08a" }
+
+[[rules]]
+name = "arn"
+style = { fg = "#5ad7e0" }
+
+[[rules]]
+name = "container_id"
+style = { fg = "#ffb86c" }
+
+[[rules]]
+name = "image_tag"
+style = { fg = "#ff79c6" }
+
+[[rules]]
+name = "pod_name"
+style = { fg = "#82aaff" }

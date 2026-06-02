@@ -4014,4 +4014,114 @@ fg = "red"
         ));
         assert!(no_sgr_span_for(&apply_to_line(&on, "docker pull nginx:1.21\n"), "nginx:1.21"));
     }
+
+    /// All six promoted built-ins (indices 12–17) must have an explicit entry in
+    /// every shipped theme file so they are styled by the theme, not left as
+    /// implicit inline fallbacks.
+    ///
+    /// Oracle invariant (re-tone-proof): expected dark fg values are read live
+    /// from `builtin_rules()` — no hex literals are hardcoded here.
+    #[test]
+    fn promoted_builtins_covered_by_all_shipped_themes() {
+        use crate::style::Style;
+
+        const PROMOTED: &[&str] =
+            &["instance_id", "region", "arn", "container_id", "image_tag", "pod_name"];
+
+        // Helper: parse a shipped theme's TOML and return its rules list.
+        let theme_rules = |name: &str| {
+            let loaded = crate::themes::load(name).unwrap_or_else(|e| panic!("load {name}: {e}"));
+            let cfg = crate::config::parse(&loaded.path_label, &loaded.source)
+                .unwrap_or_else(|e| panic!("parse {name}: {e}"));
+            cfg.rules
+        };
+
+        // 1. All three theme files must contain an entry for every promoted rule.
+        for theme in ["dark", "light", "classic"] {
+            let rules = theme_rules(theme);
+            let names: std::collections::HashSet<&str> =
+                rules.iter().map(|r| r.name.as_str()).collect();
+            for &rule_name in PROMOTED {
+                assert!(
+                    names.contains(rule_name),
+                    "theme {theme:?} is missing entry for promoted rule {rule_name:?}"
+                );
+            }
+            // Every entry must carry an fg.
+            for &rule_name in PROMOTED {
+                let entry = rules.iter().find(|r| r.name == rule_name).unwrap();
+                assert!(
+                    entry.style.as_ref().and_then(|s| s.fg.as_deref()).is_some(),
+                    "theme {theme:?}: promoted rule {rule_name:?} entry has no `style.fg`"
+                );
+            }
+        }
+
+        // 2. Under `dark`, each promoted rule's themed fg must equal the inline
+        //    builtin default (idempotency for promoted rules mirrors the spec §5.1
+        //    contract for the original 12).  Colors read live from `builtin_rules()`.
+        let dark_rules = theme_rules("dark");
+        let builtins = builtin_rules();
+        for &rule_name in PROMOTED {
+            let builtin_style: &Style =
+                builtins.iter().find(|r| r.name == rule_name).map(|r| &r.style).unwrap();
+            let theme_entry = dark_rules.iter().find(|r| r.name == rule_name).unwrap();
+            let theme_fg_str = theme_entry
+                .style
+                .as_ref()
+                .and_then(|s| s.fg.as_deref())
+                .unwrap_or_else(|| panic!("dark theme {rule_name:?} missing fg"));
+            let theme_fg = crate::style::Color::parse_str(theme_fg_str)
+                .unwrap_or_else(|e| panic!("dark theme {rule_name:?} fg parse error: {e}"));
+            assert_eq!(
+                Some(theme_fg),
+                builtin_style.fg,
+                "dark theme promoted rule {rule_name:?}: themed fg must equal inline builtin default"
+            );
+        }
+
+        // 3. Under `light`, the six promoted fg values must be pairwise distinct
+        //    and distinct from every other existing light entry.  Colors parsed live.
+        let light_rules = theme_rules("light");
+        let parse_fg = |rules: &[crate::config::UserRule], name: &str| {
+            rules
+                .iter()
+                .find(|r| r.name == name)
+                .and_then(|r| r.style.as_ref())
+                .and_then(|s| s.fg.as_deref())
+                .map(|hex| {
+                    crate::style::Color::parse_str(hex)
+                        .unwrap_or_else(|e| panic!("light {name} fg parse: {e}"))
+                })
+        };
+        let promoted_fgs: Vec<_> = PROMOTED
+            .iter()
+            .map(|&n| (n, parse_fg(&light_rules, n).unwrap_or_else(|| panic!("light missing {n}"))))
+            .collect();
+        // Pairwise distinctness of promoted entries.
+        for i in 0..promoted_fgs.len() {
+            for j in (i + 1)..promoted_fgs.len() {
+                assert_ne!(
+                    promoted_fgs[i].1, promoted_fgs[j].1,
+                    "light theme: promoted rules {:?} and {:?} share fg {:?}",
+                    promoted_fgs[i].0, promoted_fgs[j].0, promoted_fgs[i].1
+                );
+            }
+        }
+        // Distinct from uuid and filename (the two most-likely collision targets).
+        let uuid_fg = parse_fg(&light_rules, "uuid");
+        let filename_fg = parse_fg(&light_rules, "filename");
+        for (name, fg) in &promoted_fgs {
+            assert_ne!(
+                Some(*fg),
+                uuid_fg,
+                "light theme: promoted rule {name:?} collides with uuid fg {uuid_fg:?}"
+            );
+            assert_ne!(
+                Some(*fg),
+                filename_fg,
+                "light theme: promoted rule {name:?} collides with filename fg {filename_fg:?}"
+            );
+        }
+    }
 }
