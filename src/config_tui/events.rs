@@ -1030,6 +1030,18 @@ fn serialize_active_rules(app: &App) -> String {
 /// clears the staged/snapshot active-profile pointer so the TUI falls back
 /// to the default profile. Surfaces a toast on every outcome.
 fn delete_disk_profile(app: &mut App, name: &str) {
+    // Defense-in-depth: validate the name first, symmetric to
+    // `commit_new_profile`. The name arrives pre-validated from
+    // `list_names_with_root` and `check_safe_write_destination` blocks
+    // traversal, so this is not currently exploitable — but re-checking
+    // here keeps the two handlers symmetric and avoids making delete
+    // safety load-bearing on an upstream invariant.
+    if !crate::profiles::name_is_valid(name) {
+        app.toast = Some(crate::config_tui::app::Toast::warn(
+            "Delete refused: name must be ASCII alphanumeric with '-' or '_'".to_owned(),
+        ));
+        return;
+    }
     let Some(tayf_root) = crate::config_tui::save::tayf_config_root() else {
         app.toast = Some(crate::config_tui::app::Toast::warn(
             "Delete failed: cannot resolve ~/.config/tayf/".to_owned(),

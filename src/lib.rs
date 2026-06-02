@@ -1043,9 +1043,9 @@ pub mod __test_api {
     /// in production output. Used for corpus harness decision measurement
     /// (spec §5.3, §5.4).
     ///
-    /// `profile` is the name of an embedded profile (e.g. `"aws"`, `"k8s"`).
-    /// Pass `None` for built-ins only. Returns an empty `Vec` when the
-    /// profile name is unknown or compilation fails.
+    /// `profile` is the name of a disk profile to activate. Pass `None`
+    /// for built-ins only. Returns an empty `Vec` when the profile name
+    /// is unknown or compilation fails.
     ///
     /// `SemVer` note: see [`match_named_rule`].
     #[must_use]

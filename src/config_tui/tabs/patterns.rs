@@ -108,7 +108,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Dim contextual key-hint advertising the Patterns-tab actions (spec §9).
 fn render_hint(frame: &mut Frame, area: Rect, app: &App) {
-    let line = "  n:new  e:edit  c:color  o:override  r:reset  d:delete";
+    let line = "  n:new  e:edit  c:color  o:override  r:reset  d:delete  Space:on/off";
     frame.render_widget(Paragraph::new(line).style(app.tui_env.accent.hint()), area);
 }
 

@@ -104,7 +104,7 @@ pub(crate) struct BuiltinRule {
 /// how validation errors are routed: theme-sourced errors collect into a
 /// `Vec<ThemeRuleError>` for fail-collected [`Error::ThemeValidation`];
 /// user-config-sourced errors fail-fast as [`Error::Config`];
-/// embedded-profile-sourced errors collect into a `Vec<ProfileRuleError>` for
+/// disk-profile-sourced errors collect into a `Vec<ProfileRuleError>` for
 /// fail-collected [`Error::ProfileValidation`]. Built-in rules pass validation
 /// by construction (asserted by `builtin_rules_*` tests).
 ///
@@ -1170,7 +1170,7 @@ fn compile_merged_rules(
 /// Resolve the per-capture-group style overlay vector for a single rule,
 /// routing range/key validation errors to either a collected
 /// `Vec<ThemeRuleError>` (theme provenance), a collected
-/// `Vec<ProfileRuleError>` (embedded-profile provenance), or a fail-fast
+/// `Vec<ProfileRuleError>` (disk-profile provenance), or a fail-fast
 /// [`Error::Config`] (user-config provenance). Built-in rules with no
 /// `styles_override` short-circuit to a clone of their pre-populated
 /// `group_styles` (Phase 6 will make those non-empty for permission /
@@ -3314,7 +3314,7 @@ fg = "red"
     /// `source = RuleSource::DiskProfile`, and the diagnostic profile
     /// context (`profile_name`, `profile_path`) is threaded through the
     /// signature added in Task 8.
-    fn dispatch_embedded_profile_single_style(
+    fn dispatch_disk_profile_single_style(
         rule_name: &str,
         pattern: &str,
         key: &str,
@@ -3345,13 +3345,13 @@ fg = "red"
     }
 
     #[test]
-    fn dispatch_embedded_profile_zero_forbidden_pushes_to_profile_errors() {
+    fn dispatch_disk_profile_zero_forbidden_pushes_to_profile_errors() {
         // Key "0" on a profile-sourced rule must surface as
         // Error::ProfileValidation containing exactly one
         // ProfileRuleError whose kind is
         // StylesKey(CaptureGroupIndexZeroForbidden).
         let style = crate::config::UserStyle::default();
-        let err = dispatch_embedded_profile_single_style(
+        let err = dispatch_disk_profile_single_style(
             "myprofile_rule",
             r"(?P<scheme>https?)://",
             "0",
@@ -3385,11 +3385,11 @@ fg = "red"
     }
 
     #[test]
-    fn dispatch_embedded_profile_key_malformed_pushes_to_profile_errors() {
+    fn dispatch_disk_profile_key_malformed_pushes_to_profile_errors() {
         // Key "01" must hit the KeyMalformed grammar gate (NOT fall through
         // to NameUnknown), then collect as a ProfileRuleError.
         let style = crate::config::UserStyle::default();
-        let err = dispatch_embedded_profile_single_style(
+        let err = dispatch_disk_profile_single_style(
             "myprofile_rule",
             r"(?P<scheme>https?)://",
             "01",
@@ -3416,11 +3416,11 @@ fg = "red"
     }
 
     #[test]
-    fn dispatch_embedded_profile_index_out_of_range_pushes_to_profile_errors() {
+    fn dispatch_disk_profile_index_out_of_range_pushes_to_profile_errors() {
         // Pattern has one capture group ("scheme"); key "5" is out of range
         // (captures_len = 2, valid 1..=1).
         let style = crate::config::UserStyle::default();
-        let err = dispatch_embedded_profile_single_style(
+        let err = dispatch_disk_profile_single_style(
             "myprofile_rule",
             r"(?P<scheme>https?)://",
             "5",
@@ -3455,11 +3455,11 @@ fg = "red"
     }
 
     #[test]
-    fn dispatch_embedded_profile_name_unknown_pushes_to_profile_errors() {
+    fn dispatch_disk_profile_name_unknown_pushes_to_profile_errors() {
         // Pattern has named groups "date" + "time"; key "bogus" references
         // an unknown name.
         let style = crate::config::UserStyle::default();
-        let err = dispatch_embedded_profile_single_style(
+        let err = dispatch_disk_profile_single_style(
             "myprofile_rule",
             r"(?P<date>\d{4}-\d{2}-\d{2})T(?P<time>\d{2}:\d{2}:\d{2})",
             "bogus",
@@ -3494,7 +3494,7 @@ fg = "red"
     }
 
     #[test]
-    fn dispatch_embedded_profile_duplicate_target_pushes_to_profile_errors() {
+    fn dispatch_disk_profile_duplicate_target_pushes_to_profile_errors() {
         // Pattern with named group "scheme" at position 1; both styles."1"
         // and styles.scheme reference the same slot.
         use std::collections::BTreeMap;
@@ -3550,7 +3550,7 @@ fg = "red"
     }
 
     #[test]
-    fn dispatch_three_way_identity_theme_userconfig_embedded_profile_byte_equal() {
+    fn dispatch_three_way_identity_theme_userconfig_disk_profile_byte_equal() {
         // For one representative variant (KeyMalformed), assert that the
         // Display wording is byte-identical across all three RuleSource
         // paths:

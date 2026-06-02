@@ -21,4 +21,4 @@
 │── User ──                    ││                                              │
 │                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
-  n:new  e:edit  c:color  o:override  r:reset  d:delete                         
+  n:new  e:edit  c:color  o:override  r:reset  d:delete  Space:on/off           

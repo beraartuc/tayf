@@ -428,8 +428,8 @@ pub enum Error {
         /// The profile name as the user wrote it (CLI arg or
         /// `[general] profile` value).
         name: String,
-        /// `<embedded:profile/{name}>` for shipped profiles (none in
-        /// v0.5.2); canonical disk path for disk-loaded profiles.
+        /// Canonical disk path of the profile file. Profiles are
+        /// disk-only — there is no embedded profile registry.
         source_path: String,
         /// Classification + payload for the underlying failure.
         kind: ProfileErrorKind,
@@ -449,8 +449,8 @@ pub enum Error {
         /// The user-facing profile name (CLI `--profile` or
         /// `[general] profile`).
         profile: String,
-        /// `<embedded:profile/{name}>` for shipped profiles (none in
-        /// v0.5.2); canonical disk path for disk-loaded profiles.
+        /// Canonical disk path of the profile file. Profiles are
+        /// disk-only — there is no embedded profile registry.
         source_path: String,
         /// At least one entry; an empty Vec would be a constructor bug.
         errors: Vec<ProfileRuleError>,
