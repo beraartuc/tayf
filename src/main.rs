@@ -4,10 +4,8 @@
 //! - 0 (`EX_OK`) — success, including `--help` and `--version` output.
 //! - 64 (`EX_USAGE`) — CLI parse failure (unknown flag, bad value, etc.),
 //!   or a malformed `--config` / `~/.config/tayf/config.toml`.
-//! - 70 (`EX_SOFTWARE`) — internal programming error (regex compile, buffer
-//!   overflow surfaced as Result, embedded profile RegexCompile — a tayf
-//!   library bug because the shipped `assets/profiles/*.toml` patterns
-//!   failed to compile).
+//! - 70 (`EX_SOFTWARE`) — internal programming error (a built-in pattern
+//!   failed to compile, or a buffer overflow surfaced as a `Result`).
 //! - 71 (`EX_OSERR`) — operating-system failure (PTY, TTY, signal, shell
 //!   discovery).
 //! - Otherwise, the child shell's exit status, low byte.
@@ -74,17 +72,12 @@ fn map_error_to_exit_code(err: &Error) -> u8 {
         Error::Config { .. } => 64,          // EX_USAGE
         Error::Theme { .. } => 64,           // EX_USAGE — unknown --theme value
         Error::ThemeValidation { .. } => 64, // EX_USAGE — disk/preset theme validation
-        // Embedded profile RegexCompile is a tayf library bug — pattern
-        // shipped in `assets/profiles/*.toml` failed to compile. Maps to
-        // EX_SOFTWARE 70 (internal programming error). Discriminator:
-        // source_path begins with `<embedded:profile/` (v0.5.2 LoadedProfile
-        // path_label convention). Note: only RegexCompile splits. Other
-        // ProfileErrorKind variants (ParseError, NotFound, etc.) on
-        // embedded paths are practically unreachable (we ship the files)
-        // and remain EX_USAGE for the failsafe path.
-        Error::Profile {
-            kind: tayf::ProfileErrorKind::RegexCompile { .. }, source_path, ..
-        } if source_path.starts_with("<embedded:profile/") => 70, // EX_SOFTWARE
+        // All profile errors are user-facing TOML problems now that the
+        // embedded library is retired (the six domain rules are built-ins).
+        // A bad regex in a disk profile (`RegexCompile`), a missing file
+        // (`NotFound`), a parse error, etc. are all EX_USAGE — the user owns
+        // the profile file. (Built-in pattern bugs surface as
+        // `Error::RegexCompile`, mapped to EX_SOFTWARE above.)
         Error::Profile { .. } => 64, // EX_USAGE — disk profile / unknown name / etc.
         Error::ProfileValidation { .. } => 64, // EX_USAGE — profile body validation
         // reason: `Error` is `#[non_exhaustive]` for forward compat; future
@@ -146,25 +139,8 @@ mod tests {
         );
     }
 
-    // v0.5.3 — Profile/RegexCompile exit-code split (§7.4).
-
-    #[test]
-    fn embedded_profile_regex_compile_maps_to_ex_software() {
-        let err = Error::Profile {
-            name: "aws".to_owned(),
-            source_path: "<embedded:profile/aws>".to_owned(),
-            kind: tayf::ProfileErrorKind::RegexCompile {
-                rule_name: "synthetic".to_owned(),
-                pattern: "(".to_owned(),
-                message: "unbalanced (".to_owned(),
-            },
-        };
-        assert_eq!(
-            map_error_to_exit_code(&err),
-            70,
-            "Embedded profile RegexCompile is a tayf library bug; must map to EX_SOFTWARE 70",
-        );
-    }
+    // Profile errors map to EX_USAGE (64) — they are user-owned disk TOML
+    // problems now that the embedded library is retired.
 
     #[test]
     fn disk_profile_regex_compile_maps_to_ex_usage() {
@@ -185,13 +161,11 @@ mod tests {
     }
 
     #[test]
-    fn embedded_profile_parse_error_still_maps_to_ex_usage() {
-        // Split is RegexCompile-specific. Other ProfileErrorKind variants
-        // (ParseError, etc.) on embedded paths remain EX_USAGE failsafe.
+    fn disk_profile_parse_error_maps_to_ex_usage() {
         let err = Error::Profile {
-            name: "aws".to_owned(),
-            source_path: "<embedded:profile/aws>".to_owned(),
-            kind: tayf::ProfileErrorKind::ParseError { message: "synthetic: bad TOML".to_owned() },
+            name: "myaws".to_owned(),
+            source_path: "/home/user/.config/tayf/profiles/myaws.toml".to_owned(),
+            kind: tayf::ProfileErrorKind::ParseError { message: "bad TOML".to_owned() },
         };
         assert_eq!(map_error_to_exit_code(&err), 64);
     }

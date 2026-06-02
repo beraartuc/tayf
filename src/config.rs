@@ -453,13 +453,12 @@ pub(crate) fn apply_user_rules(
 /// the supplied [`crate::rules::RuleSource`] provenance, so
 /// `Compiled::load_with_theme` can route later range/key errors to the
 /// correct fail-collected envelope ([`Error::ThemeValidation`] for theme,
-/// [`Error::ProfileValidation`] for embedded profile, or fail-fast
+/// [`Error::ProfileValidation`] for a disk profile, or fail-fast
 /// [`Error::Config`] for user config). The base [`apply_user_rules`] calls
 /// through with [`crate::rules::RuleSource::UserConfig`]; the theme layer
 /// in `Compiled::load_with_theme` calls through with
-/// [`crate::rules::RuleSource::Theme`]; profile `[[append_rules]]` (Phase 4
-/// Task 11) will call through with
-/// [`crate::rules::RuleSource::DiskProfile`].
+/// [`crate::rules::RuleSource::Theme`]; a named disk profile's `[[rules]]`
+/// call through with [`crate::rules::RuleSource::DiskProfile`].
 ///
 /// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), v0.5.2 §4.45.
 pub(crate) fn apply_user_rules_with_source(
