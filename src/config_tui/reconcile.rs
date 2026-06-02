@@ -319,9 +319,25 @@ fn apply_user_config_rule(
     edit: &RuleEdit,
 ) -> Result<(), ReconcileError> {
     let rules = ensure_rules_array(doc)?;
-    let idx = find_rule_index_by_name(rules, name);
-    let rule_table = if let Some(i) = idx {
-        // get_mut returns &mut Table directly (ArrayOfTables invariant).
+    let rule_table = find_or_create_rule_entry(rules, name);
+    if let Some(pat) = &edit.pattern {
+        rule_table["pattern"] = toml_edit::value(pat.as_str());
+    }
+    // Enabled flip (spec §5): write/overwrite the `enabled` key when the
+    // user staged a Space-toggle on this rule. `None` leaves the key as-is.
+    if let Some(en) = edit.enabled {
+        rule_table["enabled"] = toml_edit::value(en);
+    }
+    apply_style_edits(rule_table, &edit.styles)?;
+    Ok(())
+}
+
+/// Find the existing `[[rules]]` entry named `name`, or append a stub entry
+/// (carrying only `name`) and return it. Shared by the user-config and
+/// built-in/profile override writers so both follow identical
+/// find-or-create-by-name semantics (one entry per name).
+fn find_or_create_rule_entry<'a>(rules: &'a mut ArrayOfTables, name: &str) -> &'a mut Table {
+    if let Some(i) = find_rule_index_by_name(rules, name) {
         rules.get_mut(i).unwrap_or_else(|| {
             unreachable!(
                 "find_rule_index_by_name returned valid idx {i}; toml_edit ArrayOfTables index invariant violation"
@@ -332,23 +348,22 @@ fn apply_user_config_rule(
         t["name"] = toml_edit::value(name);
         rules.push(t);
         let last_idx = rules.len() - 1;
-        rules
-            .get_mut(last_idx)
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "entry was just pushed at last_idx; toml_edit ArrayOfTables index invariant violation"
-                )
-            })
-    };
-    if let Some(pat) = &edit.pattern {
-        rule_table["pattern"] = toml_edit::value(pat.as_str());
+        rules.get_mut(last_idx).unwrap_or_else(|| {
+            unreachable!(
+                "entry was just pushed at last_idx; toml_edit ArrayOfTables index invariant violation"
+            )
+        })
     }
-    // Enabled flip (spec §5): write/overwrite the `enabled` key when the
-    // user staged a Space-toggle on this rule. `None` leaves the key as-is.
-    if let Some(en) = edit.enabled {
-        rule_table["enabled"] = toml_edit::value(en);
-    }
-    for (style_key, ns) in &edit.styles {
+}
+
+/// Apply the style-key overlay edits in `styles` to `rule_table`, dispatching
+/// each [`StyleKey`] to its target slot (`style` / `styles."N"` /
+/// `styles.<name>`). Shared by the user-config and built-in/profile writers.
+fn apply_style_edits(
+    rule_table: &mut Table,
+    styles: &std::collections::HashMap<StyleKey, NewStyle>,
+) -> Result<(), ReconcileError> {
+    for (style_key, ns) in styles {
         let target = match style_key {
             StyleKey::Default => ensure_style_target(rule_table, "style")?,
             StyleKey::Numbered(i) => {
@@ -365,43 +380,38 @@ fn apply_user_config_rule(
     Ok(())
 }
 
-/// Persist an `enabled` flip staged on a built-in / disk-profile rule.
+/// Persist an override staged on a built-in / disk-profile rule by name.
 ///
-/// A built-in or profile rule has no user-config `[[rules]]` entry to
-/// mutate, so the toggle is recorded as a name-keyed override entry —
-/// `[[rules]] name = "<name>" enabled = <bool>` — which the compile merge
-/// (`config::apply_user_rules_with_source`) applies in place against the
-/// built-in substrate (spec §3.2 + §5). An existing entry of the same
-/// name has its `enabled` key set; otherwise a stub entry is appended
-/// carrying only `name` + `enabled` (no pattern/style — the rule's
-/// definition lives in the built-in catalog and is preserved across the
-/// toggle). Pattern/style edits staged on a `Builtin` `RuleId` remain
-/// preview-only (the `o` override path stages a `UserConfig` `RuleId` for
-/// persisted recolors); only the `enabled` axis is persisted here.
-fn apply_enabled_flip_by_name(
+/// A built-in or profile rule has no authored `[[rules]]` entry to mutate, so
+/// any staged override is recorded as a single name-keyed entry —
+/// `[[rules]] name = "<name>" [enabled = ...] [style = { ... }]` — which the
+/// compile merge (`config::apply_user_rules_with_source`) applies in place
+/// against the catalog substrate (spec §3.2 + §5). All staged axes for one
+/// name MERGE into the same entry (find-or-create by name; never two entries):
+///   - `enabled` is written when a Space-toggle is staged;
+///   - the default-slot `style` and capture-group `styles` are written when a
+///     `c` color change is staged.
+///
+/// The rule's `pattern` is intentionally NOT written: a Builtin's regex stays
+/// in the catalog, and persisted regex edits go through the `o` override
+/// (which stages a `UserConfig` `RuleId`) instead.
+fn apply_named_override(
     doc: &mut DocumentMut,
     name: &str,
-    enabled: bool,
+    edit: &RuleEdit,
 ) -> Result<(), ReconcileError> {
+    // Nothing persistable for a Builtin/DiskProfile beyond enabled + style:
+    // a pattern-only edit is preview-only here, so avoid appending an empty
+    // `name = "X"` stub entry that would carry no override.
+    if edit.enabled.is_none() && edit.styles.is_empty() {
+        return Ok(());
+    }
     let rules = ensure_rules_array(doc)?;
-    let rule_table = if let Some(i) = find_rule_index_by_name(rules, name) {
-        rules.get_mut(i).unwrap_or_else(|| {
-            unreachable!(
-                "find_rule_index_by_name returned valid idx {i}; toml_edit ArrayOfTables index invariant violation"
-            )
-        })
-    } else {
-        let mut t = Table::new();
-        t["name"] = toml_edit::value(name);
-        rules.push(t);
-        let last_idx = rules.len() - 1;
-        rules.get_mut(last_idx).unwrap_or_else(|| {
-            unreachable!(
-                "entry was just pushed at last_idx; toml_edit ArrayOfTables index invariant violation"
-            )
-        })
-    };
-    rule_table["enabled"] = toml_edit::value(enabled);
+    let rule_table = find_or_create_rule_entry(rules, name);
+    if let Some(en) = edit.enabled {
+        rule_table["enabled"] = toml_edit::value(en);
+    }
+    apply_style_edits(rule_table, &edit.styles)?;
     Ok(())
 }
 
@@ -465,20 +475,17 @@ pub(crate) fn apply_edits(
         match rule_id {
             RuleId::UserConfig(name) => apply_user_config_rule(&mut working, name, rule_edit)?,
             RuleId::Builtin(name) => {
-                // Persist a staged enabled flip on a built-in as a name-keyed
-                // override entry (spec §5). Pattern/style edits on a Builtin
-                // RuleId stay preview-only — the `o` override path stages a
-                // UserConfig RuleId for persisted recolors.
-                if let Some(en) = rule_edit.enabled {
-                    apply_enabled_flip_by_name(&mut working, name, en)?;
-                }
+                // Persist staged enabled + style/color overrides on a built-in
+                // as a single name-keyed `[[rules]]` entry (spec §5). The
+                // built-in's regex stays in the catalog — pattern edits on a
+                // Builtin RuleId stay preview-only (the `o` override path
+                // stages a UserConfig RuleId for persisted regex changes).
+                apply_named_override(&mut working, name, rule_edit)?;
             }
             RuleId::DiskProfile { rule, .. } => {
-                // Enabled-flip persistence for disk-profile rule sources.
-                // Pattern/style remain preview-only.
-                if let Some(en) = rule_edit.enabled {
-                    apply_enabled_flip_by_name(&mut working, rule, en)?;
-                }
+                // Same name-keyed override persistence for disk-profile rule
+                // sources (enabled + style). Pattern stays preview-only.
+                apply_named_override(&mut working, rule, rule_edit)?;
             }
         }
     }
@@ -947,6 +954,111 @@ mod tests {
             !compiled.individuals.iter().any(|re| re.as_str() == arn_pattern),
             "arn dropped from compiled set after persisted OFF flip"
         );
+    }
+
+    #[test]
+    fn builtin_style_edit_round_trips_through_save_to_compiled_set() {
+        // A `c` color change staged on a built-in RuleId must PERSIST as a
+        // name-keyed `[[rules]] name = "permission" style = { fg = ... }`
+        // override, not stay preview-only. Round-trip: stage → commit_save →
+        // reparse → recompile → assert the compiled rule's fg == new color
+        // (and != the built-in default, read LIVE per the re-tone-proof oracle).
+        use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
+        use crate::style::Color;
+
+        // Read the live built-in default fg so the assertion is re-tone-proof.
+        let default_fg = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "permission")
+            .and_then(|r| r.style.fg)
+            .expect("permission built-in has a default fg");
+        // A deliberately distinct new color (not the default).
+        let new_fg = Color::Rgb(0x12, 0x34, 0x56);
+        assert_ne!(new_fg, default_fg, "test color must differ from the built-in default");
+
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\n").unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+
+        let mut edits = PendingEdits::default();
+        let mut styles = std::collections::HashMap::new();
+        styles
+            .insert(StyleKey::Default, NewStyle { fg: Some(Some(new_fg)), ..NewStyle::default() });
+        edits.rules.insert(
+            RuleId::Builtin("permission"),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
+
+        let new_snap =
+            crate::config_tui::save::commit_save(&snap, &edits, std::time::SystemTime::now())
+                .expect("save");
+        // Persisted entry carries the style override (pattern must NOT be written).
+        let perm = new_snap
+            .parsed
+            .rules
+            .iter()
+            .find(|r| r.name == "permission")
+            .expect("permission override entry persisted to disk");
+        assert!(perm.pattern.is_none(), "builtin style edit must NOT write a pattern override");
+
+        // Recompiling the reparsed config yields the NEW fg, not the default.
+        let reparsed_config = crate::config::Config {
+            general: new_snap.parsed.general.clone(),
+            rules: new_snap.parsed.rules.clone(),
+        };
+        let compiled = crate::rules::compile_from_config(
+            &reparsed_config,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile reparsed config");
+        let idx = compiled
+            .names
+            .iter()
+            .position(|n| n == "permission")
+            .expect("permission present in compiled set");
+        assert_eq!(compiled.styles[idx].fg, Some(new_fg), "compiled fg == staged new color");
+        assert_ne!(
+            compiled.styles[idx].fg,
+            Some(default_fg),
+            "compiled fg must NOT revert to the built-in default"
+        );
+    }
+
+    #[test]
+    fn builtin_enabled_and_style_edit_merge_into_single_rules_entry() {
+        // Staging BOTH an enabled flip AND a color change for the same built-in
+        // must produce exactly ONE `[[rules]]` entry for that name (merge, not
+        // two duplicate entries).
+        use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
+        use crate::style::Color;
+
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        let mut styles = std::collections::HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(Color::Rgb(0x12, 0x34, 0x56))), ..NewStyle::default() },
+        );
+        edits.rules.insert(
+            RuleId::Builtin("permission"),
+            RuleEdit { pattern: None, styles, enabled: Some(false) },
+        );
+        let out = apply_edits(&doc, &edits).expect("ok");
+        // Exactly one entry for `permission` carrying both axes.
+        assert_eq!(
+            out.matches("name = \"permission\"").count(),
+            1,
+            "exactly one [[rules]] entry for permission (merge, not duplicate): {out:?}"
+        );
+        assert!(out.contains("enabled = false"), "enabled flip written: {out:?}");
+        assert!(out.contains("fg ="), "style fg written: {out:?}");
+        // Pattern must NOT be persisted for a Builtin (regex stays on `o`/UserConfig).
+        assert!(!out.contains("pattern ="), "no pattern override for a Builtin: {out:?}");
     }
 
     #[test]
