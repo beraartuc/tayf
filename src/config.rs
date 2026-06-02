@@ -605,9 +605,9 @@ pub(crate) fn apply_user_rules_with_source(
     Ok(())
 }
 
-/// Serialize the built-in default config (12 rules + standard `[general]`
-/// defaults) as a TOML document, suitable for writing to disk on first-run
-/// setup via `tayf init` or the TUI's `Shift+D` init-from-dump flow.
+/// Serialize the built-in default config (all built-in rules + standard
+/// `[general]` defaults) as a TOML document, suitable for writing to disk on
+/// first-run setup via `tayf init` or the TUI's `Shift+D` init-from-dump flow.
 ///
 /// Built-in rule names + patterns come from [`crate::rules::builtin_rules`].
 /// Style fields serialize via [`crate::style::Color::to_toml_str`]. The

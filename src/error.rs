@@ -229,7 +229,7 @@ pub enum ProfileErrorKind {
         /// `std::io::Error::to_string()` snapshot.
         message: String,
     },
-    /// `regex::Regex::new` rejected an `append_rules` entry's pattern.
+    /// `regex::Regex::new` rejected a `[[rules]]` entry's pattern.
     /// Profile authors fix one pattern at a time; fail-fast (not
     /// collected). Pattern bytes go through [`sanitize_for_display`] in
     /// the wrapper to honour CLAUDE.md §3 BEL-leak invariant.
@@ -252,10 +252,9 @@ pub enum ProfileErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileRuleError {
     /// The offending rule's `name` field, copied verbatim from the TOML.
-    /// Sentinels: `"<rules>"` for [`ProfileRuleErrorKind::RuleUnknown`]
-    /// (where the offending entry is a whitelist name, not an
-    /// `append_rules` entry); `"<theme>"` for
-    /// [`ProfileRuleErrorKind::ThemeNameInvalid`].
+    /// Sentinel: `"<theme>"` for
+    /// [`ProfileRuleErrorKind::ThemeNameInvalid`] (the offending value is
+    /// the profile's `theme`, not a `[[rules]]` entry name).
     pub rule_name: String,
     /// What's wrong.
     pub kind: ProfileRuleErrorKind,
@@ -263,43 +262,26 @@ pub struct ProfileRuleError {
 
 /// Classification of a [`ProfileRuleError`].
 ///
-/// Phase 1 ([`crate::profiles::validate_profile`]) collects the first
-/// five variants. Phase 2 (capture-group key dispatch in
-/// `Compiled::load_with_theme`) collects [`Self::StylesKey`] via the
-/// existing capture-group key validation path, reusing
-/// [`ThemeRuleErrorKind`] for byte-equal Display semantics across all
-/// rule sources.
+/// Phase 1 ([`crate::profiles::validate_profile`]) collects the
+/// name-shape, intra-profile duplicate, and theme-name variants. Phase 2
+/// (capture-group key dispatch in `Compiled::load_with_theme`) collects
+/// [`Self::StylesKey`] via the existing capture-group key validation path,
+/// reusing [`ThemeRuleErrorKind`] for byte-equal Display semantics across
+/// all rule sources.
 ///
 /// `#[non_exhaustive]` so future profile validation rules can be added
 /// without a major version bump.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProfileRuleErrorKind {
-    /// A `rules` whitelist entry names something that is not a built-in
-    /// rule. `name` is the offending entry; `known` is the list of
-    /// built-in names in alphabetical order, surfaced in the Display
-    /// for a pedagogical diagnostic.
-    RuleUnknown {
-        /// The unknown name the user wrote in `rules = [...]`.
-        name: String,
-        /// Built-in names in alphabetical order.
-        known: Vec<String>,
-    },
-    /// An `append_rules` entry's `name` field fails the same predicate
-    /// as theme names ([`crate::themes::name_is_valid`] — ASCII
-    /// alphanumeric with `-` or `_`).
+    /// A `[[rules]]` entry's `name` field fails the same predicate as
+    /// theme names ([`crate::themes::name_is_valid`] — ASCII alphanumeric
+    /// with `-` or `_`).
     RuleNameInvalid {
         /// The offending name as written.
         name: String,
     },
-    /// An `append_rules` entry's `name` matches a built-in rule name.
-    /// Profile concerns and user-override concerns are separated; the
-    /// user-override path is `[[rules]]` at the user-config level.
-    AppendRuleConflictsWithBuiltin {
-        /// The built-in name the entry tried to redefine.
-        name: String,
-    },
-    /// Two `append_rules` entries within the same profile share a name.
+    /// Two `[[rules]]` entries within the same profile share a name.
     AppendRuleConflictsWithOther {
         /// The duplicated name.
         name: String,
@@ -310,42 +292,24 @@ pub enum ProfileRuleErrorKind {
         /// The invalid theme name.
         name: String,
     },
-    /// Capture-group key validation in an `append_rules.styles` map
-    /// failed. Reuses [`ThemeRuleErrorKind`] (`KeyMalformed`,
-    /// `IndexZeroForbidden`, `IndexOutOfRange`, `NameUnknown`,
-    /// `DuplicateTarget`) for byte-equal `Display` semantics across all
-    /// rule sources.
+    /// Capture-group key validation in a `[[rules]].styles` map failed.
+    /// Reuses [`ThemeRuleErrorKind`] (`KeyMalformed`, `IndexZeroForbidden`,
+    /// `IndexOutOfRange`, `NameUnknown`, `DuplicateTarget`) for byte-equal
+    /// `Display` semantics across all rule sources.
     StylesKey(ThemeRuleErrorKind),
 }
 
 impl std::fmt::Display for ProfileRuleErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RuleUnknown { name, known } => write!(
-                f,
-                "rules entry \"{}\": not a built-in name (known: {})",
-                sanitize_for_display(name),
-                known
-                    .iter()
-                    .map(|s| sanitize_for_display(s))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
             Self::RuleNameInvalid { name } => write!(
                 f,
-                "append_rules entry \"{}\": name must be ASCII alphanumeric with '-' or '_'",
+                "rules entry \"{}\": name must be ASCII alphanumeric with '-' or '_'",
                 sanitize_for_display(name),
             ),
-            Self::AppendRuleConflictsWithBuiltin { name } => write!(
-                f,
-                "append_rules entry \"{}\": collides with built-in rule; use [[rules]] at the user-config level to override built-ins",
-                sanitize_for_display(name),
-            ),
-            Self::AppendRuleConflictsWithOther { name } => write!(
-                f,
-                "append_rules: duplicate entry \"{}\"",
-                sanitize_for_display(name),
-            ),
+            Self::AppendRuleConflictsWithOther { name } => {
+                write!(f, "rules: duplicate entry \"{}\"", sanitize_for_display(name))
+            }
             Self::ThemeNameInvalid { name } => write!(
                 f,
                 "theme \"{}\": name must be ASCII alphanumeric with '-' or '_'",
@@ -1102,39 +1066,28 @@ mod tests {
     // ---- v0.5.2 profile error Display byte-pin tests ----
 
     #[test]
-    fn display_profile_rule_unknown_byte_exact() {
-        let kind = ProfileRuleErrorKind::RuleUnknown {
-            name: "ipv5".to_owned(),
-            known: vec!["ipv4".to_owned(), "ipv6".to_owned(), "url".to_owned()],
-        };
-        assert_eq!(
-            kind.to_string(),
-            "rules entry \"ipv5\": not a built-in name (known: ipv4, ipv6, url)"
-        );
-    }
-
-    #[test]
     fn display_profile_rule_name_invalid_byte_exact() {
         let kind = ProfileRuleErrorKind::RuleNameInvalid { name: "bad name".to_owned() };
         assert_eq!(
             kind.to_string(),
-            "append_rules entry \"bad name\": name must be ASCII alphanumeric with '-' or '_'"
-        );
-    }
-
-    #[test]
-    fn display_profile_append_rule_conflicts_with_builtin_byte_exact() {
-        let kind = ProfileRuleErrorKind::AppendRuleConflictsWithBuiltin { name: "ipv4".to_owned() };
-        assert_eq!(
-            kind.to_string(),
-            "append_rules entry \"ipv4\": collides with built-in rule; use [[rules]] at the user-config level to override built-ins"
+            "rules entry \"bad name\": name must be ASCII alphanumeric with '-' or '_'"
         );
     }
 
     #[test]
     fn display_profile_append_rule_conflicts_with_other_byte_exact() {
         let kind = ProfileRuleErrorKind::AppendRuleConflictsWithOther { name: "foo".to_owned() };
-        assert_eq!(kind.to_string(), "append_rules: duplicate entry \"foo\"");
+        assert_eq!(kind.to_string(), "rules: duplicate entry \"foo\"");
+    }
+
+    #[test]
+    fn display_profile_rule_errors_never_mention_append_rules() {
+        // Regression guard: the profile schema is `[[rules]]`; user-facing
+        // strings must point at `rules`, never the retired `append_rules`.
+        let invalid = ProfileRuleErrorKind::RuleNameInvalid { name: "bad name".to_owned() };
+        let dup = ProfileRuleErrorKind::AppendRuleConflictsWithOther { name: "foo".to_owned() };
+        assert!(!invalid.to_string().contains("append_rules"), "got: {invalid}");
+        assert!(!dup.to_string().contains("append_rules"), "got: {dup}");
     }
 
     #[test]
@@ -1161,11 +1114,8 @@ mod tests {
             profile: "myaws".into(),
             source_path: "/home/u/.config/tayf/profiles/myaws.toml".into(),
             errors: vec![ProfileRuleError {
-                rule_name: "<rules>".into(),
-                kind: ProfileRuleErrorKind::RuleUnknown {
-                    name: "ipv5".into(),
-                    known: vec!["ipv4".into()],
-                },
+                rule_name: "bad name".into(),
+                kind: ProfileRuleErrorKind::RuleNameInvalid { name: "bad name".into() },
             }],
         };
         let s = one.to_string();
@@ -1178,7 +1128,7 @@ mod tests {
         assert!(!s.contains("1 validation errors:"), "must not pluralize 1; got: {s}");
         assert!(
             s.contains(
-                "  - rule '<rules>': rules entry \"ipv5\": not a built-in name (known: ipv4)"
+                "  - rule 'bad name': rules entry \"bad name\": name must be ASCII alphanumeric with '-' or '_'"
             ),
             "byte-pinned per-rule line; got: {s}"
         );

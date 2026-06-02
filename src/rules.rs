@@ -110,7 +110,7 @@ pub(crate) struct BuiltinRule {
 ///
 /// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), Rev2 Decision 27
 /// (REPLACE semantics for `styles` map overlays), v0.5.2 §4.3
-/// (`DiskProfile` variant for `[[append_rules]]` provenance).
+/// (`DiskProfile` variant for `[[rules]]` provenance).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuleSource {
     /// Canonical pattern shipped by tayf. Compile failures are
@@ -1080,7 +1080,7 @@ struct CompiledRules {
 /// into a single [`Error::ThemeValidation`] / [`Error::ProfileValidation`].
 /// User-config-routed errors and built-in compile failures fail-fast via `?`
 /// inside the loop. Profile pattern-compile failures also fail-fast (per
-/// spec §6.4 #6 — a malformed `[[append_rules]]` pattern is load-fatal).
+/// spec §6.4 #6 — a malformed `[[rules]]` pattern is load-fatal).
 ///
 /// `theme_name` / `theme_path` flow into the `Error::ThemeValidation`
 /// payload when at least one theme-routed error is collected; they're

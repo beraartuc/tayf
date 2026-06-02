@@ -138,7 +138,7 @@ pub(crate) fn compile_pending(
             // Non-UserConfig variant with no pre-existing user_rules
             // entry: push a synth UserRule. apply_user_rules_with_source
             // will then name-match it against the canonical rules vec
-            // (built-ins + theme + profile.append_rules) and apply the
+            // (built-ins + theme + profile rules) and apply the
             // overlay in-place there. UserConfig variant with no match
             // = snapshot drift; silently no-op (matches v0.6 shipped).
             user_rules.push(crate::config::UserRule {
@@ -164,7 +164,7 @@ pub(crate) fn compile_pending(
     // `enabled = false` semantics are established in rules.rs §5 (see
     // `load_with_all_builtins_disabled_yields_passthrough` test) and are
     // guaranteed to work for any variant name present in the canonical
-    // rules vec (built-ins + profile.append_rules).
+    // rules vec (built-ins + profile rules).
     for rule_id in &edits.deleted {
         match rule_id {
             RuleId::UserConfig(name) => {
