@@ -508,35 +508,29 @@ pub(crate) fn apply_user_rules_with_source(
 
         let is_builtin = known.contains(ur.name.as_str());
 
+        if is_builtin && source != crate::rules::RuleSource::Theme {
+            // Flag-not-drop: flip the built-in's enabled state in place so a
+            // later `enabled = true` can re-enable it. The final
+            // `retain(|r| r.enabled)` in `build_from_loaded` removes the
+            // still-disabled rules before compilation. The enabled flip is a
+            // user/profile concern — themes never change enabled state.
+            if let Some(existing) = builtins.iter_mut().find(|b| b.name == ur.name) {
+                existing.enabled = ur.enabled;
+            }
+        }
         if !ur.enabled {
-            builtins.retain(|b| b.name != ur.name);
+            // Disabled built-in: flagged above. Disabled new rule: nothing to
+            // add. Either way, skip the override/add work below.
             continue;
         }
 
         if is_builtin {
             // Override in place.
             let Some(existing) = builtins.iter_mut().find(|b| b.name == ur.name) else {
-                // Two legitimate paths can reach here with a builtin-named
-                // rule that's missing from the working set:
-                //
-                // 1. v0.5.2 §5.4 Step 2 `profile.rules` whitelist filtered
-                //    the built-in out before this layer ran. Theme/profile
-                //    references to whitelist-filtered built-ins are no-ops
-                //    by spec — themes don't know about the user's runtime
-                //    whitelist, so their overrides of excluded rules must
-                //    silently skip rather than error.
-                //
-                // 2. (Future) `enabled = true` re-introduction of a
-                //    previously disabled built-in within the same TOML.
-                //    Not a documented v0.2.0 case; the v0.5.1 error path
-                //    was meant to catch this. Under the current merge
-                //    order this can't happen — `enabled = false` paths
-                //    `retain`-drop the rule, and a same-source duplicate
-                //    `name` is rejected upstream by the `seen` guard. So
-                //    the silent skip is safe here too.
-                //
-                // Spec ref: v0.5.2 §5.4 — whitelist is exclusion, not a
-                // validation contract.
+                // A built-in named here is absent only if it was never in the
+                // catalog (impossible — `is_builtin` gated this branch). The
+                // flag-not-drop merge keeps all built-ins present, so
+                // re-enable works. Defensive `continue` retained.
                 continue;
             };
             if let Some(p) = &ur.pattern {
@@ -602,6 +596,9 @@ pub(crate) fn apply_user_rules_with_source(
                 // `BUILTIN_NAMES` before this point. We still propagate
                 // `source` for forward-compat (defensive).
                 source,
+                // A newly-added custom rule is enabled — disabling a new rule
+                // is meaningless (the `!ur.enabled` branch above skips the add).
+                enabled: true,
             });
         }
     }
@@ -1135,11 +1132,45 @@ style = { fg = "red" }
     }
 
     #[test]
-    fn disable_removes_builtin() {
+    fn disable_flags_builtin_off_without_dropping_it() {
+        // Flag-not-drop: `apply_user_rules` flips `enabled` off but keeps the
+        // built-in in the working vec. The final `retain(|r| r.enabled)` in
+        // `build_from_loaded` removes it before compilation (covered by the
+        // rules.rs integration of this path).
         let mut rules = builtin_rules();
         let user = vec![UserRule { enabled: false, ..user_rule("fqdn") }];
         apply_user_rules("/x", &mut rules, &user).unwrap();
-        assert!(rules.iter().all(|r| r.name != "fqdn"));
+        let fqdn = rules.iter().find(|r| r.name == "fqdn").expect("fqdn stays present");
+        assert!(!fqdn.enabled, "fqdn must be flagged disabled, not dropped");
+    }
+
+    #[test]
+    fn reenable_brings_back_a_disabled_builtin_within_same_layer() {
+        // Two entries: first disables `fqdn`, second re-enables it. Under the
+        // flag-not-drop merge the final state is enabled. (The `seen` guard
+        // rejects true duplicates, so we use disable-then-reenable across the
+        // theme→user boundary is the real path; within one layer this asserts
+        // the flag mechanism via direct merge.)
+        let mut builtins = crate::rules::builtin_rules();
+        // Simulate: builtin starts enabled; an override flips it off, a later
+        // pass flips it on. We model the "later pass" as a second merge call.
+        let off = vec![UserRule { enabled: false, ..user_rule("fqdn") }];
+        apply_user_rules("/x", &mut builtins, &off).expect("disable ok");
+        assert!(
+            builtins.iter().find(|b| b.name == "fqdn").is_some_and(|b| !b.enabled),
+            "fqdn must be flagged disabled, not dropped"
+        );
+        assert!(
+            builtins.iter().any(|b| b.name == "fqdn"),
+            "disabled built-in stays in the working vec (flag-not-drop)"
+        );
+        let on = vec![UserRule { enabled: true, ..user_rule("fqdn") }];
+        apply_user_rules("/x", &mut builtins, &on).expect("reenable ok");
+        assert_eq!(
+            builtins.iter().find(|b| b.name == "fqdn").map(|b| b.enabled),
+            Some(true),
+            "a later enabled=true must re-enable the flagged-off built-in"
+        );
     }
 
     #[test]

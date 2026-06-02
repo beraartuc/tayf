@@ -89,6 +89,15 @@ pub(crate) struct BuiltinRule {
     /// (pattern-definition order) wins. Preserves v0.5.5 "first-match-wins
     /// by pattern order" for all priority-0 built-in pairs.
     pub(crate) priority: i32,
+    /// Whether this rule is active. For built-ins this is seeded in
+    /// [`builtin_rules`] to the rule's *default-enabled* state (all
+    /// ~zero-FP rules `true`; FP-sensitive opt-in rules such as
+    /// `container_id` `false`). The compile merge
+    /// (`config::apply_user_rules_with_source`) mutates it in place when a
+    /// config/profile rule sets `enabled`, and `build_from_loaded` runs a
+    /// final `retain(|r| r.enabled)` before compilation. Disabled rules are
+    /// never compiled or matched.
+    pub(crate) enabled: bool,
 }
 
 /// Provenance of a rule during [`Compiled::load_with_theme`] build. Determines
@@ -416,6 +425,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "timestamp".into(),
@@ -443,6 +453,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "uuid".into(),
@@ -452,6 +463,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         // See ARCHITECTURE.md §"Built-in patterns" for the pattern design rationale.
         // Char classes here are byte classes under regex::bytes — bytes 0x80..0xFF
@@ -471,6 +483,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "email".into(),
@@ -480,6 +493,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "ipv4".into(),
@@ -489,6 +503,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "ipv6".into(),
@@ -498,6 +513,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "mac".into(),
@@ -507,6 +523,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "log_level".into(),
@@ -516,6 +533,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "filename".into(),
@@ -525,6 +543,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         BuiltinRule {
             name: "fqdn".into(),
@@ -534,6 +553,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
         // See ARCHITECTURE.md §"Built-in patterns" for the pattern design rationale.
         // Bare units [smhd] match without whitespace (e.g. "5m", "30s"); multi-letter
@@ -554,6 +574,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             styles_override: None,
             priority: 0,
             source: RuleSource::Builtin,
+            enabled: true,
         },
     ]
 }
@@ -801,6 +822,7 @@ impl Compiled {
                     // Defaults to 100 (interior tier) when omitted in TOML.
                     priority: ar.priority.unwrap_or(100),
                     source: RuleSource::EmbeddedProfile,
+                    enabled: true,
                 });
             }
         }
@@ -823,6 +845,12 @@ impl Compiled {
                 RuleSource::UserConfig,
             )?;
         }
+
+        // Final enabled filter: drop rules flagged disabled by their
+        // default-enabled state and any config/profile `enabled = false`
+        // override. Runs once, after all merge layers, so a later
+        // `enabled = true` could re-enable a default-off built-in.
+        rules.retain(|r| r.enabled);
 
         let theme_name = loaded_theme.map(|(n, _)| n);
         let theme_path = loaded_theme.map(|(_, l)| l.path_label.as_str());
@@ -2936,6 +2964,7 @@ fg = "red"
             styles_override: Some(overrides),
             priority: 0,
             source: RuleSource::UserConfig,
+            enabled: true,
         };
         let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
         let mut profile_errors: Vec<crate::error::ProfileRuleError> = Vec::new();
@@ -3033,6 +3062,7 @@ fg = "red"
             styles_override: Some(overrides),
             priority: 0,
             source: RuleSource::UserConfig,
+            enabled: true,
         };
         let mut theme_errors: Vec<crate::error::ThemeRuleError> = Vec::new();
         let mut profile_errors: Vec<crate::error::ProfileRuleError> = Vec::new();
@@ -3158,6 +3188,7 @@ fg = "red"
             styles_override: Some(overrides.clone()),
             priority: 0,
             source: crate::rules::RuleSource::Theme,
+            enabled: true,
         };
 
         // Theme path: collect into theme_errors vector.
@@ -3239,6 +3270,7 @@ fg = "red"
             styles_override: Some(overrides),
             priority: 0,
             source: RuleSource::EmbeddedProfile,
+            enabled: true,
         };
         compile_merged_rules(
             &[rule],
@@ -3418,6 +3450,7 @@ fg = "red"
             styles_override: Some(overrides),
             priority: 0,
             source: RuleSource::EmbeddedProfile,
+            enabled: true,
         };
         let err = compile_merged_rules(
             &[rule],
