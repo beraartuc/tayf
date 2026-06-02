@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] - 2026-06-02
+
+### Fixed
+- `tayf init`'s shell hook now installs at the **top** of the rc file and locates
+  the tayf binary by absolute path — trying `~/.local/bin`, `~/.cargo/bin`,
+  `/opt/homebrew/bin`, and `/usr/local/bin` before a `PATH` fallback — instead of
+  a bare `exec tayf`. Appended at the bottom with a PATH-relative `exec`, the
+  hook silently failed to auto-start in two common setups: a prompt framework
+  (e.g. Powerlevel10k instant prompt) that redirects stdout during init made the
+  `-t 1` guard fail, and an install directory not yet on `$PATH` made `exec tayf`
+  a no-op — so new terminals opened uncolored and `exec tayf` had to be run by
+  hand. Re-running `tayf init` relocates and refreshes an older bottom-of-file
+  hook to the top.
+
 ## [0.12.1] - 2026-06-02
 
 ### Fixed

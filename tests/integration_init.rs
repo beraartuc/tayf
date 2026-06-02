@@ -81,8 +81,10 @@ fn init_zsh_installs_backs_up_and_uninstalls() {
         .expect("run init zsh");
     assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
     let after = std::fs::read_to_string(&rc).unwrap();
-    assert!(after.contains("# >>> tayf init >>>"));
-    assert!(after.starts_with(original));
+    // The hook is installed at the TOP (before any prompt framework can
+    // redirect stdout and fail the `-t 1` guard); user content follows.
+    assert!(after.starts_with("# >>> tayf init >>>"));
+    assert!(after.ends_with(original));
     assert!(backup_count(home.path()) >= 1, "a backup was written");
 
     // Uninstall restores the original.

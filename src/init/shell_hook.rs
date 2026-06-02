@@ -112,16 +112,35 @@ pub(crate) fn rc_path(
 pub(crate) const BEGIN_MARKER: &str = "# >>> tayf init >>>";
 pub(crate) const END_MARKER: &str = "# <<< tayf init <<<";
 
-/// The guard line for `shell`: a static string (no user input) that
-/// `exec`s tayf only for an interactive shell on a real TTY that is not
-/// already inside a tayf session.
+/// The guard snippet for `shell`: a static string (no user input) that
+/// `exec`s the tayf binary only for an interactive shell on a real TTY that
+/// is not already inside a tayf session.
+///
+/// The binary is located by trying the standard install directories with an
+/// absolute path (`~/.local/bin` for `install.sh`, `~/.cargo/bin` for
+/// `cargo install`, Homebrew's `/opt/homebrew/bin` and `/usr/local/bin`),
+/// then falling back to a `PATH` lookup. A bare `exec tayf` is *not* enough:
+/// the snippet is installed at the top of the rc file (see [`install_to_rc`])
+/// so it runs before a prompt framework (e.g. Powerlevel10k instant prompt)
+/// can redirect stdout, but at that point `$PATH` may not yet include the
+/// install directory — the absolute paths make the guard robust regardless.
 pub(crate) fn guard_line(shell: Shell) -> &'static str {
     match shell {
         Shell::Fish => {
-            "status is-interactive; and not set -q TAYF_SESSION; and test -t 1; and exec tayf"
+            "if status is-interactive; and not set -q TAYF_SESSION; and test -t 1
+    for _tayf in $HOME/.local/bin/tayf $HOME/.cargo/bin/tayf /opt/homebrew/bin/tayf /usr/local/bin/tayf
+        test -x $_tayf; and exec $_tayf
+    end
+    type -q tayf; and exec tayf
+end"
         }
         Shell::Zsh | Shell::Bash | Shell::Other => {
-            "[[ $- == *i* && -t 1 && -z $TAYF_SESSION ]] && exec tayf"
+            r#"if [[ $- == *i* && -t 1 && -z $TAYF_SESSION ]]; then
+  for _tayf in "$HOME/.local/bin/tayf" "$HOME/.cargo/bin/tayf" /opt/homebrew/bin/tayf /usr/local/bin/tayf; do
+    [[ -x "$_tayf" ]] && exec "$_tayf"
+  done
+  command -v tayf >/dev/null 2>&1 && exec tayf
+fi"#
         }
     }
 }
@@ -135,24 +154,16 @@ pub(crate) fn managed_block(shell: Shell) -> String {
     )
 }
 
-/// Is tayf's managed block already present in `content`?
-pub(crate) fn is_installed(content: &str) -> bool {
-    content.contains(BEGIN_MARKER)
-}
-
-/// Append `block` to `content`, guaranteeing exactly one separating newline
-/// so the block starts on its own line. Inverse of [`remove_block`] for a
-/// newline-terminated input.
-pub(crate) fn append_block(content: &str, block: &str) -> String {
-    if content.is_empty() {
-        return block.to_owned();
-    }
-    let mut out = String::with_capacity(content.len() + block.len() + 1);
-    out.push_str(content);
-    if !content.ends_with('\n') {
-        out.push('\n');
-    }
+/// Prepend `block` to `content` so tayf's guard runs *before* any prompt
+/// framework (e.g. Powerlevel10k instant prompt) further down the rc file can
+/// redirect stdout — at the top, the `-t 1` guard still sees the real
+/// terminal, so the `exec` fires. `block` is newline-terminated by
+/// [`managed_block`], so `content` always begins on its own line. Inverse of
+/// [`remove_block`].
+pub(crate) fn prepend_block(content: &str, block: &str) -> String {
+    let mut out = String::with_capacity(block.len() + content.len());
     out.push_str(block);
+    out.push_str(content);
     out
 }
 
@@ -191,15 +202,23 @@ fn backup_path(rc: &Path, now: SystemTime) -> PathBuf {
     rc.with_file_name(format!("{name}.tayf-backup-{secs}"))
 }
 
-/// Append the managed block to `rc`, backing it up first. Idempotent: if
-/// the block is already present, makes no change.
+/// Install the managed block at the *top* of `rc`, backing it up first.
+///
+/// Self-healing: a no-op only when the current block is already the very
+/// first thing in the file. If a block from an older version is present —
+/// appended at the bottom, or carrying a stale guard — it is removed and
+/// re-installed at the top, so the guard runs before a prompt framework can
+/// redirect stdout (which would make the `-t 1` check fail). Placing it last
+/// was the v0.12.0/v0.12.1 onboarding bug this fixes.
 pub(crate) fn install_to_rc(
     rc: &Path,
     shell: Shell,
     now: SystemTime,
 ) -> std::io::Result<InstallOutcome> {
     let existing = std::fs::read_to_string(rc).unwrap_or_default();
-    if is_installed(&existing) {
+    let block = managed_block(shell);
+    // Already at the top with the current text → nothing to do.
+    if existing.starts_with(&block) {
         return Ok(InstallOutcome { backup: None, already_present: true });
     }
     let backup = if rc.exists() {
@@ -209,7 +228,10 @@ pub(crate) fn install_to_rc(
     } else {
         None
     };
-    let new_content = append_block(&existing, &managed_block(shell));
+    // Drop any prior block (wherever it sits) before prepending the fresh one,
+    // so re-running `tayf init` relocates/refreshes rather than duplicating.
+    let (stripped, _) = remove_block(&existing);
+    let new_content = prepend_block(&stripped, &block);
     write_rc_atomic(rc, &new_content)?;
     Ok(InstallOutcome { backup, already_present: false })
 }
@@ -264,23 +286,33 @@ mod tests {
         let z = managed_block(Shell::Zsh);
         assert!(z.starts_with(BEGIN_MARKER));
         assert!(z.trim_end().ends_with(END_MARKER));
-        assert!(z.contains("[[ $- == *i* && -t 1 && -z $TAYF_SESSION ]] && exec tayf"));
+        // The guard opens the interactive/TTY/no-session check, then tries the
+        // tayf binary at the standard install dirs by absolute path before a
+        // bare PATH `exec` (so it survives PATH not yet being set up).
+        assert!(z.contains("if [[ $- == *i* && -t 1 && -z $TAYF_SESSION ]]; then"));
+        assert!(z.contains("/opt/homebrew/bin/tayf"));
+        assert!(z.contains(r#"[[ -x "$_tayf" ]] && exec "$_tayf""#));
+        assert!(z.contains("command -v tayf >/dev/null 2>&1 && exec tayf"));
+        // A bare PATH-relative `exec tayf` as the *only* mechanism was the bug.
+        assert!(!z.contains("]] && exec tayf\n"));
         assert_eq!(guard_line(Shell::Bash), guard_line(Shell::Zsh));
         let f = managed_block(Shell::Fish);
-        assert!(f.contains(
-            "status is-interactive; and not set -q TAYF_SESSION; and test -t 1; and exec tayf"
-        ));
+        assert!(f.contains("status is-interactive; and not set -q TAYF_SESSION; and test -t 1"));
+        assert!(f.contains("/opt/homebrew/bin/tayf"));
+        assert!(f.contains("test -x $_tayf; and exec $_tayf"));
         assert!(z.ends_with('\n') && f.ends_with('\n'));
     }
 
     #[test]
-    fn append_then_remove_is_identity_for_newline_terminated_file() {
+    fn prepend_then_remove_is_identity_for_newline_terminated_file() {
         let original = "# my zshrc\nexport FOO=1\n";
         let block = managed_block(Shell::Zsh);
-        assert!(!is_installed(original));
-        let installed = append_block(original, &block);
-        assert!(is_installed(&installed));
-        assert!(installed.starts_with(original));
+        assert!(!original.contains(BEGIN_MARKER));
+        let installed = prepend_block(original, &block);
+        assert!(installed.contains(BEGIN_MARKER));
+        // The block goes to the TOP; the user's content follows untouched.
+        assert!(installed.starts_with(&block));
+        assert!(installed.ends_with(original));
         let (restored, removed) = remove_block(&installed);
         assert!(removed);
         assert_eq!(restored, original);
@@ -290,9 +322,9 @@ mod tests {
     }
 
     #[test]
-    fn append_block_into_empty_file_is_just_the_block() {
+    fn prepend_block_into_empty_file_is_just_the_block() {
         let block = managed_block(Shell::Bash);
-        assert_eq!(append_block("", &block), block);
+        assert_eq!(prepend_block("", &block), block);
     }
 
     #[test]
@@ -306,7 +338,9 @@ mod tests {
         let out = install_to_rc(&rc, Shell::Zsh, now).expect("install");
         assert!(!out.already_present);
         assert!(out.backup.as_deref().is_some_and(Path::exists));
-        assert!(is_installed(&std::fs::read_to_string(&rc).unwrap()));
+        let after = std::fs::read_to_string(&rc).unwrap();
+        assert!(after.starts_with(&managed_block(Shell::Zsh))); // installed at the top
+        assert!(after.ends_with(original)); // user content preserved below
 
         let out2 = install_to_rc(&rc, Shell::Zsh, now).expect("reinstall");
         assert!(out2.already_present);
@@ -355,11 +389,39 @@ mod tests {
     }
 
     #[test]
-    fn append_block_adds_separating_newline_when_not_terminated() {
+    fn prepend_block_puts_block_first_even_when_content_has_no_trailing_newline() {
         let block = managed_block(Shell::Zsh);
-        // content without a trailing newline gets one inserted before the block.
-        let out = append_block("export FOO=1", &block);
-        assert_eq!(out, format!("export FOO=1\n{block}"));
-        assert!(is_installed(&out));
+        // The block (newline-terminated) leads; content follows verbatim, so a
+        // content tail without its own newline is left exactly as given.
+        let out = prepend_block("export FOO=1", &block);
+        assert_eq!(out, format!("{block}export FOO=1"));
+        assert!(out.contains(BEGIN_MARKER));
+    }
+
+    #[test]
+    fn reinstall_relocates_old_bottom_block_to_top() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let rc = tmp.path().join(".zshrc");
+        // Simulate a pre-v0.12.2 install: the block was appended at the BOTTOM
+        // with the old bare-PATH guard.
+        let body = "# my zshrc\nexport FOO=1\n";
+        let old_block = "# >>> tayf init >>>\n# Managed by `tayf init`. Remove with `tayf init --uninstall`.\n[[ $- == *i* && -t 1 && -z $TAYF_SESSION ]] && exec tayf\n# <<< tayf init <<<\n";
+        std::fs::write(&rc, format!("{body}{old_block}")).expect("seed rc");
+        let now = SystemTime::now();
+
+        // Re-running init relocates + refreshes the block to the top.
+        let out = install_to_rc(&rc, Shell::Zsh, now).expect("relocate");
+        assert!(!out.already_present, "relocation is a change, not a no-op");
+        assert!(out.backup.as_deref().is_some_and(Path::exists));
+        let content = std::fs::read_to_string(&rc).unwrap();
+        assert!(content.starts_with(&managed_block(Shell::Zsh)), "now at the top");
+        assert!(content.contains("export FOO=1"), "user content kept");
+        // The stale bare-PATH guard is gone (no leftover at the bottom).
+        assert!(!content.contains("]] && exec tayf"));
+        assert_eq!(content.matches(BEGIN_MARKER).count(), 1, "no duplicate block");
+
+        // A second run is now a clean no-op.
+        let out2 = install_to_rc(&rc, Shell::Zsh, now).expect("reinstall");
+        assert!(out2.already_present);
     }
 }
