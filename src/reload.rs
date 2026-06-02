@@ -548,9 +548,17 @@ style = { fg = "yellow", bold = true }
         use crate::rules::BUILTIN_NAMES;
         use crate::style::Color;
 
+        // Hermetic: pass an explicit empty temp config so `config::load` does
+        // NOT read the developer's real ~/.config/tayf/config.toml. A user
+        // `permission` override there beats the theme (correct precedence:
+        // user config > theme), which would make this test host-dependent —
+        // exactly the trap the no-`None`-path note below warns about.
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let cfg = write(&dir, "# no user rules\n");
+
         let handle =
             Arc::new(ArcSwap::from_pointee(Compiled::load_builtins().expect("builtins compile")));
-        super::reload_once(&handle, None, Some("light"), None, None, ColorDepth::Truecolor)
+        super::reload_once(&handle, Some(&cfg), Some("light"), None, None, ColorDepth::Truecolor)
             .expect("reload with theme must succeed");
 
         let compiled = handle.load();
