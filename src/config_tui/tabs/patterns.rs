@@ -112,20 +112,44 @@ fn render_hint(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).style(app.tui_env.accent.hint()), area);
 }
 
+/// Build a Patterns-list row for a rule: a `[x]` (enabled) / `[ ]`
+/// (disabled) marker prefix so default-off rules are discoverable by
+/// browsing (spec §5/§6.2). Disabled rows additionally render with the
+/// `DIM` modifier so they visibly recede. `'static` lifetime because
+/// `ListItem` owns the formatted `String`.
+fn rule_list_item(name: &str, enabled: bool, dim: Style) -> ListItem<'static> {
+    let marker = if enabled { "[x]" } else { "[ ]" };
+    let item = ListItem::new(format!("{marker} {name}"));
+    if enabled {
+        item
+    } else {
+        item.style(dim)
+    }
+}
+
 fn render_list(frame: &mut Frame, area: Rect, app: &App) {
     let filter = app.search_filter.as_deref().unwrap_or("");
     let layout =
         patterns_list_layout(&app.catalog.builtin_rule_names, &app.snapshot.parsed.rules, filter);
 
     let header_style = Style::default().add_modifier(Modifier::DIM);
+    let dim_row = Style::default().add_modifier(Modifier::DIM);
     let mut items: Vec<ListItem> = Vec::with_capacity(2 + layout.builtin_count + layout.user_count);
     items.push(ListItem::new("── Builtin ──").style(header_style));
     for name in &layout.builtin_names {
-        items.push(ListItem::new(format!("  {name}")));
+        let enabled = crate::config_tui::events::effective_enabled_for_rule(
+            app,
+            &crate::config_tui::edit::RuleId::Builtin(name),
+        );
+        items.push(rule_list_item(name, enabled, dim_row));
     }
     items.push(ListItem::new("── User ──").style(header_style));
     for name in &layout.user_names {
-        items.push(ListItem::new(format!("  {name}")));
+        let enabled = crate::config_tui::events::effective_enabled_for_rule(
+            app,
+            &crate::config_tui::edit::RuleId::UserConfig(name.clone()),
+        );
+        items.push(rule_list_item(name, enabled, dim_row));
     }
 
     let mut state = ListState::default();
@@ -167,10 +191,12 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
                     lines.push(Line::raw("Source: built-in"));
                     lines.push(Line::raw(format!("Regex: {}", r.pattern)));
                     lines.push(color_detail_line(app));
+                    lines.push(status_detail_line(app));
                     lines.push(Line::raw(""));
                     lines.push(Line::raw(
                         "Press 'o' to override (copy into user-config so you can edit)",
                     ));
+                    lines.push(Line::raw("Press Space to enable/disable this rule"));
                     lines.push(Line::raw("Press 'e' to edit the regex source (inline editor)"));
                     lines.push(Line::raw("Press 'c' to open the color picker"));
                 }
@@ -189,9 +215,11 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
                         r.pattern.as_deref().unwrap_or("(none)")
                     )));
                     lines.push(color_detail_line(app));
+                    lines.push(status_detail_line(app));
                     lines.push(Line::raw(""));
                     lines.push(Line::raw("Press 'e' to edit the regex source (inline editor)"));
                     lines.push(Line::raw("Press 'c' to open the color picker"));
+                    lines.push(Line::raw("Press Space to enable/disable this rule"));
                     lines.push(Line::raw("Press 'd' to delete this user rule"));
                 }
                 None => lines.push(Line::raw("(detail not found)")),
@@ -236,6 +264,21 @@ fn color_detail_line(app: &App) -> Line<'static> {
         }
         None => Line::raw("Color: (none)"),
     }
+}
+
+/// Build the Detail "Status:" line for the selected rule: an explicit
+/// `Status: enabled` / `Status: disabled` styled so the state is
+/// unmistakable (spec §5). Enabled renders in the brass header accent;
+/// disabled renders dim. The effective state is resolved via
+/// [`crate::config_tui::events::effective_enabled_for_rule`] (pending
+/// flip > config/profile rule > built-in default).
+fn status_detail_line(app: &App) -> Line<'static> {
+    let enabled = crate::config_tui::events::resolve_selected_rule_id(app)
+        .is_none_or(|rid| crate::config_tui::events::effective_enabled_for_rule(app, &rid));
+    let accent = app.tui_env.accent;
+    let (word, style) =
+        if enabled { ("enabled", accent.header()) } else { ("disabled", accent.hint()) };
+    Line::from(vec![Span::raw("Status: "), Span::styled(word, style)])
 }
 
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
@@ -428,6 +471,77 @@ mod tests {
         let layout =
             patterns_list_layout(&app.catalog.builtin_rule_names, &app.snapshot.parsed.rules, "");
         layout.builtin_names.iter().position(|n| *n == name).expect("builtin present in layout")
+    }
+
+    /// Render the Patterns tab to a `TestBackend` and return the plain-text
+    /// buffer (symbols only) as a single string.
+    fn render_patterns_to_text(app: &App, w: u16, h: u16) -> String {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut term = Terminal::new(TestBackend::new(w, h)).expect("backend");
+        term.draw(|f| render(f, ratatui::layout::Rect::new(0, 0, w, h), app)).expect("draw");
+        let buf = term.backend().buffer();
+        let mut text = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        text
+    }
+
+    #[test]
+    fn detail_shows_status_disabled_for_default_off_builtin() {
+        let mut app = App::default_for_test();
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "container_id");
+        let text = render_patterns_to_text(&app, 100, 24);
+        assert!(
+            text.contains("Status: disabled"),
+            "Detail pane shows 'Status: disabled' for container_id (default-off); got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn detail_shows_status_enabled_for_default_on_builtin() {
+        let mut app = App::default_for_test();
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "arn");
+        let text = render_patterns_to_text(&app, 100, 24);
+        assert!(
+            text.contains("Status: enabled"),
+            "Detail pane shows 'Status: enabled' for arn (default-on); got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn detail_status_reflects_a_staged_toggle() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default_for_test();
+        // Toggle arn OFF, then the Detail Status must read "disabled".
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "arn");
+        dispatch_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        let text = render_patterns_to_text(&app, 100, 24);
+        assert!(
+            text.contains("Status: disabled"),
+            "Detail Status reflects the staged OFF flip; got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn default_off_builtin_row_is_marked_in_list() {
+        // A default-off built-in must be visually distinguishable in the list
+        // (discoverability, spec §5/§6.2). We mark disabled rows with a
+        // `[ ]` prefix (enabled rows use `[x]`).
+        let app = App::default_for_test();
+        let text = render_patterns_to_text(&app, 100, 40);
+        assert!(
+            text.contains("[ ] container_id"),
+            "default-off container_id row carries the [ ] disabled marker; got:\n{text}"
+        );
+        assert!(
+            text.contains("[x] arn"),
+            "default-on arn row carries the [x] enabled marker; got:\n{text}"
+        );
     }
 
     #[test]
