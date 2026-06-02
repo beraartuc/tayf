@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.12.0] - 2026-06-01
+## [0.12.0] - 2026-06-02
 
 ### Added
 - **`tayf init`** — one-step first-run setup. Writes the default config and,
@@ -46,8 +46,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plus its code, e.g. `#7c5cff`), and pressing `c` opens the color picker
   pre-filled with that color instead of empty.
 - The Patterns tab shows a contextual key-hint row
-  (`n:new  e:edit  c:color  o:override  r:reset  d:delete`) so the new-pattern
-  action is discoverable without opening the help modal.
+  (`n:new  e:edit  c:color  o:override  r:reset  d:delete  Space:on/off`) so the
+  available actions are discoverable without opening the help modal. The Detail
+  pane shows the selected rule's `Status: enabled`/`disabled`, and default-off
+  rules render dimmed with a `[ ]` marker so they are visible while browsing.
+- The navigable lists (Patterns, Themes, Profiles) mark the selected row with a
+  `▶` caret, so the highlighted entry is unmistakable regardless of how the
+  terminal renders the selection background.
+- The live-preview sample now includes an example token for every built-in
+  pattern (AWS/Docker/Kubernetes shapes included), so enabling a default-off
+  rule shows its color in the preview immediately.
 
 ### Changed
 - **Profiles are now personal, switchable presets.** A profile is a
