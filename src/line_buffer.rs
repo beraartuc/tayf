@@ -152,6 +152,15 @@ impl LineBuffer {
         }
     }
 
+    /// Whether the buffer holds an in-flight partial line (no `\n` yet).
+    ///
+    /// Cheap, allocation-free predicate used by `Pipeline::flush_plain_partial`
+    /// to guard the `drain` call in the hot path: an interrupting escape
+    /// sequence arriving on an empty buffer must not pay for a fresh `Vec`.
+    pub(crate) fn has_partial(&self) -> bool {
+        !self.inner.is_empty()
+    }
+
     /// Return any remaining bytes (used at shutdown).
     pub(crate) fn drain(&mut self) -> Vec<u8> {
         let out = std::mem::take(&mut self.inner);

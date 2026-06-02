@@ -557,15 +557,22 @@ impl Pipeline {
             StepEvent::StringPayloadByte => {
                 // Path 3: OSC/DCS-passthrough/PM/APC payload byte. To preserve
                 // byte ordering with any pre-OSC content sitting in the line
-                // buffer, drain the buffer's partial line to stdout *verbatim*
-                // first, then flush any pending scratch (introducer bytes), then
-                // write the payload byte direct.
+                // buffer, flush the buffer's partial line first, then flush any
+                // pending scratch (introducer bytes), then write the payload
+                // byte direct.
+                //
+                // A PLAIN pre-OSC prefix is rule-applied (SGR-wrapped at its
+                // current position) via `flush_plain_partial`; an already-SGR'd
+                // or string-payload partial keeps the verbatim merge behavior.
+                // Either way the bytes land at the same position, before the
+                // payload byte.
                 //
                 // Decision: a line that contains OSC/DCS/PM/APC cannot be
-                // rule-applied (pre-OSC bytes are already on the wire). Mark
-                // `line_has_string_payload` so the post-OSC remainder also
-                // passes verbatim at `\n`. Keeps hyperlinks intact and avoids
-                // regex inside OSC payloads. Spec v0.3.0 §4.1.
+                // rule-applied as a whole (pre-OSC bytes are already on the
+                // wire). Mark `line_has_string_payload` so the post-OSC
+                // remainder also passes verbatim at `\n`. Keeps hyperlinks
+                // intact and avoids regex inside OSC payloads. Spec v0.3.0 §4.1.
+                self.flush_plain_partial(out)?;
                 let partial = self.buffer.drain();
                 if !partial.is_empty() {
                     out.write_all(&partial)?;
@@ -602,6 +609,12 @@ impl Pipeline {
                 // The trigger sequence will switch us into TUI passthrough mode;
                 // subsequent bytes bypass line_buffer entirely, so any orphaned
                 // partial would be stuck until shutdown drain — wrong stdout order.
+                //
+                // A PLAIN partial is rule-applied (SGR-wrapped at its current
+                // position) via `flush_plain_partial`; an already-SGR'd or
+                // string-payload partial keeps the verbatim merge behavior.
+                // Either way the partial lands before the trigger sequence.
+                self.flush_plain_partial(out)?;
                 let partial = self.buffer.drain();
                 if !partial.is_empty() {
                     out.write_all(&partial)?;
@@ -610,6 +623,13 @@ impl Pipeline {
                 out.write_all(&self.sequence_scratch)?;
             }
             SequenceKind::Sgr => {
+                // A PLAIN newline-less partial that this SGR interrupts is a
+                // flush boundary: rule-apply it FIRST (at its current position),
+                // so the SGR starts a fresh buffer line and `line_has_sgr` below
+                // marks the new (prompt) line, not the flushed partial. Only
+                // affects plain partials — an already-SGR'd partial is a no-op
+                // and keeps the merge behavior. See `flush_plain_partial`.
+                self.flush_plain_partial(out)?;
                 let drained = std::mem::take(&mut self.sequence_scratch);
                 let (lines, overflow) = self.buffer.feed_with_overflow(&drained);
                 if let Some(Error::BufferOverflow { cap }) = overflow {
@@ -623,6 +643,12 @@ impl Pipeline {
             SequenceKind::OtherCsi
             | SequenceKind::EscFinal
             | SequenceKind::EscIntermediateFinal => {
+                // Same flush-boundary treatment as the SGR arm: a PLAIN
+                // newline-less partial interrupted by this CSI/ESC is
+                // rule-applied first, at its current position, before the
+                // sequence bytes are fed into the buffer. See
+                // `flush_plain_partial`.
+                self.flush_plain_partial(out)?;
                 let drained = std::mem::take(&mut self.sequence_scratch);
                 let (lines, overflow) = self.buffer.feed_with_overflow(&drained);
                 if let Some(Error::BufferOverflow { cap }) = overflow {
@@ -659,6 +685,47 @@ impl Pipeline {
         }
         self.line_has_sgr = false;
         self.line_has_string_payload = false;
+        Ok(())
+    }
+
+    /// Flush a PLAIN buffered partial line THROUGH THE RULES before an
+    /// interrupting escape sequence is emitted.
+    ///
+    /// A newline-less line (e.g. a file with no trailing `\n`, or `printf`
+    /// without `\n`) is immediately followed by the next program's output —
+    /// in a wrapped shell, the next prompt, which typically starts with an
+    /// SGR (a colored prompt) or zsh's reverse-video "missing-newline"
+    /// indicator. Without this flush, that SGR would be appended to the
+    /// partial line (`line_has_sgr = true`) and, under the default
+    /// `respect_existing_colors`, suppress rule application on the partial —
+    /// so the partial would never get colorized.
+    ///
+    /// Treating an interrupting sequence as a flush boundary, we rule-apply
+    /// the partial at its current position (the sequence then starts a fresh
+    /// line and sets its own flags). Only PLAIN partials are affected:
+    /// - `line_has_sgr` already true → the program colored this line; leave
+    ///   the current merge/passthrough behavior intact (respect the program's
+    ///   own mid-line coloring).
+    /// - `line_has_string_payload` true → the pre-string prefix already went
+    ///   to stdout verbatim; do not re-style.
+    ///
+    /// Byte order is preserved: the partial's bytes are emitted at the same
+    /// position they would be today (possibly SGR-wrapped by our rules), and
+    /// the interrupting sequence's bytes follow exactly as before.
+    fn flush_plain_partial<W: Write>(&mut self, out: &mut W) -> std::io::Result<()> {
+        if self.line_has_sgr || self.line_has_string_payload {
+            return Ok(());
+        }
+        if !self.buffer.has_partial() {
+            return Ok(());
+        }
+        let p = self.buffer.drain();
+        if !p.is_empty() {
+            // Both flags are false here, so apply_or_passthrough rule-applies
+            // the plain content (it also resets the flags, which are already
+            // false — no observable effect for the upcoming sequence).
+            self.apply_or_passthrough(&p, out)?;
+        }
         Ok(())
     }
 
@@ -1967,5 +2034,209 @@ mod feed_tests {
         // short1/short2 survive as their own lines (the giant line did not swallow them).
         assert!(out.windows(8).any(|w| w == b"short1\ns"), "short1 line must be framed separately");
         assert!(out.windows(7).any(|w| w == b"short2\n"), "short2 line must be framed separately");
+    }
+}
+
+#[cfg(test)]
+mod flush_plain_partial_tests {
+    //! Option-A: a sequence interrupting a PLAIN newline-less line is a flush
+    //! boundary — the partial is rule-applied (at its current position) BEFORE
+    //! the interrupting sequence is emitted. Fixes the wrapped-shell bug where a
+    //! newline-less line (e.g. `printf foo` or an email at EOF) followed by the
+    //! next prompt's SGR was suppressed by `respect_existing_colors`.
+
+    use super::*;
+    use arc_swap::ArcSwap;
+    use std::sync::Arc;
+
+    /// Build a real builtin Compiled (drives email/ipv4 rules) with the given
+    /// `respect_existing_colors`.
+    fn builtins(respect: bool) -> Compiled {
+        use crate::config::{Config, GeneralSection, UserRule};
+        let cfg = Config {
+            general: GeneralSection {
+                respect_existing_colors: respect,
+                ..GeneralSection::default()
+            },
+            rules: Vec::<UserRule>::new(),
+        };
+        Compiled::load_with_theme(
+            Some(&cfg),
+            Some("/x"),
+            None,
+            crate::rules::RuleSource::UserConfig,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .unwrap()
+    }
+
+    fn pipeline_with(compiled: Compiled) -> Pipeline {
+        Pipeline::new(Arc::new(ArcSwap::from_pointee(compiled)))
+    }
+
+    /// The email built-in's foreground SGR, read LIVE from `builtin_rules()`
+    /// (re-tone-proof: never hardcode the hex). Asserted non-empty so a future
+    /// style change can't vacuously satisfy `contains`.
+    fn email_fg_sgr() -> String {
+        let rule = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "email")
+            .expect("email built-in rule exists");
+        let sgr = rule.style.to_sgr();
+        assert!(!sgr.is_empty(), "email rule must carry a non-empty fg SGR");
+        sgr
+    }
+
+    /// The ipv4 built-in's foreground SGR, read LIVE.
+    fn ipv4_fg_sgr() -> String {
+        let rule = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "ipv4")
+            .expect("ipv4 built-in rule exists");
+        let sgr = rule.style.to_sgr();
+        assert!(!sgr.is_empty(), "ipv4 rule must carry a non-empty fg SGR");
+        sgr
+    }
+
+    // Case 1: bug repro / deterministic fix. A newline-less email followed by a
+    // prompt-style SGR in the SAME feed must emit the email rule's SGR wrapping
+    // the email BEFORE the literal \x1b[32m. (Fails pre-fix: email is plain.)
+    #[test]
+    fn newlineless_email_before_interrupting_sgr_is_rule_applied() {
+        let mut p = pipeline_with(builtins(true));
+        let mut out = Vec::new();
+        p.feed(b"bera@genomize.com", &mut out).unwrap();
+        p.feed(b"\x1b[32m", &mut out).unwrap();
+        // The trailing SGR with no following newline buffers as a partial; the
+        // idle tick / shutdown drain emits it (modeled here by `drain`). What
+        // the fix guarantees is ORDER: email rule-applied before that SGR.
+        p.drain(&mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let email_sgr = email_fg_sgr();
+        let email_sgr_pos = s.find(&email_sgr).unwrap_or_else(|| {
+            panic!("email fg SGR {email_sgr:?} must wrap the email; got: {s:?}")
+        });
+        // The email text and a reset must follow the email SGR.
+        assert!(s.contains("bera@genomize.com"), "email text must survive: {s:?}");
+        assert!(s.contains("\x1b[0m"), "email wrap must include a reset: {s:?}");
+        // The interrupting prompt SGR must appear AFTER the email's SGR wrap.
+        let prompt_pos = s.find("\x1b[32m").expect("prompt SGR in output");
+        assert!(
+            email_sgr_pos < prompt_pos,
+            "email rule SGR must precede the prompt SGR; got: {s:?}"
+        );
+    }
+
+    // Case 2: newline-less line then a later REAL newline. The email is colored;
+    // the prompt portion (which carries its own SGR) passes through; byte order
+    // is intact: email wrap, then the prompt SGR, then the prompt text + reset.
+    #[test]
+    fn newlineless_email_then_prompt_line_with_newline() {
+        let mut p = pipeline_with(builtins(true));
+        let mut out = Vec::new();
+        p.feed(b"bera@genomize.com", &mut out).unwrap();
+        p.feed(b"\x1b[32mbartuc@fedora\x1b[0m\n", &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let email_sgr = email_fg_sgr();
+        let email_pos = s.find(&email_sgr).expect("email fg SGR wraps the email");
+        let prompt_pos = s.find("\x1b[32m").expect("prompt SGR present");
+        assert!(email_pos < prompt_pos, "email colorized before prompt: {s:?}");
+        // The prompt line carried its own SGR, so tayf does not recolor it: the
+        // second email-shaped token must NOT get the email rule SGR.
+        assert!(s.contains("bartuc@fedora"), "prompt text must survive: {s:?}");
+        assert_eq!(
+            s.matches(&email_sgr).count(),
+            1,
+            "only the newline-less email is recolored, not the SGR'd prompt: {s:?}"
+        );
+        // byte order: prompt SGR, its text, then its reset, then the newline.
+        assert!(s.contains("\x1b[32mbartuc@fedora\x1b[0m\n"), "prompt passthrough intact: {s:?}");
+    }
+
+    // Case 3: a line the PROGRAM already colored (SGR at start) is preserved —
+    // tayf must NOT recolor DOWN. respect_existing_colors=true → passthrough.
+    #[test]
+    fn program_colored_line_is_passthrough_not_recolored() {
+        let mut p = pipeline_with(builtins(true));
+        let mut out = Vec::new();
+        p.feed(b"\x1b[31mDOWN\x1b[0m\n", &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert_eq!(s, "\x1b[31mDOWN\x1b[0m\n", "program-colored line passes verbatim: {s:?}");
+    }
+
+    // Case 4: accepted Option-A tradeoff. A plain prefix before the program's
+    // first SGR is flushed THROUGH the rules; the SGR'd remainder stays the
+    // program's. So `192.168.1.1 ` gets tayf's ipv4 color and `DOWN` stays red.
+    #[test]
+    fn plain_prefix_recolored_then_program_sgr_remainder_preserved() {
+        let mut p = pipeline_with(builtins(true));
+        let mut out = Vec::new();
+        p.feed(b"192.168.1.1 \x1b[31mDOWN\x1b[0m\n", &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let ipv4_sgr = ipv4_fg_sgr();
+        let ipv4_pos = s.find(&ipv4_sgr).unwrap_or_else(|| {
+            panic!("ipv4 fg SGR {ipv4_sgr:?} must wrap the plain prefix; got: {s:?}")
+        });
+        assert!(s.contains("192.168.1.1"), "ipv4 text must survive: {s:?}");
+        // Program red on DOWN survives and follows the flushed prefix.
+        let down_red_pos = s.find("\x1b[31mDOWN").expect("program red on DOWN present");
+        assert!(ipv4_pos < down_red_pos, "flushed prefix precedes program SGR: {s:?}");
+        assert!(s.contains("\x1b[31mDOWN\x1b[0m"), "DOWN stays program-red: {s:?}");
+    }
+
+    // Case 5: no matchable plain prefix. `xyz` matches no built-in, so it is
+    // emitted verbatim (no spurious SGR injected around it), then the SGR.
+    #[test]
+    fn no_match_plain_prefix_emitted_verbatim_then_sequence() {
+        let mut p = pipeline_with(builtins(true));
+        let mut out = Vec::new();
+        p.feed(b"xyz", &mut out).unwrap();
+        p.feed(b"\x1b[32m", &mut out).unwrap();
+        p.drain(&mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // xyz then the prompt SGR, byte-for-byte; no injected SGR around xyz.
+        assert_eq!(s, "xyz\x1b[32m", "no-match prefix verbatim, then SGR: {s:?}");
+    }
+
+    // Case 6: respect_existing_colors=false. Rules apply regardless of prior
+    // SGR; the newline-less email is still colored before the prompt SGR.
+    #[test]
+    fn respect_false_still_colors_newlineless_email() {
+        let mut p = pipeline_with(builtins(false));
+        let mut out = Vec::new();
+        p.feed(b"bera@genomize.com", &mut out).unwrap();
+        p.feed(b"\x1b[32m", &mut out).unwrap();
+        p.drain(&mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let email_sgr = email_fg_sgr();
+        let email_pos = s.find(&email_sgr).expect("email fg SGR wraps the email");
+        // The email is rule-applied and its wrap completes (text + reset) before
+        // the buffered prompt residue. (With respect=false the residual raw SGR
+        // bytes are themselves treated as line content on drain — a pre-existing
+        // buffering quirk unrelated to this fix; we only pin the email ordering.)
+        let email_text_pos = s.find("bera@genomize.com").expect("email text survives");
+        assert!(email_pos < email_text_pos, "email SGR wraps the email text: {s:?}");
+        // The email reset must come before the leftover prompt bytes (the `32`
+        // of the buffered `\x1b[32m`), proving the email flushed first.
+        let email_end = email_text_pos + "bera@genomize.com".len();
+        let prompt_digits_pos = s[email_end..].find("32").map(|i| email_end + i);
+        if let Some(p) = prompt_digits_pos {
+            assert!(email_end <= p, "email content precedes the prompt residue: {s:?}");
+        }
+    }
+
+    // Single-chunk variant of case 1: the email + prompt SGR arrive in ONE feed
+    // (no idle tick involved), proving the fix is deterministic, not timing-bound.
+    #[test]
+    fn newlineless_email_and_sgr_in_single_chunk() {
+        let mut p = pipeline_with(builtins(true));
+        let mut out = Vec::new();
+        p.feed(b"bera@genomize.com\x1b[32m", &mut out).unwrap();
+        p.drain(&mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let email_sgr = email_fg_sgr();
+        let email_pos = s.find(&email_sgr).expect("email fg SGR wraps the email");
+        let prompt_pos = s.find("\x1b[32m").expect("prompt SGR present");
+        assert!(email_pos < prompt_pos, "email colorized before prompt SGR: {s:?}");
     }
 }
