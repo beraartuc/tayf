@@ -109,6 +109,18 @@ pub(crate) enum Modal {
     /// by `?` or F1; any key dismisses + key is discarded (vim/less
     /// convention). Content lives in `events::HELP_MODAL_CONTENT`.
     Help,
+    /// New-profile name prompt (Profiles tab `n`; spec §6.1). `buffer`
+    /// accumulates the profile name; `clone_rules` toggles whether the new
+    /// `profiles/<name>.toml` clones the current active rule set (`true`) or
+    /// starts empty (`false`). `error` shows a validation/IO rejection.
+    /// Enter writes the file via `events::commit_new_profile`; Esc cancels;
+    /// Tab toggles `clone_rules`. Editing of a profile's rules is deferred
+    /// (spec §6.3) — this only creates the file.
+    NewProfile {
+        buffer: String,
+        clone_rules: bool,
+        error: Option<String>,
+    },
     /// G8 (§3.6): per-key conflict resolution surface opened when
     /// [`crate::config_tui::widgets::save_diff::build_initial_state`]
     /// produces a `SaveDiffState::MergePending`. Keymap:
@@ -172,6 +184,12 @@ pub(crate) enum ConfirmAction {
     /// bound config path does not yet exist. Writes the built-in
     /// default config and reloads the snapshot. Spec v0.6.1 §3.3.
     InitFromDump,
+    /// Delete a disk profile file (`profiles/<name>.toml`). Opened by the
+    /// Profiles tab `d` keystroke; confirmed by `apply_confirm` which calls
+    /// `events::delete_disk_profile`. The synthetic `default` profile
+    /// (`config.toml`) cannot be deleted — the keystroke handler refuses it
+    /// before opening this modal. Spec §6.1.
+    DeleteProfile(String),
 }
 
 /// Toast — auto-dismiss after 3 s.

@@ -36,6 +36,11 @@ Editing (Patterns tab)
   r                Reset user override
   d / Delete       Delete user override (confirm)
 
+Profiles tab
+  Space            Activate (default clears [general] profile)
+  n                Create profile (Tab toggles clone / empty)
+  d                Delete disk profile (confirm; default protected)
+
 Color Picker (when modal open)
   Tab              Cycle: hex → ANSI16 → bold → italic → underline
   Space            Toggle focused boolean axis
@@ -216,6 +221,7 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             Modal::Search => handle_search_key(app, k),
             Modal::SampleSet => handle_sample_set_key(app, k),
             Modal::NewPattern { .. } => handle_new_pattern_key(app, k),
+            Modal::NewProfile { .. } => handle_new_profile_key(app, k),
             Modal::EditRegex { .. } => handle_edit_regex_key(app, k),
             Modal::Help => handle_help_key(app, k),
             Modal::FullPreview => {
@@ -490,6 +496,7 @@ fn handle_confirm_modal_key(app: &mut App, k: KeyEvent) {
             ConfirmAction::DeleteRule(rid) => Some(ConfirmAction::DeleteRule(rid.clone())),
             ConfirmAction::ResetOverride(rid) => Some(ConfirmAction::ResetOverride(rid.clone())),
             ConfirmAction::InitFromDump => Some(ConfirmAction::InitFromDump),
+            ConfirmAction::DeleteProfile(name) => Some(ConfirmAction::DeleteProfile(name.clone())),
         },
         _ => None,
     };
@@ -547,6 +554,9 @@ fn apply_confirm(app: &mut App, action: &ConfirmAction) {
         },
         ConfirmAction::InitFromDump => {
             apply_init_from_dump(app);
+        }
+        ConfirmAction::DeleteProfile(name) => {
+            delete_disk_profile(app, name);
         }
     }
 }
@@ -884,6 +894,168 @@ fn apply_init_from_dump(app: &mut App) {
             )));
         }
     }
+}
+
+/// `Modal::NewProfile` name-prompt dispatch (Profiles tab `n`; spec §6.1).
+///
+/// - Tab: toggle the clone/empty content choice.
+/// - Enter: validate the name + write `profiles/<name>.toml` via
+///   [`commit_new_profile`]; on success close the modal, else keep it open
+///   with `error` set.
+/// - Other keys: text-buffer edit (the name field).
+///
+/// Esc is handled by `handle_esc` (tier 2 closes the modal) before dispatch
+/// reaches this function.
+fn handle_new_profile_key(app: &mut App, k: KeyEvent) {
+    use crate::config_tui::app::Modal;
+
+    if matches!(k.code, KeyCode::Tab) {
+        if let Some(Modal::NewProfile { clone_rules, .. }) = app.modal.as_mut() {
+            *clone_rules = !*clone_rules;
+        }
+        return;
+    }
+
+    if matches!(k.code, KeyCode::Enter) {
+        let Some(Modal::NewProfile { buffer, clone_rules, .. }) = app.modal.as_ref() else {
+            return;
+        };
+        let name = buffer.clone();
+        let clone_rules = *clone_rules;
+        match commit_new_profile(app, &name, clone_rules) {
+            Ok(()) => {
+                app.modal = None;
+            }
+            Err(e) => {
+                if let Some(Modal::NewProfile { error, .. }) = app.modal.as_mut() {
+                    *error = Some(e);
+                }
+            }
+        }
+        return;
+    }
+
+    let Some(Modal::NewProfile { buffer, error, .. }) = app.modal.as_mut() else {
+        return;
+    };
+    handle_text_input(buffer, k, 64);
+    *error = None;
+}
+
+/// Write `profiles/<name>.toml` for the Profiles-tab `n` create flow
+/// (spec §6.1). `clone_rules` true → the file's `[[rules]]` mirror the
+/// current active rule set ([`serialize_active_rules`]); false → an empty
+/// file. Reuses the crate's safe-write guards: name validation, the
+/// `check_safe_write_destination` symlink/canonical-parent gate, and
+/// `write_atomic_to`. Does NOT activate the new profile (the user presses
+/// `Space` to switch).
+///
+/// # Errors
+/// Returns a human-readable rejection string when the name is invalid, the
+/// root cannot be resolved, the destination already exists, the safety gate
+/// trips, or the atomic write fails. The caller surfaces it in the modal.
+fn commit_new_profile(app: &mut App, name: &str, clone_rules: bool) -> Result<(), String> {
+    if !crate::profiles::name_is_valid(name) {
+        return Err("name must be ASCII alphanumeric with '-' or '_'".to_owned());
+    }
+    let Some(tayf_root) = crate::config_tui::save::tayf_config_root() else {
+        return Err("cannot resolve ~/.config/tayf/".to_owned());
+    };
+    let dest = crate::profiles::disk_path_with_root(&tayf_root, name);
+    if dest.exists() {
+        return Err(format!("profile '{name}' already exists on disk"));
+    }
+    crate::config_tui::save::check_safe_write_destination(&dest, &tayf_root)?;
+    let body = if clone_rules { serialize_active_rules(app) } else { String::new() };
+    crate::config_tui::save::write_atomic_to(&dest, &body).map_err(|e| e.to_string())?;
+    app.toast = Some(crate::config_tui::app::Toast::ok(format!(
+        "Created profile '{name}' — press Space to activate"
+    )));
+    Ok(())
+}
+
+/// Serialize the current active rule set as a profile-file `[[rules]]` body
+/// (spec §6.1 clone). The active rules are the snapshot's `config.toml`
+/// `[[rules]]` (the default profile is what the TUI edits — named-profile
+/// editing is deferred, spec §6.3). Emits a minimal entry per rule: `name`,
+/// `enabled = false` when disabled, `pattern`/`style` when present. Mirrors
+/// [`crate::config::default_config_toml`]'s per-rule emission so the result
+/// re-parses cleanly.
+fn serialize_active_rules(app: &App) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "# tayf profile (created by the config TUI).");
+    let _ = writeln!(out, "# Edit this file directly to customize the profile's rules.");
+    let _ = writeln!(out);
+    for r in &app.snapshot.parsed.rules {
+        let _ = writeln!(out, "[[rules]]");
+        let _ = writeln!(out, "name = \"{}\"", r.name);
+        if !r.enabled {
+            let _ = writeln!(out, "enabled = false");
+        }
+        if let Some(pattern) = &r.pattern {
+            let _ = writeln!(out, "pattern = '''{pattern}'''");
+        }
+        if let Some(style) = &r.style {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(fg) = &style.fg {
+                parts.push(format!("fg = \"{fg}\""));
+            }
+            if let Some(bg) = &style.bg {
+                parts.push(format!("bg = \"{bg}\""));
+            }
+            if style.bold {
+                parts.push("bold = true".to_owned());
+            }
+            if style.italic {
+                parts.push("italic = true".to_owned());
+            }
+            if style.underline {
+                parts.push("underline = true".to_owned());
+            }
+            if style.dim {
+                parts.push("dim = true".to_owned());
+            }
+            if !parts.is_empty() {
+                let _ = writeln!(out, "style = {{ {} }}", parts.join(", "));
+            }
+        }
+        let _ = writeln!(out);
+    }
+    out
+}
+
+/// Delete a disk profile file (`profiles/<name>.toml`) for the Profiles-tab
+/// `d` confirm flow (spec §6.1). Resolves the root + safe destination,
+/// removes the file, and — if the deleted profile was the active one —
+/// clears the staged/snapshot active-profile pointer so the TUI falls back
+/// to the default profile. Surfaces a toast on every outcome.
+fn delete_disk_profile(app: &mut App, name: &str) {
+    let Some(tayf_root) = crate::config_tui::save::tayf_config_root() else {
+        app.toast = Some(crate::config_tui::app::Toast::warn(
+            "Delete failed: cannot resolve ~/.config/tayf/".to_owned(),
+        ));
+        return;
+    };
+    let dest = crate::profiles::disk_path_with_root(&tayf_root, name);
+    if let Err(reason) = crate::config_tui::save::check_safe_write_destination(&dest, &tayf_root) {
+        app.toast = Some(crate::config_tui::app::Toast::warn(format!("Delete refused: {reason}")));
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(&dest) {
+        app.toast = Some(crate::config_tui::app::Toast::warn(format!("Delete failed: {e}")));
+        return;
+    }
+    // If the deleted profile was active, fall back to the default profile so
+    // a later save does not point `[general] profile` at a missing file.
+    let active = match &app.edits.general.profile {
+        Some(staged) => staged.as_deref(),
+        None => app.snapshot.parsed.profile.as_deref(),
+    };
+    if active == Some(name) {
+        app.edits.general.profile = Some(None);
+    }
+    app.toast = Some(crate::config_tui::app::Toast::ok(format!("Deleted profile '{name}'")));
 }
 
 /// Bind the picked color to the rule currently focused under the

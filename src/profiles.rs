@@ -93,10 +93,8 @@ pub(crate) fn resolve_active(
 /// `<tayf_root>/profiles/<name>.toml` — canonical on-disk location for a
 /// user-editable profile file. `tayf_root` is the resolved
 /// `~/.config/tayf/` directory (see
-/// [`crate::config_tui::save::tayf_config_root`]).
-// reason: wired by the Profiles-tab create/delete handlers in the next task of
-// this group; exercised meanwhile by the profiles unit tests.
-#[allow(dead_code)]
+/// [`crate::config_tui::save::tayf_config_root`]). Used by the Profiles-tab
+/// create/delete handlers to build the write target.
 pub(crate) fn disk_path_with_root(tayf_root: &std::path::Path, name: &str) -> std::path::PathBuf {
     profiles_dir_with_root(tayf_root).join(format!("{name}.toml"))
 }

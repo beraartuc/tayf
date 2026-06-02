@@ -6,16 +6,21 @@
 //!   - `Space` — set the selected profile active. `default` clears
 //!     `[general] profile`; a named profile sets it. Staged into
 //!     `edits.general.profile`; `Ctrl+S` persists.
+//!   - `n` — create a new profile (name prompt; clone the active rule set or
+//!     start empty). Opens [`crate::config_tui::app::Modal::NewProfile`].
+//!   - `d` — delete the selected disk profile (confirm modal). The synthetic
+//!     `default` profile cannot be deleted.
 //!
-//! Create (`n`) / delete (`d`) and the named-active affordance land in the
-//! following tasks of this group.
+//! In-TUI editing of a named profile's rules is deferred (spec §6.3): all
+//! rule edits target `config.toml` (the default profile). The named-active
+//! affordance (spec §6.3) lands in the following task of this group.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::config_tui::app::App;
+use crate::config_tui::app::{App, ConfirmAction, Modal};
 
 /// Synthetic list entry standing in for `config.toml`'s rule set — the
 /// implicit profile that is active when `[general] profile` is unset.
@@ -93,12 +98,14 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
         "(no profile selected)".to_owned()
     } else if selected == DEFAULT_PROFILE_LABEL {
         "Profile: default (config.toml)\n\nThe default profile is config.toml's rule set — \
-         the rules you edit on the Patterns tab.\n\nPress Space to make it active"
+         the rules you edit on the Patterns tab.\n\nPress Space to make it active\nPress 'n' \
+         to create a new profile"
             .to_owned()
     } else {
         format!(
             "Profile: {selected}\n\nSource: ~/.config/tayf/profiles/{selected}.toml\n\n\
-             Press Space to set as active"
+             Press Space to set as active\nPress 'd' to delete this profile\nPress 'n' to \
+             create a new profile"
         )
     };
 
@@ -144,6 +151,27 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
                 app.toast = Some(crate::config_tui::app::Toast::ok(format!(
                     "staged profile = {name}; Ctrl+S to save"
                 )));
+            }
+        }
+        KeyCode::Char('n') if app.modal.is_none() => {
+            app.modal =
+                Some(Modal::NewProfile { buffer: String::new(), clone_rules: true, error: None });
+        }
+        KeyCode::Char('d') => {
+            let Some(name) = names.get(app.focus.profiles.selected_idx) else {
+                return;
+            };
+            if name == DEFAULT_PROFILE_LABEL {
+                app.toast = Some(crate::config_tui::app::Toast::warn(
+                    "The default profile (config.toml) cannot be deleted".to_owned(),
+                ));
+                return;
+            }
+            if app.modal.is_none() {
+                app.modal = Some(Modal::Confirm {
+                    msg: format!("Delete profile '{name}' from disk?"),
+                    action: ConfirmAction::DeleteProfile(name.clone()),
+                });
             }
         }
         _ => {}
@@ -254,6 +282,120 @@ mod tests {
             app.edits.general.profile,
             Some(None),
             "Space on default clears the active-profile pointer"
+        );
+    }
+
+    // ---- Task 5.2: create + delete ------------------------------------
+
+    #[test]
+    fn n_opens_new_profile_modal() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        dispatch_key(&mut app, key(KeyCode::Char('n')));
+        assert!(
+            matches!(app.modal, Some(Modal::NewProfile { clone_rules: true, .. })),
+            "n opens the NewProfile name prompt (clone default)"
+        );
+    }
+
+    #[test]
+    fn create_empty_profile_writes_parseable_file() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        // Open modal, toggle to empty, type a name, commit.
+        dispatch_key(&mut app, key(KeyCode::Char('n')));
+        crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Tab)); // → empty
+        for c in "staging".chars() {
+            crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Char(c)));
+        }
+        crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Enter));
+        assert!(app.modal.is_none(), "modal closes on successful create");
+        let path = tmp.path().join("tayf").join("profiles").join("staging.toml");
+        assert!(path.exists(), "profiles/staging.toml written");
+        let body = std::fs::read_to_string(&path).expect("read");
+        let parsed: crate::profiles::Profile =
+            toml::from_str(&body).expect("created empty profile parses");
+        assert!(parsed.rules.is_empty(), "empty profile has no rules");
+        assert!(list_profile_names(&app).iter().any(|n| n == "staging"));
+    }
+
+    #[test]
+    fn create_clone_profile_serializes_active_rules() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let guard = scoped_empty_config_root(tmp.path());
+        // Snapshot with a user rule so the clone has something to serialize.
+        let mut snap = ConfigSnapshot::empty();
+        snap.parsed.rules.push(crate::config::UserRule {
+            name: "ticket".to_owned(),
+            pattern: Some(r"JIRA-\d+".to_owned()),
+            style: None,
+            enabled: true,
+            styles: None,
+            priority: None,
+        });
+        let mut app = App::from_snapshot(snap, TuiEnv::deterministic());
+        app.tab = crate::config_tui::app::Tab::Profiles;
+        dispatch_key(&mut app, key(KeyCode::Char('n'))); // clone_rules = true by default
+        for c in "mine".chars() {
+            crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Char(c)));
+        }
+        crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Enter));
+        let path = tmp.path().join("tayf").join("profiles").join("mine.toml");
+        let parsed: crate::profiles::Profile =
+            toml::from_str(&std::fs::read_to_string(&path).expect("read")).expect("clone parses");
+        assert_eq!(parsed.rules.len(), 1, "cloned the active rule set");
+        assert_eq!(parsed.rules[0].name, "ticket");
+        assert_eq!(parsed.rules[0].pattern.as_deref(), Some(r"JIRA-\d+"));
+        drop(guard);
+    }
+
+    #[test]
+    fn create_duplicate_name_keeps_modal_open_with_error() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        write_disk_profile(tmp.path(), "work", "");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        dispatch_key(&mut app, key(KeyCode::Char('n')));
+        for c in "work".chars() {
+            crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Char(c)));
+        }
+        crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Enter));
+        assert!(
+            matches!(app.modal, Some(Modal::NewProfile { error: Some(_), .. })),
+            "duplicate name keeps the modal open with an error"
+        );
+    }
+
+    #[test]
+    fn d_on_disk_profile_opens_confirm_then_deletes() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        write_disk_profile(tmp.path(), "work", "");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        let idx = list_profile_names(&app).iter().position(|n| n == "work").expect("work listed");
+        app.focus.profiles.selected_idx = idx;
+        dispatch_key(&mut app, key(KeyCode::Char('d')));
+        assert!(
+            matches!(
+                &app.modal,
+                Some(Modal::Confirm { action: ConfirmAction::DeleteProfile(n), .. }) if n == "work"
+            ),
+            "d opens a delete-confirm for the selected disk profile"
+        );
+        crate::config_tui::events::dispatch_key(&mut app, key(KeyCode::Char('y')));
+        let path = tmp.path().join("tayf").join("profiles").join("work.toml");
+        assert!(!path.exists(), "confirmed delete removes the profile file");
+    }
+
+    #[test]
+    fn d_on_default_refuses_and_warns() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        app.focus.profiles.selected_idx = 0; // default
+        dispatch_key(&mut app, key(KeyCode::Char('d')));
+        assert!(app.modal.is_none(), "default delete opens no confirm modal");
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.text.as_str()),
+            Some("The default profile (config.toml) cannot be deleted"),
+            "default delete warns instead"
         );
     }
 }

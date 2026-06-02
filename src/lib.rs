@@ -962,6 +962,26 @@ pub mod __test_api {
         app.0.edits.general.profile.clone()
     }
 
+    /// True iff a [`crate::config_tui::app::Modal::NewProfile`] name prompt
+    /// is open. Drives Profiles-tab create-flow assertions.
+    #[must_use]
+    pub fn is_new_profile_modal_open(app: &AppHandle) -> bool {
+        matches!(app.0.modal, Some(crate::config_tui::app::Modal::NewProfile { .. }))
+    }
+
+    /// True iff a delete-profile confirm modal is open for `name`. Drives
+    /// Profiles-tab delete-flow assertions.
+    #[must_use]
+    pub fn is_delete_profile_confirm_modal_open(app: &AppHandle, name: &str) -> bool {
+        matches!(
+            &app.0.modal,
+            Some(crate::config_tui::app::Modal::Confirm {
+                action: crate::config_tui::app::ConfirmAction::DeleteProfile(n),
+                ..
+            }) if n == name
+        )
+    }
+
     /// Look up the catalog index for `name` in the Themes built-in list.
     #[must_use]
     pub fn builtin_theme_idx(app: &AppHandle, name: &str) -> Option<usize> {

@@ -17,8 +17,8 @@
 │  r                Reset user override                                        │
 │  d / Delete       Delete user override (confirm)                             │
 │                                                                              │
-│Color Picker (when modal open)                                                │
-│  Tab              Cycle: hex → ANSI16 → bold → italic → underline            │
-│  Space            Toggle focused boolean axis                                │
-│  c                Clear focused boolean axis (bold/italic/underline only)    │
+│Profiles tab                                                                  │
+│  Space            Activate (default clears [general] profile)                │
+│  n                Create profile (Tab toggles clone / empty)                 │
+│  d                Delete disk profile (confirm; default protected)           │
 └──────────────────────────────────────────────────────────────────────────────┘

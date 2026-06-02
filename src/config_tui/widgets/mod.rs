@@ -13,6 +13,7 @@ pub(crate) mod conflict_list;
 pub(crate) mod edit_regex;
 pub(crate) mod help;
 pub(crate) mod new_pattern;
+pub(crate) mod new_profile;
 pub(crate) mod preview;
 pub(crate) mod sample_set;
 pub(crate) mod save_diff;
@@ -48,6 +49,9 @@ pub(crate) fn render_modal(frame: &mut Frame, full: Rect, app: &App) {
             edit_regex::render(frame, area, rule_id, buffer.as_str(), error.as_deref());
         }
         Modal::Help => help::render(frame, area),
+        Modal::NewProfile { buffer, clone_rules, error } => {
+            new_profile::render(frame, area, buffer.as_str(), *clone_rules, error.as_deref());
+        }
         Modal::ConflictList(_) => {
             if let Some(save_diff::SaveDiffState::MergePending {
                 conflicts,
