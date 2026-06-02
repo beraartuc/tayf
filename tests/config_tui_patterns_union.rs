@@ -17,7 +17,11 @@ fn patterns_tab_renders_section_headers_with_dim_modifier_and_user_rule() {
         &[("unique-user-foo", "FOO")],
         "sample line\n",
         80,
-        24,
+        // Tall enough that the full union list (18 built-ins + both section
+        // headers + the user rule) fits without scrolling — the built-in
+        // catalog grew to 18 in v0.12.0, so 24 rows no longer shows the
+        // User section at the initial (top) selection.
+        44,
     );
     let buf = common::tui_harness::draw_frame(&app, &mut terminal);
 
