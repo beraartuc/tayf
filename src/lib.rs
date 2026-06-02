@@ -206,32 +206,19 @@ impl Tayf {
             args.profile.clone().or_else(|| config_ref.and_then(|c| c.general.profile.clone()));
 
         // Resolve the active rule set + (for theme precedence) the profile's
-        // theme. A named profile's `[[rules]]` REPLACE config.toml's; the
-        // built-ins remain the substrate. `[general]` always comes from
-        // config.toml. Failures propagate as Error::Profile /
-        // Error::ProfileValidation through the standard Tayf::run error path.
-        let (effective_config, active_path, rules_source, profile_theme): (
-            config::Config,
-            Option<String>,
-            rules::RuleSource,
-            Option<String>,
-        ) = match effective_profile_name {
-            Some(ref name) => {
-                let lp = profiles::load(name)?;
-                let theme = lp.profile.theme.clone();
-                let eff = config::Config {
-                    general: config_ref.map(|c| c.general.clone()).unwrap_or_default(),
-                    rules: lp.profile.rules,
-                };
-                (eff, Some(lp.path_label), rules::RuleSource::DiskProfile, theme)
-            }
-            None => (
-                config_ref.cloned().unwrap_or_default(),
-                config_path.clone(),
-                rules::RuleSource::UserConfig,
-                None,
-            ),
-        };
+        // theme via the shared `profiles::resolve_active` helper. A named
+        // profile's `[[rules]]` REPLACE config.toml's; the built-ins remain the
+        // substrate. `[general]` always comes from config.toml. Failures
+        // propagate as Error::Profile / Error::ProfileValidation through the
+        // standard Tayf::run error path. `resolve_active` clones the caller's
+        // `[general]`; pass the loaded config (or an empty default when no file
+        // applied) so the synthetic config carries the right `[general]`.
+        let resolve_base = config_ref.cloned().unwrap_or_default();
+        let (effective_config, profile_path, rules_source, profile_theme) =
+            profiles::resolve_active(&resolve_base, effective_profile_name.as_deref())?;
+        // `resolve_active` returns `None` for the path on the no-profile path;
+        // the active diagnostics path is then the user-config path.
+        let active_path = profile_path.or_else(|| config_path.clone());
 
         // bg-detect is resolved ONCE at startup (querying the terminal via
         // OSC 11 is latency-sensitive). The result is the last-resort

@@ -141,33 +141,21 @@ pub(crate) fn reload_once(
         profile.or_else(|| cfg.and_then(|c| c.general.profile.as_deref()));
 
     // 3. Resolve the active rule set + (for theme precedence) the profile's
-    //    theme. A named profile's `[[rules]]` REPLACE config.toml's; the
-    //    built-ins remain the substrate; `[general]` always comes from
-    //    config.toml. Failure propagates → reload thread warns + retains
-    //    the prior valid Compiled.
-    let base_general = cfg.map(|c| c.general.clone()).unwrap_or_default();
-    let (effective_config, active_path, rules_source, profile_theme): (
-        crate::config::Config,
-        Option<String>,
-        crate::rules::RuleSource,
-        Option<String>,
-    ) = match effective_profile_name {
-        Some(name) => {
-            let lp = crate::profiles::load(name)?;
-            let profile_theme = lp.profile.theme.clone();
-            let eff = crate::config::Config { general: base_general, rules: lp.profile.rules };
-            (eff, Some(lp.path_label), crate::rules::RuleSource::DiskProfile, profile_theme)
-        }
-        None => (
-            crate::config::Config {
-                general: base_general,
-                rules: cfg.map(|c| c.rules.clone()).unwrap_or_default(),
-            },
-            path_str,
-            crate::rules::RuleSource::UserConfig,
-            None,
-        ),
+    //    theme via the shared `profiles::resolve_active` helper. A named
+    //    profile's `[[rules]]` REPLACE config.toml's; the built-ins remain the
+    //    substrate; `[general]` always comes from config.toml. Failure
+    //    propagates → reload thread warns + retains the prior valid Compiled.
+    //    `resolve_active` clones the caller's `[general]`; pass the re-read
+    //    config (or an empty default when nothing applied) as the base.
+    let resolve_base = crate::config::Config {
+        general: cfg.map(|c| c.general.clone()).unwrap_or_default(),
+        rules: cfg.map(|c| c.rules.clone()).unwrap_or_default(),
     };
+    let (effective_config, profile_path, rules_source, profile_theme) =
+        crate::profiles::resolve_active(&resolve_base, effective_profile_name)?;
+    // `resolve_active` returns `None` for the path on the no-profile path; the
+    // active diagnostics path is then the re-read user-config path.
+    let active_path = profile_path.or(path_str);
 
     // 4. Effective theme: CLI snapshot > config > profile.theme >
     //    bg-detect default (startup snapshot — see fn-level docs).

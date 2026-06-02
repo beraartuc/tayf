@@ -57,28 +57,36 @@ pub(crate) fn name_is_valid(name: &str) -> bool {
     crate::themes::name_is_valid(name)
 }
 
-/// Resolve the active rule set + diagnostics path + source for a compile.
-/// `None` profile name → the caller's `config` rules as
-/// [`crate::rules::RuleSource::UserConfig`]. A named profile → its `rules` as
-/// [`crate::rules::RuleSource::DiskProfile`] with the profile path. Returns an
-/// owned synthetic [`crate::config::Config`] carrying the caller's `[general]`
-/// plus the active rules, plus the path label and source to feed
-/// [`crate::rules::Compiled::load_with_theme`].
+/// Resolve the active rule set + diagnostics path + source + profile theme
+/// for a compile. `None` profile name → the caller's `config` rules as
+/// [`crate::rules::RuleSource::UserConfig`] with no profile theme. A named
+/// profile → its `rules` as [`crate::rules::RuleSource::DiskProfile`] with the
+/// profile path and its optional `theme`. Returns an owned synthetic
+/// [`crate::config::Config`] carrying the caller's `[general]` plus the active
+/// rules, the path label, the source, and the named profile's theme (the 4th
+/// element) to feed [`crate::rules::Compiled::load_with_theme`] and the
+/// caller's CLI > config > profile > bg-detect theme-precedence chain.
 ///
 /// # Errors
 /// Propagates [`load`] failures (`NotFound` / parse / validation / IO).
 pub(crate) fn resolve_active(
     config: &crate::config::Config,
     profile_name: Option<&str>,
-) -> Result<(crate::config::Config, Option<String>, crate::rules::RuleSource)> {
+) -> Result<(crate::config::Config, Option<String>, crate::rules::RuleSource, Option<String>)> {
     match profile_name {
         Some(name) => {
             let lp = load(name)?;
+            let profile_theme = lp.profile.theme.clone();
             let effective =
                 crate::config::Config { general: config.general.clone(), rules: lp.profile.rules };
-            Ok((effective, Some(lp.path_label), crate::rules::RuleSource::DiskProfile))
+            Ok((
+                effective,
+                Some(lp.path_label),
+                crate::rules::RuleSource::DiskProfile,
+                profile_theme,
+            ))
         }
-        None => Ok((config.clone(), None, crate::rules::RuleSource::UserConfig)),
+        None => Ok((config.clone(), None, crate::rules::RuleSource::UserConfig, None)),
     }
 }
 
@@ -482,11 +490,13 @@ unexpected_field = "this must fail"
                 priority: None,
             }],
         };
-        let (eff, path, source) = resolve_active(&cfg, None).expect("no-profile resolve");
+        let (eff, path, source, profile_theme) =
+            resolve_active(&cfg, None).expect("no-profile resolve");
         assert_eq!(eff.rules.len(), 1, "config rules pass through unchanged");
         assert_eq!(eff.rules[0].name, "fqdn");
         assert!(path.is_none(), "no profile path when no profile is active");
         assert_eq!(source, crate::rules::RuleSource::UserConfig);
+        assert!(profile_theme.is_none(), "no profile theme when no profile is active");
     }
 
     // The named-profile REPLACE path (config rules dropped, profile rules

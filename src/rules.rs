@@ -978,7 +978,11 @@ pub(crate) fn compile_from_config(
     profile_name: Option<&str>,
     depth: crate::terminfo::ColorDepth,
 ) -> Result<Compiled> {
-    let (effective, path, source) = crate::profiles::resolve_active(config, profile_name)?;
+    // The profile's own `theme` is resolved by `lib`/`reload` for the
+    // precedence chain; the TUI passes the explicit `theme_name` it already
+    // resolved, so the 4th tuple element is ignored here.
+    let (effective, path, source, _profile_theme) =
+        crate::profiles::resolve_active(config, profile_name)?;
     Compiled::load_with_theme(Some(&effective), path.as_deref(), theme_name, source, depth)
 }
 
