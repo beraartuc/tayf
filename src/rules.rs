@@ -59,7 +59,7 @@ pub(crate) struct BuiltinRule {
     /// non-built-in compile failures are `Config` / `Profile`) and in
     /// `resolve_group_styles_for_rule` (`Theme` → collected
     /// `Vec<ThemeRuleError>` for [`Error::ThemeValidation`]; `UserConfig` →
-    /// fail-fast [`Error::Config`]; `EmbeddedProfile` → collected
+    /// fail-fast [`Error::Config`]; `DiskProfile` → collected
     /// `Vec<ProfileRuleError>` for [`Error::ProfileValidation`]).
     ///
     /// Since the user-config layer applies AFTER the theme layer and
@@ -110,7 +110,7 @@ pub(crate) struct BuiltinRule {
 ///
 /// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), Rev2 Decision 27
 /// (REPLACE semantics for `styles` map overlays), v0.5.2 §4.3
-/// (`EmbeddedProfile` variant for `[[append_rules]]` provenance).
+/// (`DiskProfile` variant for `[[append_rules]]` provenance).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuleSource {
     /// Canonical pattern shipped by tayf. Compile failures are
@@ -126,12 +126,11 @@ pub(crate) enum RuleSource {
     /// into a `Vec<ThemeRuleError>` for a single fail-collected
     /// `Error::ThemeValidation` at loop end (matches v0.3.4 contract).
     Theme,
-    /// A rule appended by a profile via `[[append_rules]]`. Like
-    /// [`Self::UserConfig`] it is user-controllable; like [`Self::Theme`]
-    /// it is not the original built-in. Range/key errors collect into a
-    /// `Vec<ProfileRuleError>` for a single fail-collected
-    /// [`Error::ProfileValidation`] at loop end. v0.5.2.
-    EmbeddedProfile,
+    /// A rule supplied by a disk-loaded profile
+    /// (`~/.config/tayf/profiles/<name>.toml`). Range/key errors collect
+    /// into a `Vec<ProfileRuleError>` → `Error::ProfileValidation`; compile
+    /// errors → `Error::Profile` with the profile path.
+    DiskProfile,
 }
 
 /// File extensions colored by the `filename` built-in rule. See spec §3.8 for
@@ -792,7 +791,7 @@ impl Compiled {
         }
 
         // Step 4 (v0.5.2 §5.4) — profile.append_rules. Each entry is a NEW
-        // rule with `RuleSource::EmbeddedProfile` so range/key validation
+        // rule with `RuleSource::DiskProfile` so range/key validation
         // routes into the fail-collected `Vec<ProfileRuleError>` ->
         // `Error::ProfileValidation` envelope. Name-collision checks
         // (with built-ins and within `append_rules`) were performed in
@@ -821,7 +820,7 @@ impl Compiled {
                     // Data-driven via ProfileRule.priority (spec §2.1.B4 / Task 6).
                     // Defaults to 100 (interior tier) when omitted in TOML.
                     priority: ar.priority.unwrap_or(100),
-                    source: RuleSource::EmbeddedProfile,
+                    source: RuleSource::DiskProfile,
                     enabled: true,
                 });
             }
@@ -1011,16 +1010,16 @@ fn profile_name_from_path_label(label: &str) -> String {
 ///   for theme-supplied rules — themes flow through the same
 ///   `apply_user_rules` path and reuse the `Config` envelope so the
 ///   message points at the right source file).
-/// - [`RuleSource::EmbeddedProfile`] → [`Error::Profile`] with
+/// - [`RuleSource::DiskProfile`] → [`Error::Profile`] with
 ///   `ProfileErrorKind::RegexCompile`. Single-error fail-fast (the
 ///   profile-rules fail-collect path is for *styles-key* errors, not
 ///   pattern-compile errors — a malformed regex is a load-fatal issue
 ///   per spec §6.4 #6).
 ///
-/// `profile_name` + `profile_path` are `None` whenever `source != EmbeddedProfile`;
+/// `profile_name` + `profile_path` are `None` whenever `source != DiskProfile`;
 /// they are populated by the merged-rules caller (Phase 4 Task 11) once the
 /// profile load is threaded through. Phase 3 leaves them `None` because no
-/// caller produces `EmbeddedProfile` rules yet.
+/// caller produces `DiskProfile` rules yet.
 fn compile_error_for(
     rule: &BuiltinRule,
     config_path: Option<&str>,
@@ -1034,7 +1033,7 @@ fn compile_error_for(
             let path = config_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
             Error::config_regex(path.to_string(), &rule.name, err)
         }
-        RuleSource::EmbeddedProfile => Error::Profile {
+        RuleSource::DiskProfile => Error::Profile {
             name: profile_name.unwrap_or("<unknown>").to_owned(),
             source_path: profile_path.unwrap_or("").to_owned(),
             kind: crate::error::ProfileErrorKind::RegexCompile {
@@ -1168,7 +1167,7 @@ fn compile_merged_rules(
 ///
 /// Spec ref: §3.6, §1.3.5, Rev2 I-1, Rev2 Decision 27, v0.5.0 §2.3, v0.5.2 §6.4.
 // reason: explicit three-step dispatch (zero / all-digit / named) × four
-// provenance arms (Theme / UserConfig / EmbeddedProfile / Builtin) × four
+// provenance arms (Theme / UserConfig / DiskProfile / Builtin) × four
 // error paths (zero, malformed, out-of-range, name-unknown, duplicate-target)
 // cannot collapse without sacrificing readability or duplicating logic across
 // helpers. The unreachable!() arms carry CLAUDE.md §2-mandated reason
@@ -1210,7 +1209,7 @@ fn resolve_group_styles_for_rule(
     // based dispatch via `Compiled.individuals`.
     let Ok(regex) = regex::bytes::Regex::new(&rule.pattern) else {
         match source {
-            RuleSource::UserConfig | RuleSource::Theme | RuleSource::EmbeddedProfile => {
+            RuleSource::UserConfig | RuleSource::Theme | RuleSource::DiskProfile => {
                 // Pattern compilation failures are surfaced earlier in the
                 // load pipeline (`compile_merged_rules` runs the
                 // size-limited compile via `regex::bytes::RegexBuilder`);
@@ -1255,7 +1254,7 @@ fn resolve_group_styles_for_rule(
                         message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
-                RuleSource::EmbeddedProfile => {
+                RuleSource::DiskProfile => {
                     profile_errors.push(crate::error::ProfileRuleError {
                         rule_name: rule.name.clone(),
                         kind: crate::error::ProfileRuleErrorKind::StylesKey(
@@ -1266,7 +1265,7 @@ fn resolve_group_styles_for_rule(
                 }
                 RuleSource::Builtin => unreachable!(
                     "Builtin rules ship with styles_override == None; reached the \
-                     map iteration only for UserConfig/Theme/EmbeddedProfile. \
+                     map iteration only for UserConfig/Theme/DiskProfile. \
                      styles_override on a Builtin would be a constructor bug."
                 ),
             }
@@ -1297,7 +1296,7 @@ fn resolve_group_styles_for_rule(
                             message: format!("rule '{}': {kind}", rule.name),
                         });
                     }
-                    RuleSource::EmbeddedProfile => {
+                    RuleSource::DiskProfile => {
                         profile_errors.push(crate::error::ProfileRuleError {
                             rule_name: rule.name.clone(),
                             kind: crate::error::ProfileRuleErrorKind::StylesKey(
@@ -1311,7 +1310,7 @@ fn resolve_group_styles_for_rule(
                     RuleSource::Builtin => unreachable!(
                         "Builtin rules ship with grammar-valid styles keys (validated at \
                          constructor time via builtin_rules()); this arm is reachable only \
-                         through UserConfig/Theme/EmbeddedProfile paths handled above."
+                         through UserConfig/Theme/DiskProfile paths handled above."
                     ),
                 }
             };
@@ -1341,7 +1340,7 @@ fn resolve_group_styles_for_rule(
                             message: format!("rule '{}': {kind}", rule.name),
                         });
                     }
-                    RuleSource::EmbeddedProfile => {
+                    RuleSource::DiskProfile => {
                         profile_errors.push(crate::error::ProfileRuleError {
                             rule_name: rule.name.clone(),
                             kind: crate::error::ProfileRuleErrorKind::StylesKey(
@@ -1356,7 +1355,7 @@ fn resolve_group_styles_for_rule(
                     RuleSource::Builtin => unreachable!(
                         "Builtin rules ship with capture-group indices < captures_len \
                          (validated at constructor time via builtin_rules()); this arm is \
-                         reachable only through UserConfig/Theme/EmbeddedProfile paths handled above."
+                         reachable only through UserConfig/Theme/DiskProfile paths handled above."
                     ),
                 }
             }
@@ -1395,7 +1394,7 @@ fn resolve_group_styles_for_rule(
                             message: format!("rule '{}': {kind}", rule.name),
                         });
                     }
-                    RuleSource::EmbeddedProfile => {
+                    RuleSource::DiskProfile => {
                         profile_errors.push(crate::error::ProfileRuleError {
                             rule_name: rule.name.clone(),
                             kind: crate::error::ProfileRuleErrorKind::StylesKey(
@@ -1456,7 +1455,7 @@ fn resolve_group_styles_for_rule(
                         message: format!("rule '{}': {kind}", rule.name),
                     });
                 }
-                RuleSource::EmbeddedProfile => {
+                RuleSource::DiskProfile => {
                     profile_errors.push(crate::error::ProfileRuleError {
                         rule_name: rule.name.clone(),
                         kind: crate::error::ProfileRuleErrorKind::StylesKey(
@@ -3241,7 +3240,7 @@ fg = "red"
     }
 
     // v0.5.2 Phase 3 Task 9 dispatch tests — exercise the
-    // `RuleSource::EmbeddedProfile` arm of `resolve_group_styles_for_rule`
+    // `RuleSource::DiskProfile` arm of `resolve_group_styles_for_rule`
     // through `compile_merged_rules` so the assertions target the
     // production envelope `Error::ProfileValidation` (not the raw
     // `profile_errors` vec). Spec §6.4 #7 + plan A.12.
@@ -3249,8 +3248,8 @@ fg = "red"
     /// Construct a single-rule `Vec<BuiltinRule>` with the supplied profile-
     /// sourced overrides + run `compile_merged_rules` to surface the
     /// `Error::ProfileValidation` envelope. Mirrors `dispatch_user_config_single_style`
-    /// but for the `EmbeddedProfile` path: every rule has
-    /// `source = RuleSource::EmbeddedProfile`, and the diagnostic profile
+    /// but for the `DiskProfile` path: every rule has
+    /// `source = RuleSource::DiskProfile`, and the diagnostic profile
     /// context (`profile_name`, `profile_path`) is threaded through the
     /// signature added in Task 8.
     fn dispatch_embedded_profile_single_style(
@@ -3269,7 +3268,7 @@ fg = "red"
             group_styles: Vec::new(),
             styles_override: Some(overrides),
             priority: 0,
-            source: RuleSource::EmbeddedProfile,
+            source: RuleSource::DiskProfile,
             enabled: true,
         };
         compile_merged_rules(
@@ -3449,7 +3448,7 @@ fg = "red"
             group_styles: Vec::new(),
             styles_override: Some(overrides),
             priority: 0,
-            source: RuleSource::EmbeddedProfile,
+            source: RuleSource::DiskProfile,
             enabled: true,
         };
         let err = compile_merged_rules(
@@ -3495,7 +3494,7 @@ fg = "red"
         // paths:
         //   - RuleSource::Theme: ThemeRuleErrorKind.to_string()
         //   - RuleSource::UserConfig: ThemeRuleErrorKind.to_string()
-        //   - RuleSource::EmbeddedProfile:
+        //   - RuleSource::DiskProfile:
         //     ProfileRuleErrorKind::StylesKey(inner).to_string()
         // The third must equal the first two — the StylesKey wrapper
         // delegates via `write!(f, "{inner}")`. Spec §6.3 cross-path
@@ -3562,7 +3561,7 @@ fg = "red"
         // Defensive: every rule produced by builtin_rules() carries
         // `source == RuleSource::Builtin`. If a profile-active path
         // accidentally fired on the None branch, at least one rule's
-        // `source` would have flipped to EmbeddedProfile (or the rule
+        // `source` would have flipped to DiskProfile (or the rule
         // count would have shifted) — both fail the assertions above.
         for r in builtin_rules() {
             assert_eq!(

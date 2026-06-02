@@ -24,7 +24,7 @@
 
 // v0.5.2 Phase 2 lands the foundation: types + load + validate_profile.
 // Phase 5 (lib.rs orchestration + reload.rs hot-reload) lights up
-// `profiles::load`; Phase 3 (`RuleSource::EmbeddedProfile` dispatch)
+// `profiles::load`; Phase 3 (`RuleSource::DiskProfile` dispatch)
 // lights up `validate_profile` via the call from `load`. The
 // module-level dead_code allow is no longer required.
 
@@ -320,7 +320,7 @@ pub(crate) fn load_with(
 ///
 /// Phase 2 (capture-group key dispatch on `append_rules.styles` maps)
 /// happens later in `Compiled::load_with_theme` — covered by
-/// `RuleSource::EmbeddedProfile` dispatch arms (v0.5.2 Phase 3 work).
+/// `RuleSource::DiskProfile` dispatch arms (v0.5.2 Phase 3 work).
 ///
 /// # Errors
 /// Returns [`Error::ProfileValidation`] with at least one

@@ -459,7 +459,7 @@ pub(crate) fn apply_user_rules(
 /// in `Compiled::load_with_theme` calls through with
 /// [`crate::rules::RuleSource::Theme`]; profile `[[append_rules]]` (Phase 4
 /// Task 11) will call through with
-/// [`crate::rules::RuleSource::EmbeddedProfile`].
+/// [`crate::rules::RuleSource::DiskProfile`].
 ///
 /// Spec ref: §3.6, Rev2 I-1 (fail-collected theme routing), v0.5.2 §4.45.
 pub(crate) fn apply_user_rules_with_source(
