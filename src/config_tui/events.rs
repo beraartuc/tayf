@@ -627,8 +627,7 @@ pub(crate) fn rule_id_display_name(rule_id: &crate::config_tui::edit::RuleId) ->
     match rule_id {
         crate::config_tui::edit::RuleId::Builtin(n) => (*n).to_owned(),
         crate::config_tui::edit::RuleId::UserConfig(n) => n.clone(),
-        crate::config_tui::edit::RuleId::Embedded { rule, .. }
-        | crate::config_tui::edit::RuleId::DiskProfile { rule, .. } => rule.clone(),
+        crate::config_tui::edit::RuleId::DiskProfile { rule, .. } => rule.clone(),
     }
 }
 
@@ -1074,8 +1073,7 @@ fn bind_color_to_selected_rule(app: &mut App, color: crate::style::Color) {
     let rule_name = match &rule_id {
         crate::config_tui::edit::RuleId::Builtin(n) => (*n).to_owned(),
         crate::config_tui::edit::RuleId::UserConfig(n) => n.clone(),
-        crate::config_tui::edit::RuleId::Embedded { rule, .. }
-        | crate::config_tui::edit::RuleId::DiskProfile { rule, .. } => rule.clone(),
+        crate::config_tui::edit::RuleId::DiskProfile { rule, .. } => rule.clone(),
     };
     let rule_edit = app.edits.rules.entry(rule_id).or_default();
     let style_entry =
@@ -1275,7 +1273,7 @@ pub(crate) fn pattern_for_rule_id(rule_id: &crate::config_tui::edit::RuleId, app
             .find(|r| &r.name == name)
             .and_then(|r| r.pattern.clone())
             .unwrap_or_default(),
-        RuleId::Embedded { .. } | RuleId::DiskProfile { .. } => String::new(),
+        RuleId::DiskProfile { .. } => String::new(),
     }
 }
 

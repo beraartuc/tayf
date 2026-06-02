@@ -25,7 +25,6 @@ pub(crate) fn render(
     let rule_name = match rule_id {
         RuleId::Builtin(n) => format!("(builtin) {n}"),
         RuleId::UserConfig(n) => format!("(user) {n}"),
-        RuleId::Embedded { rule, profile } => format!("(profile {profile}) {rule}"),
         RuleId::DiskProfile { rule, profile } => format!("(profile {profile}) {rule}"),
     };
     let title = format!("Edit regex - {rule_name} (Enter commits, Esc cancels)");

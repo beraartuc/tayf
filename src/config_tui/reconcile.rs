@@ -444,7 +444,7 @@ fn apply_deletion(doc: &mut DocumentMut, rule_id: &RuleId) -> Result<(), Reconci
             }
             Ok(())
         }
-        RuleId::Builtin(_) | RuleId::Embedded { .. } | RuleId::DiskProfile { .. } => {
+        RuleId::Builtin(_) | RuleId::DiskProfile { .. } => {
             Err(ReconcileError::UnsupportedDeletionTarget { rule_id: format!("{rule_id:?}") })
         }
     }
@@ -473,9 +473,9 @@ pub(crate) fn apply_edits(
                     apply_enabled_flip_by_name(&mut working, name, en)?;
                 }
             }
-            RuleId::Embedded { rule, .. } | RuleId::DiskProfile { rule, .. } => {
-                // Symmetric enabled-flip persistence for embedded / disk-profile
-                // rule sources. Pattern/style remain preview-only.
+            RuleId::DiskProfile { rule, .. } => {
+                // Enabled-flip persistence for disk-profile rule sources.
+                // Pattern/style remain preview-only.
                 if let Some(en) = rule_edit.enabled {
                     apply_enabled_flip_by_name(&mut working, rule, en)?;
                 }

@@ -856,12 +856,6 @@ pub mod __test_api {
         app.0.edits.deleted.insert(RuleId::UserConfig(name.to_owned()));
     }
 
-    /// Stage a `RuleId::Embedded { profile, rule }` delete.
-    pub fn stage_delete_embedded(app: &mut AppHandle, profile: &'static str, rule: &str) {
-        use crate::config_tui::edit::RuleId;
-        app.0.edits.deleted.insert(RuleId::Embedded { profile, rule: rule.to_owned() });
-    }
-
     /// Stage a `RuleId::DiskProfile { profile, rule }` delete.
     pub fn stage_delete_disk_profile(app: &mut AppHandle, profile: &str, rule: &str) {
         use crate::config_tui::edit::RuleId;
@@ -995,17 +989,9 @@ pub mod __test_api {
         app.0.toast.as_ref().map(|t| t.text.clone())
     }
 
-    /// Raw embedded TOML source for a built-in profile. The embedded profile
-    /// library is retired (v0.12.0) — the six domain rules are now built-ins —
-    /// so this always returns `None`. Retained as a stable `__test_api` symbol
-    /// until the integration suite drops its last caller.
-    #[must_use]
-    pub fn embedded_profile_source(_name: &str) -> Option<&'static str> {
-        None
-    }
-
-    /// Raw embedded TOML source for a built-in theme — symmetric to
-    /// [`embedded_profile_source`].
+    /// Raw embedded TOML source for a built-in theme. Themes ship an
+    /// embedded registry (unlike profiles, which are disk-only); this
+    /// exposes that registry to the integration suite.
     #[must_use]
     pub fn embedded_theme_source(name: &str) -> Option<&'static str> {
         crate::themes::embedded_source(name)

@@ -115,7 +115,7 @@ pub(crate) fn compile_pending(
         let name_owned: String = match rule_id {
             RuleId::UserConfig(n) => n.clone(),
             RuleId::Builtin(n) => (*n).to_owned(),
-            RuleId::Embedded { rule, .. } | RuleId::DiskProfile { rule, .. } => rule.clone(),
+            RuleId::DiskProfile { rule, .. } => rule.clone(),
         };
         // Pattern overlay None semantics: Some(_) → set; None → no-op.
         let new_pat = rule_edit.pattern.clone();
@@ -202,9 +202,8 @@ pub(crate) fn compile_pending(
                     });
                 }
             }
-            RuleId::Embedded { rule: name, .. } | RuleId::DiskProfile { rule: name, .. } => {
-                // Same `enabled = false` suppression for embedded / disk-profile
-                // rules. Both have `rule: String`, so they share this arm.
+            RuleId::DiskProfile { rule: name, .. } => {
+                // `enabled = false` suppression for disk-profile rules.
                 let name: &str = name.as_str();
                 if let Some(r) = user_rules.iter_mut().find(|r| r.name == name) {
                     r.enabled = false;

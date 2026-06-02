@@ -3,14 +3,6 @@
 //! Accumulates in-TUI mutations not yet on disk. `is_dirty()` is
 //! consulted by the quit-confirm modal and the save button.
 
-// reason: RuleId::{Embedded, DiskProfile} variants are constructed
-// inside compile_pending's overlay loop (v0.6.1 §3.2) and read by
-// reconcile.rs + events.rs, but no top-level tab still constructs
-// them via user keystrokes (profile/theme override-copy lands in
-// v0.8+ on community demand). StyleKey::{Numbered, Named} are future capture-group
-// style slots (v0.8+ on community demand). Module-level allow until those TUI wires land.
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 
 use crate::style::Color;
@@ -21,13 +13,17 @@ use crate::style::Color;
 pub(crate) enum RuleId {
     Builtin(&'static str),
     UserConfig(String),
-    Embedded { profile: &'static str, rule: String },
     DiskProfile { profile: String, rule: String },
 }
 
 /// One per-capture-group style slot. `Default` = the rule's
 /// top-level `style = { ... }`; `Numbered(i)` / `Named(name)` =
 /// `styles."1"` / `styles."matchname"` entry.
+// reason: only `Default` is constructed today. `Numbered`/`Named`
+// are the future capture-group style slots — no TUI keystroke wires
+// them yet (gated to v0.8+ on community demand). Variant-scoped allow
+// so the live `RuleId`/`Default` paths stay under full dead-code lint.
+#[allow(dead_code)]
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(crate) enum StyleKey {
     Default,
