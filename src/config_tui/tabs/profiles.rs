@@ -12,8 +12,9 @@
 //!     `default` profile cannot be deleted.
 //!
 //! In-TUI editing of a named profile's rules is deferred (spec §6.3): all
-//! rule edits target `config.toml` (the default profile). The named-active
-//! affordance (spec §6.3) lands in the following task of this group.
+//! rule edits target `config.toml` (the default profile). When a named
+//! profile is active the Detail pane shows an affordance to edit its file
+//! directly.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -93,6 +94,7 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
     let names = filtered_names(app);
     let selected = names.get(app.focus.profiles.selected_idx).cloned().unwrap_or_default();
+    let active = active_profile_label(app);
 
     let body = if selected.is_empty() {
         "(no profile selected)".to_owned()
@@ -106,6 +108,18 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
             "Profile: {selected}\n\nSource: ~/.config/tayf/profiles/{selected}.toml\n\n\
              Press Space to set as active\nPress 'd' to delete this profile\nPress 'n' to \
              create a new profile"
+        )
+    };
+
+    // Affordance (spec §6.3): when a NAMED profile is active, the TUI's rule
+    // edits still target the default profile (config.toml). Editing the named
+    // profile's rules in-TUI is deferred — the user edits its file directly.
+    let body = if active == DEFAULT_PROFILE_LABEL {
+        body
+    } else {
+        format!(
+            "{body}\n\nActive profile: {active} — edit its file directly; rule edits here \
+             target the default profile (config.toml)."
         )
     };
 
@@ -224,10 +238,28 @@ mod tests {
     use super::*;
     use crate::config_tui::app::{App, TuiEnv};
     use crate::config_tui::snapshot::ConfigSnapshot;
+    use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::Terminal;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    fn render_to_string(app: &App) -> String {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("backend");
+        terminal.draw(|f| render(f, Rect::new(0, 0, 80, 24), app)).expect("draw");
+        let buf = terminal.backend().buffer();
+        let area = buf.area;
+        let mut out = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
     }
 
     /// Build a deterministic Profiles-tab app rooted at `config_root` (so
@@ -396,6 +428,32 @@ mod tests {
             app.toast.as_ref().map(|t| t.text.as_str()),
             Some("The default profile (config.toml) cannot be deleted"),
             "default delete warns instead"
+        );
+    }
+
+    // ---- Task 5.3: affordance when a named profile is active ----------
+
+    #[test]
+    fn affordance_shows_when_named_profile_active() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        write_disk_profile(tmp.path(), "work", "");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        app.edits.general.profile = Some(Some("work".to_owned()));
+        let rendered = render_to_string(&app);
+        assert!(
+            rendered.contains("edit its file directly"),
+            "named-active affordance must mention editing the file directly; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn no_affordance_when_default_active() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (app, _g) = app_on_profiles_tab(tmp.path());
+        let rendered = render_to_string(&app);
+        assert!(
+            !rendered.contains("edit its file directly"),
+            "default-active must not show the named-profile affordance; got:\n{rendered}"
         );
     }
 }
