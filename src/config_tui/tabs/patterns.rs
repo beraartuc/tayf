@@ -168,7 +168,8 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
                 .title("Patterns")
                 .title_style(accent.header()),
         )
-        .highlight_style(accent.selection());
+        .highlight_style(accent.selection())
+        .highlight_symbol("▶ ");
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -665,5 +666,65 @@ mod tests {
             None,
             "out-of-range selectable returns None"
         );
+    }
+
+    /// Selection caret: the selected row's rendered text contains the caret
+    /// symbol; a non-selected row does not.
+    ///
+    /// Scans the entire render buffer for the `▶` symbol to locate the
+    /// caret regardless of exact x/y coordinates (avoids fragile
+    /// hardcoded offsets). Asserts exactly one row carries the caret
+    /// (selected) and that the row also carries the expected rule name
+    /// text, confirming the caret is on the right item.
+    #[test]
+    fn selected_row_renders_caret_non_selected_row_does_not() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut app = App::default_for_test();
+        // Select "timestamp" (selectable index 1 in the default catalog).
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "timestamp");
+
+        // Use a wide terminal (100×40) so the list pane has enough room.
+        let mut term = Terminal::new(TestBackend::new(100, 40)).expect("backend");
+        term.draw(|f| render(f, ratatui::layout::Rect::new(0, 0, 100, 40), &app)).expect("draw");
+        let buf = term.backend().buffer();
+
+        // Collect every rendered row (full width) as a plain-text string.
+        let rows: Vec<String> = (0u16..40)
+            .map(|y| (0u16..100).map(|x| buf[(x, y)].symbol().to_owned()).collect())
+            .collect();
+
+        // Find rows containing the caret symbol.
+        let caret_rows: Vec<usize> =
+            rows.iter().enumerate().filter(|(_, r)| r.contains('▶')).map(|(i, _)| i).collect();
+
+        // Exactly one row carries the caret.
+        assert_eq!(
+            caret_rows.len(),
+            1,
+            "exactly one list row must carry the caret '▶'; found {}: {:?}",
+            caret_rows.len(),
+            caret_rows
+                .iter()
+                .map(|&i| format!("row {i}: {:?}", &rows[i][..rows[i].len().min(50)]))
+                .collect::<Vec<_>>()
+        );
+
+        // That row also contains the selected rule name.
+        let caret_row_text = &rows[caret_rows[0]];
+        assert!(
+            caret_row_text.contains("timestamp"),
+            "caret row must contain 'timestamp' (the selected rule); got: {caret_row_text:?}"
+        );
+
+        // A row containing "permission" (unselected) must NOT carry the caret.
+        let perm_row = rows.iter().find(|r| r.contains("[x] permission"));
+        if let Some(perm_text) = perm_row {
+            assert!(
+                !perm_text.contains('▶'),
+                "non-selected 'permission' row must not carry the caret; got: {perm_text:?}"
+            );
+        }
     }
 }

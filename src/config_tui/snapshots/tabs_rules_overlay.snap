@@ -1,24 +1,24 @@
 ┌Patterns──────────────────────┐┌Detail────────────────────────────────────────┐
-│── Builtin ──                 ││Pattern: permission                           │
-│[x] permission                ││                                              │
-│[x] timestamp                 ││Source: built-in                              │
-│[x] uuid                      ││Regex: (?:^|\s)(?P<perm_type>[dlcbps-])(?P<per│
-│[x] url                       ││Color:     #83838d                            │
-│[x] email                     ││Status: enabled                               │
-│[x] ipv4                      ││                                              │
-│[x] ipv6                      ││Press 'o' to override (copy into user-config s│
-│[x] mac                       ││Press Space to enable/disable this rule       │
-│[x] log_level                 ││Press 'e' to edit the regex source (inline edi│
-│[x] filename                  ││Press 'c' to open the color picker            │
-│[x] fqdn                      ││                                              │
-│[x] duration                  ││                                              │
-│[x] instance_id               ││                                              │
-│[ ] region                    ││                                              │
-│[x] arn                       ││                                              │
-│[ ] container_id              ││                                              │
-│[ ] image_tag                 ││                                              │
-│[ ] pod_name                  ││                                              │
-│── User ──                    ││                                              │
+│  ── Builtin ──               ││Pattern: permission                           │
+│▶ [x] permission              ││                                              │
+│  [x] timestamp               ││Source: built-in                              │
+│  [x] uuid                    ││Regex: (?:^|\s)(?P<perm_type>[dlcbps-])(?P<per│
+│  [x] url                     ││Color:     #83838d                            │
+│  [x] email                   ││Status: enabled                               │
+│  [x] ipv4                    ││                                              │
+│  [x] ipv6                    ││Press 'o' to override (copy into user-config s│
+│  [x] mac                     ││Press Space to enable/disable this rule       │
+│  [x] log_level               ││Press 'e' to edit the regex source (inline edi│
+│  [x] filename                ││Press 'c' to open the color picker            │
+│  [x] fqdn                    ││                                              │
+│  [x] duration                ││                                              │
+│  [x] instance_id             ││                                              │
+│  [ ] region                  ││                                              │
+│  [x] arn                     ││                                              │
+│  [ ] container_id            ││                                              │
+│  [ ] image_tag               ││                                              │
+│  [ ] pod_name                ││                                              │
+│  ── User ──                  ││                                              │
 │                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
   n:new  e:edit  c:color  o:override  r:reset  d:delete  Space:on/off           

@@ -87,7 +87,8 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
                 .title("Profiles")
                 .title_style(accent.header()),
         )
-        .highlight_style(accent.selection());
+        .highlight_style(accent.selection())
+        .highlight_symbol("▶ ");
     frame.render_stateful_widget(list, area, &mut state);
 }
 

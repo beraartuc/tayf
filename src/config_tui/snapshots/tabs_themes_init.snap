@@ -1,7 +1,7 @@
 ┌Themes (built-in)─────────────┐┌Detail────────────────────────────────────────┐
-│  classic                     ││Theme: classic                                │
-│  dark                        ││                                              │
-│  light                       ││Source: built-in                              │
+│▶   classic                   ││Theme: classic                                │
+│    dark                      ││                                              │
+│    light                     ││Source: built-in                              │
 │                              ││                                              │
 │                              ││Press Space to set as active                  │
 │                              ││Press 'o' to override (copy to ~/.config/tayf/│
