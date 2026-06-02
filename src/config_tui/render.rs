@@ -9,12 +9,32 @@ use ratatui::Frame;
 use crate::config_tui::app::{App, Tab};
 
 /// Default sample input shown in the live-preview strip. Spec §9.3
-/// (Unicode coverage + collision-avoidance N-7 fold).
+/// (Unicode coverage + collision-avoidance N-7 fold, all-18-builtins coverage).
+///
+/// Token → built-in rule map:
+/// - `timestamp`    — `[2026-05-26T…Z]`
+/// - `log_level`    — `INFO` / `WARN` / `ERROR` / `DEBUG`
+/// - `ipv4`         — `192.168.1.42`
+/// - `ipv6`         — `2001:db8::1`
+/// - `mac`          — `aa:bb:cc:dd:ee:ff`
+/// - `url`          — `https://api.example.com`
+/// - `duration`     — `12ms`
+/// - `region`       — `us-east-1`          (default-off; present for preview when enabled)
+/// - `instance_id`  — `i-0abcd1234567890ef`
+/// - `email`        — `ops@example.com`
+/// - `fqdn`         — `gateway.internal`
+/// - `filename`     — `config.toml`
+/// - `arn`          — `arn:aws:iam:::role/Admin`
+/// - `pod_name`     — `nginx-deployment-7c79c4bf97-9hk6r`  (default-off)
+/// - `image_tag`    — `gcr.io/app/api:1.21`                (default-off)
+/// - `container_id` — `abc123def456`                       (default-off)
+/// - `uuid`         — `550e8400-e29b-41d4-a716-446655440000`
+/// - `permission`   — ` -rw-r--r-- ` (requires surrounding whitespace)
 pub(crate) const DEFAULT_PREVIEW_SAMPLE: &str =
-    "[2026-05-26T17:18:42Z] INFO  192.168.1.42 GET /api/health 200 OK 12ms\n\
-[2026-05-26T17:18:43Z] WARN  pod-frontend-a1b2c3d4e5 restart count=3 reason=OOMKilled\n\
-[2026-05-26T17:18:44Z] ERROR conn refused gateway.internal — fallback to read replica\n\
-[2026-05-26T17:18:45Z] DEBUG user=ñame action=façade pid=4096 elapsed=完了\n";
+    "[2026-05-26T17:18:42Z] INFO 192.168.1.42 2001:db8::1 aa:bb:cc:dd:ee:ff GET https://api.example.com 12ms\n\
+[2026-05-26T17:18:43Z] WARN us-east-1 i-0abcd1234567890ef ops@example.com via gateway.internal config.toml\n\
+[2026-05-26T17:18:44Z] ERROR arn:aws:iam:::role/Admin nginx-deployment-7c79c4bf97-9hk6r gcr.io/app/api:1.21\n\
+[2026-05-26T17:18:45Z] DEBUG abc123def456 550e8400-e29b-41d4-a716-446655440000 -rw-r--r-- ñame façade 完了\n";
 
 /// Top-level draw. Dispatches narrow-term degradation gate first.
 pub(crate) fn frame(frame: &mut Frame, app: &App) {
@@ -196,6 +216,30 @@ mod tests {
         assert!(
             !DEFAULT_PREVIEW_SAMPLE.contains("10.0.0.5:5432"),
             "default sample must not include the v0.5.5 collision shape"
+        );
+    }
+
+    /// Strong oracle: every built-in rule's pattern must have at least one
+    /// matching example token in `DEFAULT_PREVIEW_SAMPLE`. This guarantees
+    /// full 18-of-18 coverage and will fail loudly if patterns change.
+    #[test]
+    fn default_preview_sample_covers_all_builtin_rules() {
+        use regex::bytes::Regex;
+        let rules = crate::rules::builtin_rules();
+        let bytes = DEFAULT_PREVIEW_SAMPLE.as_bytes();
+        let mut failures: Vec<String> = Vec::new();
+        for rule in &rules {
+            let re = Regex::new(&rule.pattern).unwrap_or_else(|e| {
+                panic!("builtin '{}' pattern failed to compile: {e}", rule.name)
+            });
+            if !re.is_match(bytes) {
+                failures.push(rule.name.clone());
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "DEFAULT_PREVIEW_SAMPLE has no example for built-in rule(s): {failures:?}\n\
+             Add a matching token to the sample string."
         );
     }
 }
