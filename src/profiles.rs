@@ -94,23 +94,46 @@ pub(crate) fn resolve_active(
 /// user-editable profile file. `tayf_root` is the resolved
 /// `~/.config/tayf/` directory (see
 /// [`crate::config_tui::save::tayf_config_root`]).
-// reason: dead in production until the Profiles-tab create/delete rework wires
-// it (the `'o'` embedded-copy handler that used it was removed with the
-// embedded library); still exercised by the profiles unit tests.
+// reason: wired by the Profiles-tab create/delete handlers in the next task of
+// this group; exercised meanwhile by the profiles unit tests.
 #[allow(dead_code)]
 pub(crate) fn disk_path_with_root(tayf_root: &std::path::Path, name: &str) -> std::path::PathBuf {
     profiles_dir_with_root(tayf_root).join(format!("{name}.toml"))
 }
 
-/// `<tayf_root>/profiles/` — pure sibling of the env-resolved directory;
-/// used by integration tests that prefer a deterministic root over
-/// mutating `XDG_CONFIG_HOME`.
-// reason: dead in production until the Profiles-tab create/delete rework wires
-// it; still exercised by the profiles unit tests + the disk-profile
-// integration harness.
-#[allow(dead_code)]
+/// `<tayf_root>/profiles/` — sibling of the env-resolved directory. Used by
+/// the Profiles-tab listing + create/delete handlers and by integration
+/// tests that prefer a deterministic root over mutating `XDG_CONFIG_HOME`.
 pub(crate) fn profiles_dir_with_root(tayf_root: &std::path::Path) -> std::path::PathBuf {
     tayf_root.join("profiles")
+}
+
+/// List the `.toml` profile stems under `<tayf_root>/profiles/`, sorted
+/// case-insensitively. A missing directory yields an empty list (no disk
+/// profiles). Non-`.toml` entries, directories, and names that fail
+/// [`name_is_valid`] are skipped. Drives the Profiles-tab list (the caller
+/// prepends the synthetic `default` entry for `config.toml`).
+pub(crate) fn list_names_with_root(tayf_root: &std::path::Path) -> Vec<String> {
+    let dir = profiles_dir_with_root(tayf_root);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| {
+            let path = e.path();
+            if !path.is_file() {
+                return None;
+            }
+            if path.extension().and_then(|x| x.to_str()) != Some("toml") {
+                return None;
+            }
+            let stem = path.file_stem()?.to_str()?.to_owned();
+            name_is_valid(&stem).then_some(stem)
+        })
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names
 }
 
 /// Load a profile by name. Reads `$XDG_CONFIG_HOME` and `$HOME` from
@@ -525,6 +548,31 @@ unexpected_field = "this must fail"
         assert_eq!(
             profiles_dir_with_root(tayf_root),
             std::path::PathBuf::from("/tmp/example-config/tayf/profiles"),
+        );
+    }
+
+    #[test]
+    fn list_names_with_root_returns_empty_when_dir_missing() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        // profiles/ deliberately absent.
+        assert!(list_names_with_root(&tmp.path().join("tayf")).is_empty());
+    }
+
+    #[test]
+    fn list_names_with_root_lists_toml_stems_sorted_skips_non_toml() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let dir = tmp.path().join("tayf").join("profiles");
+        std::fs::create_dir_all(&dir).expect("mkdir profiles");
+        std::fs::write(dir.join("work.toml"), "").expect("write work");
+        std::fs::write(dir.join("Alpha.toml"), "").expect("write Alpha");
+        std::fs::write(dir.join("notes.txt"), "").expect("write notes.txt");
+        std::fs::create_dir_all(dir.join("subdir.toml")).expect("mkdir subdir.toml");
+
+        let names = list_names_with_root(&tmp.path().join("tayf"));
+        assert_eq!(
+            names,
+            vec!["Alpha".to_owned(), "work".to_owned()],
+            "case-insensitive sort, .toml files only, directories skipped"
         );
     }
 }

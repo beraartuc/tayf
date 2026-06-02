@@ -1,9 +1,9 @@
-┌Profiles (embedded)───────────┐┌Detail────────────────────────────────────────┐
-│                              ││(no profile selected)                         │
+┌Profiles──────────────────────┐┌Detail────────────────────────────────────────┐
+│● default                     ││Profile: default (config.toml)                │
 │                              ││                                              │
+│                              ││The default profile is config.toml's rule set │
 │                              ││                                              │
-│                              ││                                              │
-│                              ││                                              │
+│                              ││Press Space to make it active                 │
 │                              ││                                              │
 │                              ││                                              │
 │                              ││                                              │

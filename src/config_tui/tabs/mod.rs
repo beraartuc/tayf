@@ -56,6 +56,15 @@ mod tests {
 
     #[test]
     fn render_profiles_tab_init_matches_snapshot() {
+        // The Profiles list reads `~/.config/tayf/profiles/` live, so scope
+        // the env to an empty tempdir for a deterministic golden (only the
+        // synthetic `default` entry) regardless of the dev/CI machine's real
+        // `~/.config/tayf/`. Env mutation is serialized + save/restored
+        // (dependency-free; mirrors the env-determinism guidance for TUI
+        // tests). XDG_CONFIG_HOME takes precedence over HOME in
+        // `tayf_config_root`, so pointing it at an empty dir suffices.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let _guard = crate::config_tui::tabs::profiles::scoped_empty_config_root(tmp.path());
         let mut app = App::default_for_test();
         app.tab = Tab::Profiles;
         assert_render_snapshot(80, 24, &app, render, "tabs_profiles_init");

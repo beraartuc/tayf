@@ -200,8 +200,14 @@ impl Toast {
     }
 }
 
-/// Catalog — read-only enumeration of available rules / themes /
-/// profiles. Built once at `App` init from existing tayf accessors.
+/// Catalog — read-only enumeration of available rules / themes. Built once
+/// at `App` init from existing tayf accessors.
+///
+/// Profiles are NOT cached here: the Profiles tab computes its list fresh
+/// from disk on every render/dispatch (via
+/// [`crate::config_tui::tabs::profiles::list_profile_names`]) so a profile
+/// created or deleted in-session is reflected immediately without a Catalog
+/// rebuild.
 // reason: field names must carry their category prefix for clarity even though
 // they share the `_names` postfix — renaming would obscure the domain.
 #[allow(clippy::struct_field_names)]
@@ -209,7 +215,6 @@ impl Toast {
 pub(crate) struct Catalog {
     pub(crate) builtin_rule_names: Vec<&'static str>,
     pub(crate) builtin_theme_names: Vec<&'static str>,
-    pub(crate) embedded_profile_names: Vec<&'static str>,
 }
 
 /// Live-preview state. `compiled` is the rule set the preview applies;
@@ -349,10 +354,6 @@ impl App {
     pub(crate) fn from_snapshot(snapshot: ConfigSnapshot, tui_env: TuiEnv) -> Self {
         let builtin_rule_names: Vec<&'static str> = crate::rules::BUILTIN_NAMES.to_vec();
         let builtin_theme_names: Vec<&'static str> = crate::themes::names().to_vec();
-        // The embedded profile library is retired (v0.12.0): the six domain
-        // rules are now built-ins. The Profiles tab lists disk profiles only
-        // (full disk listing lands in the Profiles-tab rework). Empty for now.
-        let embedded_profile_names: Vec<&'static str> = Vec::new();
 
         let config_theme = snapshot.parsed.theme.as_deref();
         let profile = snapshot.parsed.profile.as_deref();
@@ -382,7 +383,7 @@ impl App {
         let mut app = Self {
             snapshot,
             edits: PendingEdits::default(),
-            catalog: Catalog { builtin_rule_names, builtin_theme_names, embedded_profile_names },
+            catalog: Catalog { builtin_rule_names, builtin_theme_names },
             preview,
             tui_env,
             tab: Tab::Patterns,

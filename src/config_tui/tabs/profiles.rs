@@ -1,5 +1,14 @@
-//! Profiles tab — embedded + disk list, active marker, Space-to-activate.
-//! Uniform Enter semantic (spec §12.3): Enter = focus detail; Space = activate.
+//! Profiles tab — default + disk profile management (spec §6.1).
+//!
+//! Lists the `default` profile (`config.toml`) plus every disk profile under
+//! `~/.config/tayf/profiles/*.toml`. Keymap (Enter = focus detail, uniform
+//! spec §12.3):
+//!   - `Space` — set the selected profile active. `default` clears
+//!     `[general] profile`; a named profile sets it. Staged into
+//!     `edits.general.profile`; `Ctrl+S` persists.
+//!
+//! Create (`n`) / delete (`d`) and the named-active affordance land in the
+//! following tasks of this group.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -8,6 +17,32 @@ use ratatui::Frame;
 
 use crate::config_tui::app::App;
 
+/// Synthetic list entry standing in for `config.toml`'s rule set — the
+/// implicit profile that is active when `[general] profile` is unset.
+pub(crate) const DEFAULT_PROFILE_LABEL: &str = "default";
+
+/// The full Profiles-tab list: the synthetic `default` entry followed by the
+/// disk-profile stems under `~/.config/tayf/profiles/`. Computed fresh on
+/// every render/dispatch so an in-session create/delete is reflected at once.
+/// A missing root or `profiles/` dir yields just `["default"]`.
+pub(crate) fn list_profile_names(_app: &App) -> Vec<String> {
+    let mut names = vec![DEFAULT_PROFILE_LABEL.to_owned()];
+    if let Some(root) = crate::config_tui::save::tayf_config_root() {
+        names.extend(crate::profiles::list_names_with_root(&root));
+    }
+    names
+}
+
+/// The effective active profile name: the staged edit wins over the snapshot.
+/// `None` (no profile) maps to the synthetic [`DEFAULT_PROFILE_LABEL`].
+fn active_profile_label(app: &App) -> String {
+    let active = match &app.edits.general.profile {
+        Some(staged) => staged.clone(),
+        None => app.snapshot.parsed.profile.clone(),
+    };
+    active.unwrap_or_else(|| DEFAULT_PROFILE_LABEL.to_owned())
+}
+
 pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
     let chunks =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
@@ -15,21 +50,18 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App) {
     render_detail(frame, chunks[1], app);
 }
 
+fn filtered_names(app: &App) -> Vec<String> {
+    let filter = app.search_filter.as_deref().unwrap_or("").to_lowercase();
+    list_profile_names(app)
+        .into_iter()
+        .filter(|n| filter.is_empty() || n.to_lowercase().contains(&filter))
+        .collect()
+}
+
 fn render_list(frame: &mut Frame, area: Rect, app: &App) {
-    let active = app
-        .edits
-        .general
-        .profile
-        .as_ref()
-        .and_then(|x| x.as_deref())
-        .or(app.snapshot.parsed.profile.as_deref())
-        .unwrap_or("");
-    let filter = app.search_filter.as_deref().unwrap_or("");
-    let filtered = crate::config_tui::search::filter_names_lowercase(
-        app.catalog.embedded_profile_names.iter().copied(),
-        filter,
-    );
-    let items: Vec<ListItem> = filtered
+    let active = active_profile_label(app);
+    let names = filtered_names(app);
+    let items: Vec<ListItem> = names
         .iter()
         .map(|name| {
             let marker = if *name == active { "● " } else { "  " };
@@ -46,7 +78,7 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(accent.border())
-                .title("Profiles (embedded)")
+                .title("Profiles")
                 .title_style(accent.header()),
         )
         .highlight_style(accent.selection());
@@ -54,19 +86,22 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
-    let filter = app.search_filter.as_deref().unwrap_or("");
-    let filtered = crate::config_tui::search::filter_names_lowercase(
-        app.catalog.embedded_profile_names.iter().copied(),
-        filter,
-    );
-    let selected = filtered.get(app.focus.profiles.selected_idx).copied().unwrap_or("");
+    let names = filtered_names(app);
+    let selected = names.get(app.focus.profiles.selected_idx).cloned().unwrap_or_default();
+
     let body = if selected.is_empty() {
         "(no profile selected)".to_owned()
+    } else if selected == DEFAULT_PROFILE_LABEL {
+        "Profile: default (config.toml)\n\nThe default profile is config.toml's rule set — \
+         the rules you edit on the Patterns tab.\n\nPress Space to make it active"
+            .to_owned()
     } else {
         format!(
-            "Profile: {selected}\n\nSource: embedded\n\nPress Space to set as active\nPress 'o' to copy to disk for editing"
+            "Profile: {selected}\n\nSource: ~/.config/tayf/profiles/{selected}.toml\n\n\
+             Press Space to set as active"
         )
     };
+
     let accent = app.tui_env.accent;
     frame.render_widget(
         Paragraph::new(body).block(
@@ -81,12 +116,8 @@ fn render_detail(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
-    let filter = app.search_filter.as_deref().unwrap_or("");
-    let filtered = crate::config_tui::search::filter_names_lowercase(
-        app.catalog.embedded_profile_names.iter().copied(),
-        filter,
-    );
-    let len = filtered.len();
+    let names = filtered_names(app);
+    let len = names.len();
     match k.code {
         KeyCode::Char('j') | KeyCode::Down => {
             app.focus.profiles.selected_idx =
@@ -99,22 +130,130 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('G') => app.focus.profiles.selected_idx = len.saturating_sub(1),
         KeyCode::Enter => app.focus.profiles.detail_focused = true,
         KeyCode::Char(' ') => {
-            if let Some(name) = filtered.get(app.focus.profiles.selected_idx) {
-                app.edits.general.profile = Some(Some((*name).to_owned()));
+            let Some(name) = names.get(app.focus.profiles.selected_idx) else {
+                return;
+            };
+            if name == DEFAULT_PROFILE_LABEL {
+                // Selecting the default clears `[general] profile`.
+                app.edits.general.profile = Some(None);
+                app.toast = Some(crate::config_tui::app::Toast::ok(
+                    "staged default profile (config.toml); Ctrl+S to save".to_owned(),
+                ));
+            } else {
+                app.edits.general.profile = Some(Some(name.clone()));
                 app.toast = Some(crate::config_tui::app::Toast::ok(format!(
                     "staged profile = {name}; Ctrl+S to save"
                 )));
             }
         }
-        KeyCode::Char('o') => {
-            // The embedded profile library is retired (v0.12.0) — there is
-            // nothing to copy to disk. Profile management (create/delete) is
-            // reworked in the Profiles-tab rework; until then this is a no-op
-            // with an explanatory toast.
-            app.toast = Some(crate::config_tui::app::Toast::warn(
-                "Embedded profiles are retired; the six domain rules are now built-in".to_owned(),
-            ));
-        }
         _ => {}
+    }
+}
+
+/// Serialize + save/restore `XDG_CONFIG_HOME` for tests that need a
+/// deterministic, empty config root (the Profiles list reads it live).
+/// Returns an RAII guard that restores the prior value on drop. Holds a
+/// process-wide mutex for its lifetime so parallel lib tests do not race the
+/// shared env key. Dependency-free; only used in-crate by render-snapshot
+/// + dispatch tests.
+#[cfg(test)]
+pub(crate) fn scoped_empty_config_root(dir: &std::path::Path) -> EnvVarGuard {
+    EnvVarGuard::set("XDG_CONFIG_HOME", dir.as_os_str())
+}
+
+/// RAII guard restoring an env var to its prior value on drop. See
+/// [`scoped_empty_config_root`].
+#[cfg(test)]
+pub(crate) struct EnvVarGuard {
+    key: &'static str,
+    prior: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let lock = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prior = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, prior, _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.prior {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_tui::app::{App, TuiEnv};
+    use crate::config_tui::snapshot::ConfigSnapshot;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    /// Build a deterministic Profiles-tab app rooted at `config_root` (so
+    /// the disk listing is scoped). Returns the app plus the env guard the
+    /// caller must keep alive for the test's duration.
+    fn app_on_profiles_tab(config_root: &std::path::Path) -> (App, EnvVarGuard) {
+        let guard = scoped_empty_config_root(config_root);
+        let mut app = App::from_snapshot(ConfigSnapshot::empty(), TuiEnv::deterministic());
+        app.tab = crate::config_tui::app::Tab::Profiles;
+        (app, guard)
+    }
+
+    fn write_disk_profile(config_root: &std::path::Path, name: &str, body: &str) {
+        let dir = config_root.join("tayf").join("profiles");
+        std::fs::create_dir_all(&dir).expect("mkdir profiles");
+        std::fs::write(dir.join(format!("{name}.toml")), body).expect("write profile");
+    }
+
+    #[test]
+    fn list_contains_default_first_then_disk_profiles() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        write_disk_profile(tmp.path(), "work", "");
+        let (app, _g) = app_on_profiles_tab(tmp.path());
+        let names = list_profile_names(&app);
+        assert_eq!(names.first().map(String::as_str), Some("default"), "default is first");
+        assert!(names.iter().any(|n| n == "work"), "disk profile listed; got {names:?}");
+    }
+
+    #[test]
+    fn space_on_disk_profile_stages_general_profile() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        write_disk_profile(tmp.path(), "work", "");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        let idx = list_profile_names(&app).iter().position(|n| n == "work").expect("work listed");
+        app.focus.profiles.selected_idx = idx;
+        dispatch_key(&mut app, key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.edits.general.profile,
+            Some(Some("work".to_owned())),
+            "Space on a named profile stages [general] profile = work"
+        );
+    }
+
+    #[test]
+    fn space_on_default_clears_general_profile() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let (mut app, _g) = app_on_profiles_tab(tmp.path());
+        app.edits.general.profile = Some(Some("work".to_owned()));
+        app.focus.profiles.selected_idx = 0; // default
+        dispatch_key(&mut app, key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.edits.general.profile,
+            Some(None),
+            "Space on default clears the active-profile pointer"
+        );
     }
 }

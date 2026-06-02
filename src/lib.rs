@@ -934,7 +934,8 @@ pub mod __test_api {
     }
 
     /// Set the focus selection on the Profiles tab to `idx`. Caller is
-    /// responsible for ensuring `idx < catalog.embedded_profile_names.len()`.
+    /// responsible for ensuring `idx` is within the live profile list
+    /// (`default` + disk stems; see [`profile_idx`]).
     pub fn set_selected_profile_idx(app: &mut AppHandle, idx: usize) {
         app.0.focus.profiles.selected_idx = idx;
     }
@@ -944,11 +945,21 @@ pub mod __test_api {
         app.0.focus.themes.selected_idx = idx;
     }
 
-    /// Look up the catalog index for `name` in the Profiles embedded list.
-    /// Returns `None` when the name is not in the embedded set.
+    /// Look up the list index for `name` in the live Profiles-tab list
+    /// (`default` followed by disk-profile stems, computed fresh from disk).
+    /// Returns `None` when the name is not in the current list.
     #[must_use]
-    pub fn embedded_profile_idx(app: &AppHandle, name: &str) -> Option<usize> {
-        app.0.catalog.embedded_profile_names.iter().position(|n| *n == name)
+    pub fn profile_idx(app: &AppHandle, name: &str) -> Option<usize> {
+        crate::config_tui::tabs::profiles::list_profile_names(&app.0).iter().position(|n| n == name)
+    }
+
+    /// The staged active-profile pointer (`edits.general.profile`):
+    /// `None` = unedited; `Some(None)` = staged-cleared (default profile);
+    /// `Some(Some(name))` = staged to a named profile. Drives Profiles-tab
+    /// `Space`-activation assertions.
+    #[must_use]
+    pub fn staged_active_profile(app: &AppHandle) -> Option<Option<String>> {
+        app.0.edits.general.profile.clone()
     }
 
     /// Look up the catalog index for `name` in the Themes built-in list.
