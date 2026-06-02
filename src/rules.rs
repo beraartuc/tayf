@@ -413,7 +413,7 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
     vec![
         BuiltinRule {
             name: "permission".into(),
-            pattern: r"(?:^|\s)(?P<perm_type>[dlcbps-])(?P<perm_owner>[rwxsStT-]{3})(?P<perm_group>[rwxsStT-]{3})(?P<perm_other>[rwxsStT-]{3})[@+]?(?:\s|$)".into(),
+            pattern: r"(?:^|\s)(?P<perm_type>[dlcbps-])(?P<perm_owner>[rwxsStT-]{3})(?P<perm_group>[rwxsStT-]{3})(?P<perm_other>[rwxsStT-]{3})[.@+]?(?:\s|$)".into(),
             style: Style { fg: Some(Color::Rgb(0x83, 0x83, 0x8d)), ..Style::DEFAULT },
             group_styles: vec![
                 Some(Style { fg: Some(Color::Rgb(0x5a, 0x8b, 0xff)), ..Style::DEFAULT }),  // perm_type
@@ -2122,6 +2122,36 @@ mod tests {
     }
 
     #[test]
+    fn permission_matches_fedora_selinux_trailing_dot() {
+        // On Linux with SELinux/extended attributes, `ls -l` appends a
+        // trailing '.' (SELinux context) — every line on Fedora carries it.
+        // The permission span itself must colorize despite the trailing dot.
+        assert!(matches("permission", "drwxr-xr-x. 2 user user 4096 Jun  2 12:00 ."));
+        // Existing trailing-indicator forms must still match: plain, ACL '+',
+        // and macOS xattr '@'.
+        assert!(matches("permission", "-rw-r--r-- 1 user user 100 Jun  2 file"));
+        assert!(matches("permission", "drwxr-xr-x+ 2 user user 4096 Jun  2 dir"));
+        assert!(matches("permission", "drwxr-xr-x@ 2 user user 4096 Jun  2 dir"));
+    }
+
+    #[test]
+    fn permission_sub_colors_groups_with_trailing_dot() {
+        // The trailing '.' lives outside the capture groups, so perm_type /
+        // perm_owner / perm_group / perm_other sub-coloring is unchanged: the
+        // four groups each emit a distinct SGR introducer. The contiguous
+        // "drwxr-xr-x." text is fragmented by the inter-group SGRs (PTY-style),
+        // so we count introducers rather than scan for the whole literal.
+        let c = compile_default();
+        let bytes = apply_to_line(&c, "drwxr-xr-x. 2 user user 4096 Jun  2 12:00 .\n");
+        let s = String::from_utf8_lossy(&bytes);
+        let intro_count = s.matches("\u{1b}[").count() - s.matches("\u{1b}[0m").count();
+        assert!(
+            intro_count >= 4,
+            "expected >=4 SGR introducers (perm_type/owner/group/other); got {intro_count}: {s:?}",
+        );
+    }
+
+    #[test]
     fn permission_rejects_invalid_shapes() {
         // Wrong leading char
         assert!(!matches("permission", "xrwxrwxrwx 1 user file"));
@@ -2129,6 +2159,17 @@ mod tests {
         assert!(!matches("permission", "-rwxrwx 1 user file"));
         // Wrong perm chars
         assert!(!matches("permission", "-rwzqqzqqz 1 user file"));
+    }
+
+    #[test]
+    fn permission_trailing_dot_does_not_match_prose_or_paths() {
+        // FP guard: the relaxed trailing-indicator class ('.') must not let a
+        // prose/path token that merely ends in a dot match. The tight perm
+        // shape `[dlcbps-][rwxsStT-]{9}` keeps it precise.
+        assert!(!matches("permission", "see file.tar.gz. done"));
+        assert!(!matches("permission", "version 1.2.3."));
+        // A bare 10-char-looking word ending in a dot is still rejected.
+        assert!(!matches("permission", "something else here."));
     }
 
     #[test]
