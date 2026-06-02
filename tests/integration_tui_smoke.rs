@@ -18,10 +18,34 @@ fn dump_default_parses_as_valid_toml() {
         Command::new(tayf_bin()).args(["config", "dump"]).output().expect("spawn tayf config dump");
     assert!(out.status.success(), "exit non-zero: {:?}", out.status);
     let body = String::from_utf8(out.stdout).expect("utf8");
-    let parsed: toml::Value = toml::de::from_str(&body).expect("dump output must be valid TOML");
+    // The dump must parse as valid TOML.
+    let parsed: toml::Value = toml::de::from_str(&body)
+        .unwrap_or_else(|e| panic!("dump output must be valid TOML; err={e}; body=\n{body}"));
     assert!(parsed.get("patterns").is_some(), "must contain [[patterns]]");
     assert!(parsed.get("themes").is_some(), "must contain [themes.*]");
-    assert!(parsed.get("profiles").is_some(), "must contain [profiles.*]");
+    // The embedded profile library is retired (v0.12.0) — the profiles section
+    // is a comment block only, NOT a TOML table, so `profiles` key is absent.
+    assert!(
+        parsed.get("profiles").is_none(),
+        "retired embedded profiles must NOT appear as a TOML table; got: {body}"
+    );
+    // Default-off built-ins must carry enabled = false.
+    let patterns =
+        parsed.get("patterns").and_then(|v| v.as_array()).expect("[[patterns]] must be an array");
+    let container_id = patterns
+        .iter()
+        .find(|p| p.get("name").and_then(|v| v.as_str()) == Some("container_id"))
+        .expect("container_id must appear in patterns catalog");
+    assert_eq!(
+        container_id.get("enabled").and_then(|v| v.as_bool()),
+        Some(false),
+        "container_id must be dumped with enabled = false; body=\n{body}"
+    );
+    // Confirm no [profiles.*] TOML table exists anywhere in the output.
+    assert!(
+        !body.contains("[profiles."),
+        "dump must NOT emit any [profiles.*] TOML table; got:\n{body}"
+    );
 }
 
 #[test]

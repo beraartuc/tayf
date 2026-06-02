@@ -48,6 +48,12 @@ pub(crate) fn render(kind: Option<DumpKind>) -> String {
             // reason: writeln! on String avoids the temporary allocation
             // that push_str(&format!(...)) would create per call.
             let _ = writeln!(out, "name = {:?}", rule.name);
+            // Default-off built-ins (FP-sensitive opt-in rules: region,
+            // container_id, image_tag, pod_name) are shown with `enabled = false`
+            // so the catalog documents their opt-in status accurately.
+            if !rule.enabled {
+                let _ = writeln!(out, "enabled = false");
+            }
             let _ = writeln!(out, "pattern = {:?}", rule.pattern);
             out.push('\n');
         }
@@ -166,6 +172,25 @@ mod tests {
             patterns.len(),
             crate::rules::builtin_rules().len(),
             "patterns count must match builtin_rules"
+        );
+        // Default-off built-ins must carry enabled = false in the dump.
+        let container_id = patterns
+            .iter()
+            .find(|p| p.get("name").and_then(|v| v.as_str()) == Some("container_id"))
+            .expect("container_id must appear in patterns catalog");
+        assert_eq!(
+            container_id.get("enabled").and_then(toml::Value::as_bool),
+            Some(false),
+            "container_id must be dumped with enabled = false"
+        );
+        // Default-on built-ins must NOT carry an enabled key (clean TOML).
+        let arn = patterns
+            .iter()
+            .find(|p| p.get("name").and_then(|v| v.as_str()) == Some("arn"))
+            .expect("arn must appear in patterns catalog");
+        assert!(
+            arn.get("enabled").is_none(),
+            "arn (default-on) must not emit an enabled key in the dump"
         );
     }
 }
