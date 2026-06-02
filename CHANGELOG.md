@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-06-02
+
+### Fixed
+- `permission` now colorizes the SELinux/extended-attribute trailing-indicator
+  form `drwxr-xr-x.` (the `.` an SELinux context adds, shown by `ls -l` on
+  Fedora and other SELinux systems) in addition to the ACL `+` and macOS
+  xattr `@` forms. Previously every permission string on such systems carried a
+  trailing `.` and was skipped entirely, so no file modes were colorized.
+- Changing a built-in rule's color in the `tayf config` TUI (`c` then `Ctrl+S`)
+  now persists to `config.toml` instead of reverting to the default on reload.
+  The color change was being applied only to the live preview; it is now
+  written as a name-keyed `[[rules]]` style override (merged with any
+  enable/disable flip into a single entry).
+- A line with no trailing newline that is immediately followed by an escape
+  sequence — e.g. a wrapped shell's colored prompt, or zsh's reverse-video `%`
+  "missing newline" indicator — is now colorized. Previously the following
+  sequence merged into the unterminated line and, under
+  `respect_existing_colors`, suppressed rule application, so the line was left
+  uncolored (intermittently: a fast-arriving prompt sequence lost the race with
+  the idle flush, producing "uncolored on the first run, colored on a retry").
+  The plain content is now rule-applied before the interrupting sequence.
+
 ## [0.12.0] - 2026-06-02
 
 ### Added
