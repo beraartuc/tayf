@@ -131,11 +131,12 @@ tayf config
 
 Four tabs (switch with `Tab` / `Shift+Tab` or the number keys `1`–`4`):
 
-- **Patterns** — toggle, override, reset, or delete any of the twelve built-in
+- **Patterns** — toggle, override, reset, or delete any of the eighteen built-in
   rules, add your own regex patterns, and pick colors interactively (ANSI 16,
-  256-color, or 24-bit hex, plus bold / italic / underline).
+  256-color, or 24-bit hex, plus bold / italic / underline). Press Space on a
+  rule to enable or disable it.
 - **Themes** — browse and select a built-in or on-disk theme.
-- **Profiles** — browse the built-in and on-disk profiles.
+- **Profiles** — browse and activate personal disk profiles.
 - **Status** — the resolved config state and recent hot-reload events.
 
 A live preview strip shows how your changes colorize a sample line as you
@@ -147,7 +148,7 @@ cheat-sheet, and `Ctrl+C` or `q` to quit.
 Two non-interactive helpers share the same subcommand:
 
 ```bash
-tayf config dump      # print the built-in pattern / theme / profile catalog as TOML
+tayf config dump      # print the 18 built-in patterns + theme catalog + profiles note as TOML
 tayf config status    # print the resolved config + recent reload events
 ```
 
@@ -189,24 +190,30 @@ the absence of `TAYF_SESSION` — preventing an infinite re-exec loop.
 
 ## Built-in rules
 
-`tayf` ships with **twelve** built-in patterns, listed in priority order
+`tayf` ships with **eighteen** built-in patterns, listed in priority order
 (most-specific first; first match wins). The default `dark` theme uses a
 curated 24-bit "Neon" palette:
 
-| Name        | Color                      | Example                                              |
-|-------------|----------------------------|------------------------------------------------------|
-| permission  | dim gray (per-group colors) | `-rw-r--r--`, `drwxr-xr-x`                         |
-| timestamp   | dim gray (date=amber, time=green, tz=violet) | `2026-05-22T10:30:00Z`, `[22/May/2026:10:30:00 +0000]` |
-| uuid        | magenta                    | `550e8400-e29b-41d4-a716-446655440000`               |
-| url         | blue, underlined           | `https://example.com/path`, `ssh://host`             |
-| email       | lime green                 | `user@example.com`                                   |
-| ipv4        | azure (not bold)           | `192.168.1.1`                                        |
-| ipv6        | indigo                     | `fe80::1`, `2001:db8::1`                             |
-| mac         | teal                       | `aa:bb:cc:dd:ee:ff`                                  |
-| log_level   | hot-coral, **bold**        | `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`, ...       |
-| filename    | orange                     | `claude.md`, `archive.tar.gz`, `config.json`         |
-| fqdn        | violet                     | `api.example.com`                                    |
-| duration    | amber                      | `20.291 ms`, `1.5 ms`, `100ms`, `2d3h`              |
+| Name        | Default | Color                      | Example                                              |
+|-------------|---------|----------------------------|------------------------------------------------------|
+| permission  | on      | dim gray (per-group colors) | `-rw-r--r--`, `drwxr-xr-x`                         |
+| timestamp   | on      | dim gray (date=amber, time=green, tz=violet) | `2026-05-22T10:30:00Z`, `[22/May/2026:10:30:00 +0000]` |
+| uuid        | on      | magenta                    | `550e8400-e29b-41d4-a716-446655440000`               |
+| url         | on      | blue, underlined           | `https://example.com/path`, `ssh://host`             |
+| email       | on      | lime green                 | `user@example.com`                                   |
+| ipv4        | on      | azure (not bold)           | `192.168.1.1`                                        |
+| ipv6        | on      | indigo                     | `fe80::1`, `2001:db8::1`                             |
+| mac         | on      | teal                       | `aa:bb:cc:dd:ee:ff`                                  |
+| log_level   | on      | hot-coral, **bold**        | `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`, ...       |
+| filename    | on      | orange                     | `claude.md`, `archive.tar.gz`, `config.json`         |
+| fqdn        | on      | violet                     | `api.example.com`                                    |
+| duration    | on      | amber                      | `20.291 ms`, `1.5 ms`, `100ms`, `2d3h`              |
+| arn         | on      | cyan                       | `arn:aws:iam::123456789012:role/MyRole`              |
+| instance_id | on      | orange-red                 | `i-0abcd1234567890ef`                                |
+| region      | **off** | green                      | `us-east-1`, `eu-west-2`                             |
+| container_id | **off** | peach                     | `7c79c4bf9712` (12-hex Docker short hash)            |
+| image_tag   | **off** | pink                       | `gcr.io/google/nginx:1.21`, `nginx:latest`           |
+| pod_name    | **off** | periwinkle                 | `nginx-deployment-7c79c4bf97-9hk6r`                 |
 
 Pattern notes:
 
@@ -229,6 +236,50 @@ Pattern notes:
   `go`, ...), configuration (`json`, `yaml`, `toml`, ...), documents
   (`pdf`, `md`, ...), media, and binary formats. See `src/rules.rs` for
   the full list.
+- **arn** matches the `arn:aws[…]` prefix and is prose-immune (`warn:aws`,
+  `alarm:aws` are not matched). Priority 200 so it envelopes interior rules.
+- **instance_id** matches `i-` followed by exactly 17 lowercase hex digits —
+  `i-0abcd1234567890ef`. Multi-hex words (`multi-…`, `wifi-…`) are rejected.
+- **region** is a 34-entry exhaustive enumeration of AWS region strings
+  (dated snapshot 2026-05-26). New regions are added in patch releases.
+- **container_id** matches a bare 12-hex token. Collides with git short
+  hashes, so it ships default-off.
+- **image_tag** matches `registry.host/image:tag` and `name:latest` forms.
+  Single-word `name:version` without a dot-host (e.g. `nginx:1.21`) is not
+  matched to keep false-positive rate low.
+- **pod_name** matches Kubernetes pod suffixes: `<deploy>-<10-base32>-<5-base32>`.
+
+### Default-off built-ins
+
+Four built-in rules ship **disabled** by default because they have
+higher false-positive risk. Enable them individually in your config:
+
+```toml
+# ~/.config/tayf/config.toml
+
+# Enable Docker container-ID coloring (default off — collides with git hashes).
+[[rules]]
+name = "container_id"
+enabled = true
+
+# Enable AWS region highlighting (default off — dated enum snapshot).
+[[rules]]
+name = "region"
+enabled = true
+
+# Enable Docker/OCI image-tag highlighting (default off).
+[[rules]]
+name = "image_tag"
+enabled = true
+
+# Enable Kubernetes pod-name highlighting (default off).
+[[rules]]
+name = "pod_name"
+enabled = true
+```
+
+The same `enabled = true` override works inside a named profile file (see
+[Named profiles](#named-profiles) below).
 
 ### Themes
 
@@ -348,8 +399,8 @@ is set, or when `TERM=dumb`.
 `tayf` reads an optional TOML config from
 `$XDG_CONFIG_HOME/tayf/config.toml` (falling back to
 `~/.config/tayf/config.toml`). Pass `--config <path>` to use a different
-file. Without a config file, all twelve built-in rules described above are
-active with their default styles.
+file. Without a config file, the fourteen default-on built-in rules described
+above are active with their default styles.
 
 ```toml
 # ~/.config/tayf/config.toml
@@ -397,15 +448,67 @@ time — use `enabled = false` to disable a rule instead.
 
 ### Built-in rule names
 
-The twelve names you can override or disable, in priority order:
+All eighteen built-in names, in priority order (override or disable any of
+them with a `[[rules]]` entry in your config):
+
 `permission`, `timestamp`, `uuid`, `url`, `email`, `ipv4`, `ipv6`, `mac`,
-`log_level`, `filename`, `fqdn`, `duration`.
+`log_level`, `filename`, `fqdn`, `duration`,
+`instance_id`, `region`, `arn`, `container_id`, `image_tag`, `pod_name`.
+
+The last six are domain-specific patterns; `region`, `container_id`,
+`image_tag`, and `pod_name` are default-off (see above).
 
 ### Errors
 
 Malformed configs exit with code `64` (`EX_USAGE`) and print a friendly
 diagnostic to stderr that includes the file path and the offending line number
 when available.
+
+### Named profiles
+
+A **profile** is a personal, switchable preset — a `[[rules]]` list plus an
+optional `theme`. Create a profile file at
+`~/.config/tayf/profiles/<name>.toml`:
+
+```toml
+# ~/.config/tayf/profiles/work.toml
+
+# Enable container-ID coloring in this profile.
+[[rules]]
+name = "container_id"
+enabled = true
+
+# Recolor log_level to your taste.
+[[rules]]
+name = "log_level"
+style = { fg = "#ffaa00", bold = true }
+
+# Add a custom Jira-ticket rule.
+[[rules]]
+name = "ticket"
+pattern = 'PROJ-\d+'
+style = { fg = "#5ad7e0" }
+```
+
+Switch to it with `--profile work` or by setting `[general] profile = "work"`
+in `config.toml`. When a profile is active its `[[rules]]` **replace**
+`config.toml`'s `[[rules]]`; the built-in rule catalog (18 rules) remains the
+substrate — built-ins not overridden in the profile retain their default
+colors and enabled state. `[general]` settings (theme, banner, profile pointer)
+always come from `config.toml`.
+
+```sh
+# One-off:
+tayf --profile work
+
+# Permanent (add to config.toml):
+# [general]
+# profile = "work"
+```
+
+Profiles are stored at `~/.config/tayf/profiles/*.toml` (or
+`$XDG_CONFIG_HOME/tayf/profiles/*.toml`). The `tayf config` TUI lists and
+activates them from the **Profiles** tab.
 
 ### Hot reload
 

@@ -105,12 +105,16 @@ pub struct RunArgs {
     #[arg(long, value_name = "NAME")]
     pub theme: Option<String>,
 
-    /// Apply a named profile. Loaded from
-    /// `~/.config/tayf/profiles/<NAME>.toml` (disk) or from embedded
-    /// sources (`aws`, `k8s`, `docker`, `gcp`, `network` ship in v0.5.3).
-    /// Overrides any `[general] profile` value in the user config.
-    /// Single profile only — composition deferred to a future release
-    /// via a separate flag.
+    /// Apply a named profile loaded from
+    /// `~/.config/tayf/profiles/<NAME>.toml`. Profiles are personal,
+    /// switchable presets: a `[[rules]]` list (built-in overrides,
+    /// enable/disable, recolor, new patterns) plus an optional `theme`.
+    /// When a profile is active its rules REPLACE `config.toml`'s
+    /// `[[rules]]`; the built-ins remain the substrate. Overrides any
+    /// `[general] profile` value in the user config. To enable a
+    /// default-off built-in, add `[[rules]] name = "container_id"
+    /// enabled = true` (or `region`, `image_tag`, `pod_name`) to the
+    /// profile file.
     #[arg(long, value_name = "NAME")]
     pub profile: Option<String>,
 
@@ -211,7 +215,7 @@ pub enum DumpKind {
     Patterns,
     /// Built-in theme catalog only.
     Themes,
-    /// Embedded profile catalog only.
+    /// Profile section only (personal-preset usage note).
     Profiles,
 }
 

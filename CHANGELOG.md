@@ -12,6 +12,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   marker block, `--uninstall` to remove). fish and other shells get a printed
   snippet via `--print`. Flags: `--shell`, `--no-shell-hook`, `--print`,
   `--uninstall`, `--force`, `--config`.
+- **Six domain rules promoted to built-ins (indices 12–17).** tayf now
+  colorizes AWS, Docker, and Kubernetes output without requiring a profile:
+  - `arn` — AWS ARN (`arn:aws[…]`), priority 200, default **on**.
+  - `instance_id` — EC2 instance ID (`i-` + exactly 17 lowercase hex digits),
+    priority 100, default **on**.
+  - `region` — exhaustive 34-entry AWS region enumeration (dated snapshot
+    2026-05-26; new regions require a patch + CHANGELOG), priority 100,
+    default **off** (opt-in: `[[rules]] name = "region" enabled = true`).
+  - `container_id` — Docker short hash (12-hex), priority 100, default **off**
+    (collides with git short hashes; opt-in).
+  - `image_tag` — Docker/OCI registry image reference with tag, priority 200,
+    default **off** (opt-in).
+  - `pod_name` — Kubernetes pod suffix (10 + 5 base32 hash), priority 100,
+    default **off** (opt-in).
+- **Per-rule `enabled` toggle.** Every built-in can be individually
+  enabled or disabled in `config.toml` or a named profile:
+  `[[rules]] name = "container_id" enabled = true` enables a default-off
+  built-in; `enabled = false` disables a default-on one. The TUI's Space key
+  stages the toggle interactively.
 - The syslog (`Jun  1 12:35:01`), Apache common-log
   (`01/Jun/2026:12:45:30 +0300`) and RFC 2822
   (`Mon, 01 Jun 2026 12:40:00 +0300`) timestamp formats now receive the same
@@ -31,6 +50,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   action is discoverable without opening the help modal.
 
 ### Changed
+- **Profiles are now personal, switchable presets.** A profile is a
+  `[[rules]]` list (override / enable-disable / recolor built-ins, add custom
+  patterns) plus an optional `theme`, stored at
+  `~/.config/tayf/profiles/<name>.toml`. `config.toml` is the default profile.
+  When a named profile is active its rules **replace** `config.toml`'s
+  `[[rules]]`; the built-ins remain the substrate. Replace is total: per-rule
+  overrides written in `config.toml` do not carry into a named profile.
 - **Color picker reworked** in the `tayf config` TUI: hex is now the primary
   input (type `#rrggbb`, or `@0-255` for a 256-palette index); the large
   256-color swatch grid was removed. ANSI-16 swatches and the
@@ -41,6 +67,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ipv4` is now `#33c7ff` and `duration` `#f7d17f`, with the other ten rule
   colors retuned to match. The `permission` / `timestamp` gray (`#83838d`) is
   unchanged. `assets/themes/dark.toml` mirrors the new defaults.
+- `tayf config dump` now shows all 18 built-in rules in the patterns section,
+  with `enabled = false` annotating each default-off rule. The retired embedded
+  profile enumeration is replaced by a usage note.
+
+### Removed
+- **Embedded profile library retired.** The bundled `aws`, `k8s`, `docker`,
+  `gcp`, and `network` profiles no longer exist. `--profile aws` (and the
+  others) now report `profile not found` — there is no compatibility shim. The
+  domain rules those profiles contained are now built-in (or default-off
+  built-ins) and active for everyone without a profile selection. Personal disk
+  profiles (`~/.config/tayf/profiles/<name>.toml`) are unaffected.
 
 ### Fixed
 - The `tayf config` live preview now matches what `tayf` actually renders.

@@ -115,7 +115,7 @@ Grouped by responsibility (one logical concern per file —
 **Configuration**
 - [`config.rs`](./src/config.rs) — TOML config schema and loading.
 - [`themes.rs`](./src/themes.rs) — built-in + on-disk color themes.
-- [`profiles.rs`](./src/profiles.rs) — named, embedded + on-disk rule profiles.
+- [`profiles.rs`](./src/profiles.rs) — named, disk-only personal rule presets.
 - [`reload.rs`](./src/reload.rs) — hot-reload orchestration and precedence.
 - [`watch.rs`](./src/watch.rs) — config file watcher.
 - [`config_tui/`](./src/config_tui/) — the interactive `tayf config` TUI
@@ -129,10 +129,14 @@ Grouped by responsibility (one logical concern per file —
 
 ## Built-in patterns
 
-tayf ships a small, curated set of built-in rules ([`rules.rs`](./src/rules.rs))
-matching patterns common in terminal output — IP addresses (v4/v6), MAC
-addresses, log levels, timestamps, durations, file permissions, URLs, emails,
-UUIDs, FQDNs, HTTP status codes, and a catalog of file extensions.
+tayf ships 18 built-in rules ([`rules.rs`](./src/rules.rs)) matching patterns
+common in terminal output — IP addresses (v4/v6), MAC addresses, log levels,
+timestamps, durations, file permissions, URLs, emails, UUIDs, FQDNs, a catalog
+of file extensions, and six domain-specific patterns (AWS ARN / instance ID /
+region, Docker container ID / image tag, Kubernetes pod name). Fourteen rules
+are on by default; four default-off opt-in rules (`region`, `container_id`,
+`image_tag`, `pod_name`) can be enabled per-rule via `[[rules]] enabled = true`
+in the config or a named profile.
 
 Design constraints that shape the catalog:
 
@@ -158,12 +162,28 @@ byte-count effect only; `classic` is the lighter-weight option. User config and
 on-disk themes/profiles override, disable, or extend any built-in
 ([`config.rs`](./src/config.rs), [`themes.rs`](./src/themes.rs), [`profiles.rs`](./src/profiles.rs)).
 
+## Profiles
+
+`config.toml` is the **default profile**. Named profiles live at
+`~/.config/tayf/profiles/<name>.toml` and use the same `[[rules]]` schema as
+`config.toml`. When a named profile is active its `[[rules]]` **replace**
+`config.toml`'s — the built-ins remain the substrate in every profile
+(a profile enables/disables and recolors them and adds user patterns on top).
+`[general]` (theme, banner, active-profile pointer) always comes from
+`config.toml`. The embedded profile library (`aws`, `k8s`, `docker`, `gcp`,
+`network`) was retired in v0.12.0 — those rules are now built-ins or
+default-off opt-in built-ins.
+
 ## Configuration precedence
 
 The initial load and every hot reload resolve the same chain
 ([`reload.rs`](./src/reload.rs)):
 
-- **Profile** — `--profile` flag, else `config.general.profile`.
+- **Active rules** — if a named profile is active (`--profile` flag or
+  `config.general.profile`), that profile's `[[rules]]` replace `config.toml`'s;
+  otherwise `config.toml`'s `[[rules]]` are used. Built-ins are always the
+  substrate; `enabled = false` in the active rule layer flags a rule off; a
+  final `retain` removes disabled rules before regex compilation.
 - **Theme** — `--theme` flag, else `config.general.theme`, else the selected
   profile's `theme`, else the startup background-color detection
   ([`bg_detect.rs`](./src/bg_detect.rs)).
