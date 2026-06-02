@@ -116,6 +116,11 @@ impl Tayf {
     // reason: `Args` is the parsed CLI surface and this is the process entry
     // point; taking ownership is the conventional shape even though we
     // currently only read individual fields.
+    #[allow(clippy::too_many_lines)]
+    // reason: `run` is the top-level process orchestration — a single linear
+    // sequence of setup steps (config/profile/theme resolution, TTY guard, PTY
+    // spawn, signal/watcher/reload wiring, runtime, ordered shutdown). Splitting
+    // it would scatter the load-bearing drop-ordering invariant across helpers.
     pub fn run(args: RunArgs) -> Result<ExitCode> {
         log::init_from_env();
 
@@ -195,26 +200,38 @@ impl Tayf {
         let config_ref = loaded.as_ref().map(|(c, _)| c);
         let config_path: Option<String> = loaded.as_ref().map(|(_, p)| p.display().to_string());
 
-        // v0.5.2 — effective profile name: CLI > config.
+        // Effective profile name: CLI > config. `None` = config.toml is the
+        // active (default) profile.
         let effective_profile_name: Option<String> =
             args.profile.clone().or_else(|| config_ref.and_then(|c| c.general.profile.clone()));
 
-        // Load the profile (if any). Failures propagate as Error::Profile /
-        // Error::ProfileValidation through the standard Tayf::run error
-        // path. v0.5.2 ships no embedded profiles, so a None
-        // loaded_profile just means "no profile active".
-        let loaded_profile: Option<profiles::LoadedProfile> = match effective_profile_name {
-            Some(ref name) => Some(profiles::load(name)?),
-            None => None,
+        // Resolve the active rule set + (for theme precedence) the profile's
+        // theme. A named profile's `[[rules]]` REPLACE config.toml's; the
+        // built-ins remain the substrate. `[general]` always comes from
+        // config.toml. Failures propagate as Error::Profile /
+        // Error::ProfileValidation through the standard Tayf::run error path.
+        let (effective_config, active_path, rules_source, profile_theme): (
+            config::Config,
+            Option<String>,
+            rules::RuleSource,
+            Option<String>,
+        ) = match effective_profile_name {
+            Some(ref name) => {
+                let lp = profiles::load(name)?;
+                let theme = lp.profile.theme.clone();
+                let eff = config::Config {
+                    general: config_ref.map(|c| c.general.clone()).unwrap_or_default(),
+                    rules: lp.profile.rules,
+                };
+                (eff, Some(lp.path_label), rules::RuleSource::DiskProfile, theme)
+            }
+            None => (
+                config_ref.cloned().unwrap_or_default(),
+                config_path.clone(),
+                rules::RuleSource::UserConfig,
+                None,
+            ),
         };
-
-        // v0.5.2 — 4-tier theme precedence:
-        // CLI > config > profile.theme > bg-detect.
-        let explicit_theme: Option<String> = args
-            .theme
-            .clone()
-            .or_else(|| config_ref.and_then(|c| c.general.theme.clone()))
-            .or_else(|| loaded_profile.as_ref().and_then(|lp| lp.profile.theme.clone()));
 
         // bg-detect is resolved ONCE at startup (querying the terminal via
         // OSC 11 is latency-sensitive). The result is the last-resort
@@ -225,14 +242,19 @@ impl Tayf {
         let bg_default: Option<String> =
             if apply_colors { Some(bg_detect::resolve().as_theme_name().to_owned()) } else { None };
 
-        let effective_theme: Option<String> = explicit_theme.or_else(|| bg_default.clone());
+        // 4-tier theme precedence: CLI > config > profile.theme > bg-detect.
+        let effective_theme: Option<String> = args
+            .theme
+            .clone()
+            .or_else(|| config_ref.and_then(|c| c.general.theme.clone()))
+            .or(profile_theme)
+            .or_else(|| bg_default.clone());
 
         let compiled = rules::Compiled::load_with_theme(
-            config_ref,
-            config_path.as_deref(),
+            Some(&effective_config),
+            active_path.as_deref(),
             effective_theme.as_deref(),
-            loaded_profile.as_ref().map(|lp| &lp.profile),
-            loaded_profile.as_ref().map(|lp| lp.path_label.as_str()),
+            rules_source,
             effective_depth,
         )?;
         let rules: Arc<ArcSwap<rules::Compiled>> = Arc::new(ArcSwap::from_pointee(compiled));
@@ -952,13 +974,13 @@ pub mod __test_api {
         app.0.toast.as_ref().map(|t| t.text.clone())
     }
 
-    /// Raw embedded TOML source for a built-in profile. Lets integration
-    /// tests assert byte-equality between the copy-on-disk and the
-    /// compile-time embedded source without exposing `pub(crate)
-    /// crate::profiles::embedded_source` itself.
+    /// Raw embedded TOML source for a built-in profile. The embedded profile
+    /// library is retired (v0.12.0) — the six domain rules are now built-ins —
+    /// so this always returns `None`. Retained as a stable `__test_api` symbol
+    /// until the integration suite drops its last caller.
     #[must_use]
-    pub fn embedded_profile_source(name: &str) -> Option<&'static str> {
-        crate::profiles::embedded_source(name)
+    pub fn embedded_profile_source(_name: &str) -> Option<&'static str> {
+        None
     }
 
     /// Raw embedded TOML source for a built-in theme — symmetric to
@@ -1136,36 +1158,6 @@ pub mod __bench__ {
     pub fn load_builtin_rules() -> crate::Result<CompiledRules> {
         crate::rules::Compiled::load_builtins()
             .map(|c| CompiledRules(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(c))))
-    }
-
-    /// Compile the rule set with an embedded profile active. Mirrors the
-    /// production startup flow's profile-active branch (`crate::lib::Tayf::run`
-    /// → `crate::profiles::load_with` → `crate::rules::Compiled::load_with_theme`),
-    /// but stubs out the env-var lookups so disk discovery in `load_with`
-    /// finds nothing and falls through to the embedded library.
-    ///
-    /// The bench crate is an external crate from rustc's perspective and
-    /// cannot reach the `pub(crate)` profile/rules constructors directly,
-    /// so this adapter wraps them. v0.5.3 only — see `benches/throughput.rs`
-    /// `bench_profile_*` for the call sites.
-    ///
-    /// # Errors
-    /// Forwards any [`crate::Error::Profile`], [`crate::Error::ProfileValidation`],
-    /// or [`crate::Error::RegexCompile`] surfaced by the underlying load/compile.
-    pub fn load_profile_rules(name: &str) -> crate::Result<CompiledRules> {
-        // Force disk discovery to miss → embedded library wins. Empty
-        // closures keep the disk path off, regardless of how the test
-        // environment has `$XDG_CONFIG_HOME` / `$HOME` set.
-        let loaded = crate::profiles::load_with(name, || None, || None)?;
-        let compiled = crate::rules::Compiled::load_with_theme(
-            None,
-            None,
-            None,
-            Some(&loaded.profile),
-            Some(loaded.path_label.as_str()),
-            crate::terminfo::ColorDepth::Truecolor,
-        )?;
-        Ok(CompiledRules(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(compiled))))
     }
 
     /// Drive the rule scanner against `line`. Scratch is caller-owned and

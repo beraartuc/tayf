@@ -597,67 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn compile_pending_embedded_profile_rule_style_override_writes_through() {
-        // Pick the first embedded profile + its first append_rule by name
-        // (introspection via crate::profiles::embedded_profile_names + the
-        // shipped profile registry). If embedded profiles ship with no
-        // append_rules (e.g., kubernetes embed has none), this test skips
-        // with a guard log.
-        let profile_names: Vec<&'static str> = crate::profiles::embedded_profile_names().collect();
-        let Some(profile) = profile_names.first().copied() else {
-            eprintln!("no embedded profiles shipped; embedded overlay path uncovered");
-            return;
-        };
-        let snapshot = ConfigSnapshot::empty();
-        // Probe the profile for an append_rule name; bail if none.
-        let empty_config = crate::config::Config {
-            general: crate::config::GeneralSection::default(),
-            rules: Vec::new(),
-        };
-        let Ok(probe) = crate::rules::compile_from_config(
-            &empty_config,
-            None,
-            Some(profile),
-            crate::terminfo::ColorDepth::Truecolor,
-        ) else {
-            return;
-        };
-        let baseline_names: Vec<String> =
-            probe.individuals.iter().map(|r| r.as_str().to_owned()).collect();
-        // Use the LAST name (the profile likely appends after builtins).
-        let target_rule_name = baseline_names.last().cloned().unwrap_or_default();
-        if target_rule_name.is_empty() {
-            return;
-        }
-        // For simplicity, exercise the path by overlaying a style on the
-        // selected profile's first rule via name match.
-        let mut edits = PendingEdits::default();
-        let mut styles = HashMap::new();
-        styles.insert(
-            StyleKey::Default,
-            NewStyle { fg: Some(Some(Color::Magenta)), ..Default::default() },
-        );
-        edits.rules.insert(
-            RuleId::Embedded { profile, rule: "ipv4".to_owned() },
-            RuleEdit { pattern: None, styles },
-        );
-        let compiled = compile_pending(
-            &snapshot,
-            &edits,
-            None,
-            Some(profile),
-            crate::terminfo::ColorDepth::Truecolor,
-        )
-        .expect("compile under embedded profile");
-        // We assert at minimum the compile succeeded with the overlay
-        // applied (no `Error::Config "defined more than once..."`).
-        assert!(
-            compiled.individuals.len() >= 12,
-            "compile succeeded with embedded overlay applied"
-        );
-    }
-
-    #[test]
     fn compile_pending_builtin_overlay_dedupes_against_snapshot_userconfig_override() {
         // Snapshot already has a user-config entry overriding `ipv4`'s
         // style (mirror what would land on disk if a user wrote
@@ -694,14 +633,13 @@ mod tests {
             "TUI edit wins over snapshot user-config override"
         );
         // Verify no duplicate `ipv4` entry leaked into the compiled set
-        // (would surface as 2 entries with the same effective name).
-        // Simpler: compiled.individuals.len() equals BUILTIN_NAMES.len()
-        // (built-ins only — no extra appended rule).
-        assert_eq!(
-            compiled.individuals.len(),
-            crate::rules::BUILTIN_NAMES.len(),
-            "no duplicate rule appended"
-        );
+        // (would surface as 2 entries with the same effective name). The
+        // compiled default set is the 14 default-on built-ins (12 base + arn +
+        // instance_id); the four default-off promoted rules are filtered out,
+        // and the ipv4 override mutates in place (no extra appended rule).
+        let default_on = crate::rules::builtin_rules().iter().filter(|r| r.enabled).count();
+        assert_eq!(default_on, 14, "14 default-on built-ins");
+        assert_eq!(compiled.individuals.len(), default_on, "no duplicate rule appended");
     }
 
     #[test]

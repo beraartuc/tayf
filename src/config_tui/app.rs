@@ -349,8 +349,10 @@ impl App {
     pub(crate) fn from_snapshot(snapshot: ConfigSnapshot, tui_env: TuiEnv) -> Self {
         let builtin_rule_names: Vec<&'static str> = crate::rules::BUILTIN_NAMES.to_vec();
         let builtin_theme_names: Vec<&'static str> = crate::themes::names().to_vec();
-        let embedded_profile_names: Vec<&'static str> =
-            crate::profiles::embedded_profile_names().collect();
+        // The embedded profile library is retired (v0.12.0): the six domain
+        // rules are now built-ins. The Profiles tab lists disk profiles only
+        // (full disk listing lands in the Profiles-tab rework). Empty for now.
+        let embedded_profile_names: Vec<&'static str> = Vec::new();
 
         let config_theme = snapshot.parsed.theme.as_deref();
         let profile = snapshot.parsed.profile.as_deref();

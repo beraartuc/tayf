@@ -107,59 +107,13 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char('o') => {
-            let Some(name) = filtered.get(app.focus.profiles.selected_idx).copied() else {
-                return;
-            };
-
-            // Source check: only embedded profiles need the copy. A disk
-            // profile is already editable in place.
-            if !crate::profiles::embedded_profile_names().any(|n| n == name) {
-                app.toast = Some(crate::config_tui::app::Toast::warn(format!(
-                    "Already a disk profile — edit ~/.config/tayf/profiles/{name}.toml"
-                )));
-                return;
-            }
-
-            let Some(tayf_root) = crate::config_tui::save::tayf_config_root() else {
-                app.toast = Some(crate::config_tui::app::Toast::warn(
-                    "Override failed: cannot resolve ~/.config/tayf/".to_owned(),
-                ));
-                return;
-            };
-            let dest = crate::profiles::disk_path_with_root(&tayf_root, name);
-
-            if let Err(reason) =
-                crate::config_tui::save::check_safe_write_destination(&dest, &tayf_root)
-            {
-                app.toast = Some(crate::config_tui::app::Toast::warn(format!(
-                    "Override refused: {reason}"
-                )));
-                return;
-            }
-
-            if dest.exists() {
-                app.toast = Some(crate::config_tui::app::Toast::warn(format!(
-                    "Already on disk — edit ~/.config/tayf/profiles/{name}.toml"
-                )));
-                return;
-            }
-
-            let Some(src) = crate::profiles::embedded_source(name) else {
-                // Unreachable: embedded_profile_names() membership was
-                // just verified above. Returning silently is correct.
-                return;
-            };
-
-            if let Err(e) = crate::config_tui::save::write_atomic_to(&dest, src) {
-                app.toast =
-                    Some(crate::config_tui::app::Toast::warn(format!("Override failed: {e}")));
-                return;
-            }
-
-            crate::config_tui::events::request_snapshot_reload(app);
-            app.toast = Some(crate::config_tui::app::Toast::ok(format!(
-                "Copied '{name}' to disk; now editable"
-            )));
+            // The embedded profile library is retired (v0.12.0) — there is
+            // nothing to copy to disk. Profile management (create/delete) is
+            // reworked in the Profiles-tab rework; until then this is a no-op
+            // with an explanatory toast.
+            app.toast = Some(crate::config_tui::app::Toast::warn(
+                "Embedded profiles are retired; the six domain rules are now built-in".to_owned(),
+            ));
         }
         _ => {}
     }

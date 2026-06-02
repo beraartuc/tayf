@@ -140,27 +140,48 @@ pub(crate) fn reload_once(
     let effective_profile_name: Option<&str> =
         profile.or_else(|| cfg.and_then(|c| c.general.profile.as_deref()));
 
-    // 3. Load profile (if any). Failure propagates → reload thread
-    //    warns + retains prior valid Compiled.
-    let loaded_profile = match effective_profile_name {
-        Some(name) => Some(crate::profiles::load(name)?),
-        None => None,
+    // 3. Resolve the active rule set + (for theme precedence) the profile's
+    //    theme. A named profile's `[[rules]]` REPLACE config.toml's; the
+    //    built-ins remain the substrate; `[general]` always comes from
+    //    config.toml. Failure propagates → reload thread warns + retains
+    //    the prior valid Compiled.
+    let base_general = cfg.map(|c| c.general.clone()).unwrap_or_default();
+    let (effective_config, active_path, rules_source, profile_theme): (
+        crate::config::Config,
+        Option<String>,
+        crate::rules::RuleSource,
+        Option<String>,
+    ) = match effective_profile_name {
+        Some(name) => {
+            let lp = crate::profiles::load(name)?;
+            let profile_theme = lp.profile.theme.clone();
+            let eff = crate::config::Config { general: base_general, rules: lp.profile.rules };
+            (eff, Some(lp.path_label), crate::rules::RuleSource::DiskProfile, profile_theme)
+        }
+        None => (
+            crate::config::Config {
+                general: base_general,
+                rules: cfg.map(|c| c.rules.clone()).unwrap_or_default(),
+            },
+            path_str,
+            crate::rules::RuleSource::UserConfig,
+            None,
+        ),
     };
 
     // 4. Effective theme: CLI snapshot > config > profile.theme >
     //    bg-detect default (startup snapshot — see fn-level docs).
     let effective_theme: Option<&str> = theme
         .or_else(|| cfg.and_then(|c| c.general.theme.as_deref()))
-        .or_else(|| loaded_profile.as_ref().and_then(|lp| lp.profile.theme.as_deref()))
+        .or(profile_theme.as_deref())
         .or(bg_default);
 
     // 5. Compile + atomic swap.
     let compiled = Compiled::load_with_theme(
-        cfg,
-        path_str.as_deref(),
+        Some(&effective_config),
+        active_path.as_deref(),
         effective_theme,
-        loaded_profile.as_ref().map(|lp| &lp.profile),
-        loaded_profile.as_ref().map(|lp| lp.path_label.as_str()),
+        rules_source,
         depth,
     )?;
     handle.store(Arc::new(compiled));

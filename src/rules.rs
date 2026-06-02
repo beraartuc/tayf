@@ -575,6 +575,74 @@ pub(crate) fn builtin_rules() -> Vec<BuiltinRule> {
             source: RuleSource::Builtin,
             enabled: true,
         },
+        // ---- Promoted domain rules (v0.12.0, indices 12-17). Patterns are
+        // byte-for-byte from the retired embedded profiles. Only `arn` +
+        // `instance_id` are default-on (~zero-FP, prose-immune); the other
+        // four ship default-off (FP-sensitive — esp. `container_id`'s 12-hex
+        // git-hash collision) and are opt-in via `[[rules]] enabled = true`.
+        // Colors are pairwise-distinct (anti-collision, spec §3.4). ----
+        BuiltinRule {
+            name: "instance_id".into(),
+            pattern: r"\bi-[a-f0-9]{17}\b".into(),
+            style: Style { fg: Some(Color::Rgb(0xff, 0x7a, 0x4d)), ..Style::DEFAULT },
+            group_styles: Vec::new(),
+            styles_override: None,
+            priority: 100,
+            source: RuleSource::Builtin,
+            enabled: true,
+        },
+        BuiltinRule {
+            name: "region".into(),
+            // Exhaustive AWS region enumeration — dated snapshot 2026-05-26.
+            // New regions require a patch release + test + CHANGELOG.
+            pattern: r"\b(?:us-east-1|us-east-2|us-west-1|us-west-2|us-gov-east-1|us-gov-west-1|ca-central-1|ca-west-1|eu-central-1|eu-central-2|eu-west-1|eu-west-2|eu-west-3|eu-north-1|eu-south-1|eu-south-2|af-south-1|me-south-1|me-central-1|il-central-1|ap-east-1|ap-south-1|ap-south-2|ap-northeast-1|ap-northeast-2|ap-northeast-3|ap-southeast-1|ap-southeast-2|ap-southeast-3|ap-southeast-4|ap-southeast-5|sa-east-1|cn-north-1|cn-northwest-1)\b".into(),
+            style: Style { fg: Some(Color::Rgb(0x36, 0xe0, 0x8a)), ..Style::DEFAULT },
+            group_styles: Vec::new(),
+            styles_override: None,
+            priority: 100,
+            source: RuleSource::Builtin,
+            enabled: false,
+        },
+        BuiltinRule {
+            name: "arn".into(),
+            pattern: r"\barn:aws(?:-us-gov|-cn)?:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9_/.:+@*-]*[a-zA-Z0-9_/+@*-]\b".into(),
+            style: Style { fg: Some(Color::Rgb(0x5a, 0xd7, 0xe0)), ..Style::DEFAULT },
+            group_styles: Vec::new(),
+            styles_override: None,
+            priority: 200,
+            source: RuleSource::Builtin,
+            enabled: true,
+        },
+        BuiltinRule {
+            name: "container_id".into(),
+            pattern: r"\b[a-f0-9]{12}\b".into(),
+            style: Style { fg: Some(Color::Rgb(0xff, 0xb8, 0x6c)), ..Style::DEFAULT },
+            group_styles: Vec::new(),
+            styles_override: None,
+            priority: 100,
+            source: RuleSource::Builtin,
+            enabled: false,
+        },
+        BuiltinRule {
+            name: "image_tag".into(),
+            pattern: r"(?:\b[a-z0-9-]+(?:\.[a-z0-9-]+)+/[a-z0-9._/-]+:[a-z0-9._-]+\b|\b[a-z][a-z0-9_-]*(?:/[a-z0-9_-]+)*:latest\b)".into(),
+            style: Style { fg: Some(Color::Rgb(0xff, 0x79, 0xc6)), ..Style::DEFAULT },
+            group_styles: Vec::new(),
+            styles_override: None,
+            priority: 200,
+            source: RuleSource::Builtin,
+            enabled: false,
+        },
+        BuiltinRule {
+            name: "pod_name".into(),
+            pattern: r"\b[a-z][a-z0-9-]*-[bcdfghjklmnpqrstvwxz2456789]{10}-[bcdfghjklmnpqrstvwxz2456789]{5}\b".into(),
+            style: Style { fg: Some(Color::Rgb(0x82, 0xaa, 0xff)), ..Style::DEFAULT },
+            group_styles: Vec::new(),
+            styles_override: None,
+            priority: 100,
+            source: RuleSource::Builtin,
+            enabled: false,
+        },
     ]
 }
 
@@ -592,6 +660,12 @@ pub(crate) const BUILTIN_NAMES: &[&str] = &[
     "filename",
     "fqdn",
     "duration",
+    "instance_id",
+    "region",
+    "arn",
+    "container_id",
+    "image_tag",
+    "pod_name",
 ];
 
 #[cfg(test)]
@@ -723,8 +797,7 @@ impl Compiled {
         config: Option<&crate::config::Config>,
         config_path: Option<&str>,
         theme: Option<&str>,
-        profile: Option<&crate::profiles::Profile>,
-        profile_path: Option<&str>,
+        rules_source: RuleSource,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
         // Resolve theme name (if any) to a LoadedTheme before delegating to
@@ -737,7 +810,7 @@ impl Compiled {
             None => None,
         };
         let loaded_ref = loaded_theme.as_ref().map(|(n, l)| (n.as_str(), l));
-        Self::build_from_loaded(config, config_path, loaded_ref, profile, profile_path, depth)
+        Self::build_from_loaded(config, config_path, loaded_ref, rules_source, depth)
     }
 
     /// Internal builder that takes a pre-resolved [`crate::themes::LoadedTheme`]
@@ -753,35 +826,21 @@ impl Compiled {
         config: Option<&crate::config::Config>,
         config_path: Option<&str>,
         loaded_theme: Option<(&str, &crate::themes::LoadedTheme)>,
-        profile: Option<&crate::profiles::Profile>,
-        profile_path: Option<&str>,
+        rules_source: RuleSource,
         depth: crate::terminfo::ColorDepth,
     ) -> Result<Self> {
         let mut rules = builtin_rules();
 
-        // Step 2 (v0.5.2 §5.4) — profile.rules whitelist filter. Applied
-        // AFTER built-ins and BEFORE the theme layer so theme overrides
-        // only target the surviving rule set. `None` keeps all built-ins
-        // (v0.5.1 default). Unknown names in the whitelist were caught at
-        // `profiles::validate_profile` (Phase 1), so any name here that
-        // does not match a built-in is by definition unreachable; the
-        // `retain` simply drops non-listed built-ins.
-        if let Some(profile_def) = profile {
-            if let Some(whitelist) = profile_def.rules.as_ref() {
-                rules.retain(|r| whitelist.iter().any(|w| w == &r.name));
-            }
-        }
-
-        // Layer 3 (Step 3 in spec §5.4): optional preset theme. Applied
-        // BEFORE the user config so user rules win on conflict (spec §2
-        // Decision 5). Validation runs BEFORE the merge so semantic
-        // errors surface against the synthetic theme path rather than
+        // Theme layer: applied BEFORE the active rule set so the active rules
+        // win on conflict (spec §2 Decision 5). Validation runs BEFORE the
+        // merge so semantic errors surface against the theme path rather than
         // mutating the rule set first.
         if let Some((name, loaded)) = loaded_theme {
             let theme_cfg = crate::config::parse(&loaded.path_label, &loaded.source)?;
             crate::themes::validate_theme_rules(name, &loaded.path_label, &theme_cfg)?;
             // `RuleSource::Theme` so any `styles_override` map written here
-            // is tagged for theme-routed error collection downstream.
+            // is tagged for theme-routed error collection downstream. Themes
+            // never change a rule's enabled state.
             crate::config::apply_user_rules_with_source(
                 &loaded.path_label,
                 &mut rules,
@@ -790,59 +849,18 @@ impl Compiled {
             )?;
         }
 
-        // Step 4 (v0.5.2 §5.4) — profile.append_rules. Each entry is a NEW
-        // rule with `RuleSource::DiskProfile` so range/key validation
-        // routes into the fail-collected `Vec<ProfileRuleError>` ->
-        // `Error::ProfileValidation` envelope. Name-collision checks
-        // (with built-ins and within `append_rules`) were performed in
-        // Phase 1 `profiles::validate_profile`; pattern compile +
-        // styles-key dispatch happen in Step 6 (`compile_merged_rules`).
-        //
-        // Note ordering: append_rules land AFTER the theme layer but
-        // BEFORE user-config, so user-config still has last-writer-wins
-        // semantics over profile-appended rules (a user override of an
-        // appended rule name behaves identically to overriding a
-        // built-in — `apply_user_rules_with_source` finds it and
-        // mutates in place).
-        if let Some(profile_def) = profile {
-            let path_for_diag = profile_path.filter(|p| !p.is_empty()).unwrap_or("<profile>");
-            for ar in &profile_def.append_rules {
-                let style = match &ar.style {
-                    Some(us) => us.to_style(path_for_diag, &ar.name)?,
-                    None => crate::style::Style::default(),
-                };
-                rules.push(BuiltinRule {
-                    name: ar.name.clone(),
-                    pattern: ar.pattern.clone(),
-                    style,
-                    group_styles: Vec::new(),
-                    styles_override: ar.styles.clone(),
-                    // Data-driven via ProfileRule.priority (spec §2.1.B4 / Task 6).
-                    // Defaults to 100 (interior tier) when omitted in TOML.
-                    priority: ar.priority.unwrap_or(100),
-                    source: RuleSource::DiskProfile,
-                    enabled: true,
-                });
-            }
-        }
-
-        // Step 5 (v0.5.2 §5.4) — user config. `RuleSource::UserConfig`:
-        // user-config writes overwrite any prior theme- or profile-tagged
-        // `styles_override` (REPLACE semantics, Rev2 Decision 27), and any
-        // subsequent range/key errors surface as `Error::Config` so the
-        // user sees them on their own config path.
+        // Active rule set: either `config.toml`'s `[[rules]]`
+        // (`RuleSource::UserConfig`) or a named disk profile's `[[rules]]`
+        // (`RuleSource::DiskProfile`). Built-ins are the substrate in both;
+        // the active rules override / enable-disable / recolor / add on top.
+        // The supplied `rules_source` routes style/compile errors to the
+        // right envelope (`Error::Config` vs `Error::Profile*`).
         if let Some(c) = config {
-            // `config_path` flows into Error::Config messages produced inside
+            // `config_path` flows into error messages produced inside
             // apply_user_rules (and any nested UserStyle::to_style call) so
-            // users see `config error in /home/u/.config/tayf/config.toml: ...`
-            // rather than the empty-path sentinel.
+            // users see the file path rather than the empty-path sentinel.
             let path = config_path.filter(|p| !p.is_empty()).unwrap_or("<config>");
-            crate::config::apply_user_rules_with_source(
-                path,
-                &mut rules,
-                &c.rules,
-                RuleSource::UserConfig,
-            )?;
+            crate::config::apply_user_rules_with_source(path, &mut rules, &c.rules, rules_source)?;
         }
 
         // Final enabled filter: drop rules flagged disabled by their
@@ -853,12 +871,14 @@ impl Compiled {
 
         let theme_name = loaded_theme.map(|(n, _)| n);
         let theme_path = loaded_theme.map(|(_, l)| l.path_label.as_str());
-        // Profile diagnostic context: surface a user-facing name derived
-        // from the path label (file stem for disk paths, the
-        // <embedded:profile/{name}> suffix for embedded). The path label
-        // itself is the canonical source location surfaced in
-        // `Error::ProfileValidation::source_path`.
-        let profile_name_owned = profile_path.map(profile_name_from_path_label);
+        // Disk-profile diagnostics: when the active rules came from a profile
+        // file, surface its path/name on rule errors. Otherwise the rules came
+        // from `config.toml` and route through the `Config` envelope.
+        let (profile_name_owned, profile_path) = if rules_source == RuleSource::DiskProfile {
+            (config_path.map(profile_name_from_path_label), config_path)
+        } else {
+            (None, None)
+        };
         let profile_name = profile_name_owned.as_deref();
         let compiled_rules = compile_merged_rules(
             &rules,
@@ -898,7 +918,13 @@ impl Compiled {
     /// # Errors
     /// As for [`Self::load_with_theme`].
     pub(crate) fn load_builtins() -> Result<Self> {
-        Self::load_with_theme(None, None, None, None, None, crate::terminfo::ColorDepth::Truecolor)
+        Self::load_with_theme(
+            None,
+            None,
+            None,
+            RuleSource::UserConfig,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
     }
 
     /// Walk every style slot in the compiled rule set and reduce it to
@@ -927,13 +953,17 @@ impl Compiled {
 
 /// Build a [`Compiled`] from an in-memory [`crate::config::Config`] + optional
 /// theme name + optional profile name, at the given color `depth`. Additive
-/// entry-point: wraps [`Compiled::load_with_theme`] by resolving
-/// theme/profile-by-name.
+/// entry-point: resolves the active rule set (config default vs named disk
+/// profile) via [`crate::profiles::resolve_active`], then wraps
+/// [`Compiled::load_with_theme`].
 ///
 /// Used by the Config TUI live-preview (`compile_pending`) to recompile from
 /// `PendingEdits` + `ConfigSnapshot` deltas without touching disk. The TUI
 /// passes the terminal's DETECTED depth (not always Truecolor) so the preview's
 /// downsampled colors match what real `tayf` renders on the same terminal.
+///
+/// The profile-supplied `theme` precedence is handled by `lib`/`reload`; the
+/// TUI passes the explicit `theme_name` it already resolved.
 ///
 /// All validation, merge ordering, and error-routing semantics are
 /// identical to [`Compiled::load_with_theme`].
@@ -948,18 +978,8 @@ pub(crate) fn compile_from_config(
     profile_name: Option<&str>,
     depth: crate::terminfo::ColorDepth,
 ) -> Result<Compiled> {
-    let loaded_profile = match profile_name {
-        Some(name) => Some(crate::profiles::load(name)?),
-        None => None,
-    };
-    Compiled::load_with_theme(
-        Some(config),
-        None, // config_path: in-memory synth, no on-disk path
-        theme_name,
-        loaded_profile.as_ref().map(|lp| &lp.profile),
-        None, // profile_path: embedded only
-        depth,
-    )
+    let (effective, path, source) = crate::profiles::resolve_active(config, profile_name)?;
+    Compiled::load_with_theme(Some(&effective), path.as_deref(), theme_name, source, depth)
 }
 
 /// Fuzz-only: compile an arbitrary user pattern through the exact production
@@ -978,22 +998,15 @@ pub(crate) fn fuzz_compile_pattern(
 
 /// Derive a user-facing profile name from a profile source-path label.
 ///
-/// `<embedded:profile/{name}>` → `{name}`. A disk path ending in
-/// `<...>/{name}.toml` → `{name}`. Anything else falls back to the
-/// label itself (defensive — non-canonical labels reach this helper
-/// only via internal mis-wiring).
+/// A disk path ending in `<...>/{name}.toml` → `{name}`. Anything else falls
+/// back to the label itself (defensive — non-canonical labels reach this
+/// helper only via internal mis-wiring).
 ///
 /// The profile name surfaces in [`Error::ProfileValidation::profile`]
 /// and [`Error::Profile::name`]; `source_path` carries the full label
 /// separately so downstream diagnostics can show both
 /// "`profile 'myaws' validation failed (loaded from /path/...)`".
 fn profile_name_from_path_label(label: &str) -> String {
-    // Synthetic embedded label: <embedded:profile/{name}>
-    if let Some(rest) = label.strip_prefix("<embedded:profile/") {
-        if let Some(name) = rest.strip_suffix('>') {
-            return name.to_owned();
-        }
-    }
     // Disk path: take the file stem (basename minus `.toml`).
     let basename = label.rsplit(std::path::MAIN_SEPARATOR).next().unwrap_or(label);
     if let Some(stem) = basename.strip_suffix(".toml") {
@@ -1017,9 +1030,8 @@ fn profile_name_from_path_label(label: &str) -> String {
 ///   per spec §6.4 #6).
 ///
 /// `profile_name` + `profile_path` are `None` whenever `source != DiskProfile`;
-/// they are populated by the merged-rules caller (Phase 4 Task 11) once the
-/// profile load is threaded through. Phase 3 leaves them `None` because no
-/// caller produces `DiskProfile` rules yet.
+/// they are populated by [`Compiled::build_from_loaded`] when the active rule
+/// set was loaded from a named disk profile (`rules_source == DiskProfile`).
 fn compile_error_for(
     rule: &BuiltinRule,
     config_path: Option<&str>,
@@ -1510,13 +1522,13 @@ pub(crate) fn testing_match_named_rule(rule_name: &str, input: &str) -> Option<S
 }
 
 /// Full-pipeline span helper for the corpus harness. Builds a `Compiled`
-/// with built-ins only (when `profile` is `None`) or with the named embedded
-/// profile active, runs `select_runs_named` against `input`, and returns
-/// `Vec<(rule_name, matched_span)>` in start-ascending (accepted) order.
+/// with built-ins only (when `profile` is `None`) or with the named disk
+/// profile's rules active, runs `select_runs_named` against `input`, and
+/// returns `Vec<(rule_name, matched_span)>` in start-ascending (accepted)
+/// order.
 ///
-/// Applies the full production pipeline: priority sort + overlap suppression
-/// + profile gating (whitelist + append_rules). Used for corpus decision
-/// measurement (spec §5.3, §5.4).
+/// Applies the full production pipeline: priority sort + overlap suppression.
+/// Used for corpus decision measurement (spec §5.3, §5.4).
 ///
 /// Builds a fresh `Compiled` per call — only for use in test/harness code.
 /// Returns an empty `Vec` on compile error (unknown profile, etc.).
@@ -1525,14 +1537,19 @@ pub(crate) fn testing_match_named_rule(rule_name: &str, input: &str) -> Option<S
 pub(crate) fn testing_pipeline_spans(input: &str, profile: Option<&str>) -> Vec<(String, String)> {
     let compiled = if let Some(name) = profile {
         match crate::profiles::load(name) {
-            Ok(lp) => Compiled::load_with_theme(
-                None,
-                None,
-                None,
-                Some(&lp.profile),
-                Some(lp.path_label.as_str()),
-                crate::terminfo::ColorDepth::Truecolor,
-            ),
+            Ok(lp) => {
+                let effective = crate::config::Config {
+                    general: crate::config::GeneralSection::default(),
+                    rules: lp.profile.rules,
+                };
+                Compiled::load_with_theme(
+                    Some(&effective),
+                    Some(lp.path_label.as_str()),
+                    None,
+                    RuleSource::DiskProfile,
+                    crate::terminfo::ColorDepth::Truecolor,
+                )
+            }
             Err(_) => return Vec::new(),
         }
     } else {
@@ -1765,8 +1782,7 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Truecolor,
         )
         .unwrap();
@@ -1817,11 +1833,16 @@ mod tests {
     #[test]
     fn compiled_load_succeeds() {
         let c = Compiled::load_builtins().expect("builtin compile");
-        let n = builtin_rules().len();
-        assert_eq!(c.individuals.len(), n);
-        assert_eq!(c.styles.len(), n);
-        assert_eq!(c.set.len(), n);
-        assert_eq!(n, 12, "v0.5.6 ships twelve built-in rules");
+        // v0.12.0: the catalog holds 18 built-ins, but four of the six
+        // promoted domain rules ship default-off, so the compiled default set
+        // is 14 (12 base + arn + instance_id). The parallel vectors all match.
+        let catalog = builtin_rules();
+        let enabled = catalog.iter().filter(|r| r.enabled).count();
+        assert_eq!(catalog.len(), 18, "v0.12.0 ships eighteen built-in rules");
+        assert_eq!(enabled, 14, "12 base + arn + instance_id default-on");
+        assert_eq!(c.individuals.len(), enabled);
+        assert_eq!(c.styles.len(), enabled);
+        assert_eq!(c.set.len(), enabled);
     }
 
     #[test]
@@ -1871,8 +1892,14 @@ mod tests {
     fn load_with_no_config_matches_load_builtins() {
         use crate::terminfo::ColorDepth;
         let a = Compiled::load_builtins().unwrap();
-        let b =
-            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
+        let b = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         assert_eq!(a.individuals.len(), b.individuals.len());
         assert_eq!(a.styles, b.styles);
     }
@@ -1880,7 +1907,9 @@ mod tests {
     #[test]
     fn load_at_none_depth_strips_colors_but_keeps_attributes() {
         use crate::terminfo::ColorDepth;
-        let c = Compiled::load_with_theme(None, None, None, None, None, ColorDepth::None).unwrap();
+        let c =
+            Compiled::load_with_theme(None, None, None, RuleSource::UserConfig, ColorDepth::None)
+                .unwrap();
         for s in &c.styles {
             assert_eq!(s.fg, None, "depth=None must strip all fg colors");
             assert_eq!(s.bg, None, "depth=None must strip all bg colors");
@@ -1893,8 +1922,14 @@ mod tests {
     #[test]
     fn log_level_builtin_neon_color_at_truecolor() {
         use crate::terminfo::ColorDepth;
-        let c =
-            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
+        let c = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         let log_idx = builtin_rules().iter().position(|r| r.name == "log_level").unwrap();
         // Built-in log_level fg is Rgb(0xff,0x53,0x72) — the Neon palette hot-coral.
         assert_eq!(c.styles[log_idx].fg, Some(crate::style::Color::Rgb(0xff, 0x53, 0x72)));
@@ -1962,8 +1997,7 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Basic16,
         )
         .unwrap();
@@ -1973,7 +2007,7 @@ mod tests {
             Some(_) => {}
             None => panic!("user rule should still carry a color at Basic16"),
         }
-        assert_eq!(c.individuals.len(), 13, "12 built-ins + 1 user rule");
+        assert_eq!(c.individuals.len(), 15, "14 default-on built-ins + 1 user rule");
     }
 
     #[test]
@@ -1998,8 +2032,7 @@ mod tests {
             Some(&cfg),
             Some("/x/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Truecolor,
         )
         .expect_err("invalid regex must fail to compile");
@@ -2031,8 +2064,7 @@ mod tests {
             Some(&cfg),
             Some("/x/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Truecolor,
         )
         .expect_err("invalid regex must fail to compile");
@@ -2066,8 +2098,7 @@ mod tests {
             Some(&cfg),
             Some("/x"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Truecolor,
         )
         .unwrap();
@@ -2428,8 +2459,7 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();
@@ -2508,11 +2538,22 @@ mod tests {
         // Applying the 'dark' theme MUST produce styles identical to no theme.
         // This is the contract spelled out in spec §5.1.
         use crate::terminfo::ColorDepth;
-        let no_theme =
-            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
-        let dark =
-            Compiled::load_with_theme(None, None, Some("dark"), None, None, ColorDepth::Truecolor)
-                .unwrap();
+        let no_theme = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
+        let dark = Compiled::load_with_theme(
+            None,
+            None,
+            Some("dark"),
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         assert_eq!(no_theme.styles, dark.styles, "dark theme must equal no-theme defaults");
     }
 
@@ -2520,9 +2561,14 @@ mod tests {
     fn light_theme_sets_permission_to_slate() {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
-        let c =
-            Compiled::load_with_theme(None, None, Some("light"), None, None, ColorDepth::Truecolor)
-                .unwrap();
+        let c = Compiled::load_with_theme(
+            None,
+            None,
+            Some("light"),
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "permission").unwrap();
         assert_eq!(c.styles[idx].fg, Some(Color::Rgb(0x47, 0x55, 0x69)));
         assert!(!c.styles[idx].dim, "permission must not be dim in Neon-light theme");
@@ -2532,9 +2578,14 @@ mod tests {
     fn light_theme_sets_ipv4_to_azure() {
         use crate::style::Color;
         use crate::terminfo::ColorDepth;
-        let c =
-            Compiled::load_with_theme(None, None, Some("light"), None, None, ColorDepth::Truecolor)
-                .unwrap();
+        let c = Compiled::load_with_theme(
+            None,
+            None,
+            Some("light"),
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         let idx = BUILTIN_NAMES.iter().position(|n| *n == "ipv4").unwrap();
         assert_eq!(c.styles[idx].fg, Some(Color::Rgb(0x0c, 0x6b, 0x94)));
         assert!(!c.styles[idx].bold, "ipv4 must not be bold in Neon-light theme");
@@ -2564,8 +2615,7 @@ mod tests {
             Some(&cfg),
             Some("/x/cfg.toml"),
             Some("light"),
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Truecolor,
         )
         .unwrap();
@@ -2579,9 +2629,14 @@ mod tests {
     #[test]
     fn unknown_theme_returns_error_theme() {
         use crate::terminfo::ColorDepth;
-        let err =
-            Compiled::load_with_theme(None, None, Some("nope"), None, None, ColorDepth::Truecolor)
-                .expect_err("unknown theme must error");
+        let err = Compiled::load_with_theme(
+            None,
+            None,
+            Some("nope"),
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .expect_err("unknown theme must error");
         assert!(matches!(err, crate::Error::Theme { .. }), "got: {err:?}");
     }
 
@@ -2590,10 +2645,22 @@ mod tests {
         // Behavioral guarantee: existing `load(...)` continues to behave as if
         // no theme were provided. Regression guard for the proxy refactor.
         use crate::terminfo::ColorDepth;
-        let a =
-            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
-        let b =
-            Compiled::load_with_theme(None, None, None, None, None, ColorDepth::Truecolor).unwrap();
+        let a = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
+        let b = Compiled::load_with_theme(
+            None,
+            None,
+            None,
+            RuleSource::UserConfig,
+            ColorDepth::Truecolor,
+        )
+        .unwrap();
         assert_eq!(a.styles, b.styles);
     }
 
@@ -2621,8 +2688,7 @@ mod tests {
             Some(&cfg),
             Some("/x"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             ColorDepth::Truecolor,
         )
         .expect_err("regex must exceed RegexBuilder::size_limit(1 MiB)");
@@ -2642,8 +2708,7 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("compile");
@@ -2661,8 +2726,7 @@ mod tests {
             Some(&cfg),
             Some("/test/cfg.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("compile");
@@ -2677,8 +2741,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("compile");
@@ -2742,8 +2805,7 @@ fg = "red"
             None,
             None,
             Some(("synthetic", &loaded)),
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with ThemeValidation");
@@ -2785,8 +2847,7 @@ fg = "red"
             Some(&cfg),
             Some("/test/config.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with Config");
@@ -2838,8 +2899,7 @@ fg = "red"
             Some(&cfg),
             Some("/test/config.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with Config");
@@ -2882,8 +2942,7 @@ fg = "red"
             Some(&cfg),
             Some("/test/config.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect_err("should fail with Config");
@@ -2919,8 +2978,7 @@ fg = "red"
             Some(&cfg),
             Some("/test/config.toml"),
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("compile");
@@ -3520,49 +3578,55 @@ fg = "red"
         );
     }
 
-    /// v0.5.2 spec §11.1 I-6 / §8.1 #8 — when no profile is active, the
-    /// rule set produced by `Compiled::load_with_theme` MUST be
-    /// byte-equivalent to the v0.5.6 baseline (12 built-in rules, all
-    /// tagged `RuleSource::Builtin`). Catches any accidental
-    /// profile-active branch firing on a `None` profile (e.g. a misplaced
-    /// `.retain` over the whitelist filter, or an off-by-one in the
-    /// `append_rules` loop).
+    /// v0.5.2 spec §11.1 I-6 / §8.1 #8 (updated v0.12.0) — when no profile is
+    /// active, the compiled rule set MUST be the default-on built-in baseline:
+    /// the 12 base rules plus the two default-on promoted domain rules
+    /// (`instance_id`, `arn`) = 14, all tagged `RuleSource::Builtin`, with the
+    /// four default-off promoted rules filtered out. Catches any accidental
+    /// profile-active branch firing on a `None` profile, or a broken
+    /// default-off filter.
     #[test]
     fn hot_path_unchanged_when_no_profile() {
         let compiled = Compiled::load_with_theme(
             None, // config
             None, // config_path
             None, // theme
-            None, // profile
-            None, // profile_path
+            crate::rules::RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("baseline load with all-None must succeed");
 
-        // Hard baseline — the 12 built-in rules, neither filtered nor
-        // augmented.
+        // Hard baseline — the 14 default-on built-in rules, neither filtered
+        // by a profile nor augmented by user config.
         assert_eq!(
             compiled.individuals.len(),
-            12,
-            "v0.5.6 baseline = 12 built-in rules; got {n}",
+            14,
+            "v0.12.0 baseline = 14 default-on built-in rules; got {n}",
             n = compiled.individuals.len(),
         );
-        assert_eq!(compiled.styles.len(), 12, "styles must parallel individuals length");
+        assert_eq!(compiled.styles.len(), 14, "styles must parallel individuals length");
 
-        // The compiled rule names match the canonical BUILTIN_NAMES list
-        // 1:1 in order — i.e. nothing was inserted, dropped, or reordered.
-        let baseline_names: Vec<&str> = BUILTIN_NAMES.to_vec();
-        let merged_names: Vec<String> = builtin_rules().into_iter().map(|r| r.name).collect();
+        // The compiled rule names are exactly the default-on subset of
+        // BUILTIN_NAMES, in catalog order (nothing inserted/reordered).
+        let expected_default_on: Vec<&str> = builtin_rules()
+            .iter()
+            .filter(|r| r.enabled)
+            .map(|r| BUILTIN_NAMES[BUILTIN_NAMES.iter().position(|n| *n == r.name).unwrap()])
+            .collect();
         assert_eq!(
-            merged_names, baseline_names,
-            "BUILTIN_NAMES and builtin_rules() must agree on the 12 baseline rules"
+            compiled.names, expected_default_on,
+            "compiled set must be the default-on built-ins in catalog order"
         );
 
-        // Defensive: every rule produced by builtin_rules() carries
-        // `source == RuleSource::Builtin`. If a profile-active path
-        // accidentally fired on the None branch, at least one rule's
-        // `source` would have flipped to DiskProfile (or the rule
-        // count would have shifted) — both fail the assertions above.
+        // The full catalog still agrees with BUILTIN_NAMES (18 entries).
+        let catalog_names: Vec<String> = builtin_rules().into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            catalog_names,
+            BUILTIN_NAMES.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+            "BUILTIN_NAMES and builtin_rules() must agree on all 18 catalog rules"
+        );
+
+        // Defensive: every catalog rule carries `source == RuleSource::Builtin`.
         for r in builtin_rules() {
             assert_eq!(
                 r.source,
@@ -3645,9 +3709,12 @@ fg = "red"
     }
 
     #[test]
-    fn priority_default_is_zero_for_all_builtins() {
-        for r in builtin_rules() {
-            assert_eq!(r.priority, 0, "built-in '{}' must have priority 0", r.name);
+    fn priority_default_is_zero_for_the_twelve_base_builtins() {
+        // The original 12 base built-ins (indices 0-11) ship priority 0. The
+        // six promoted domain rules (indices 12-17) carry interior/envelope
+        // tiers (100/200) — asserted in `promoted_priorities`.
+        for r in builtin_rules().iter().take(12) {
+            assert_eq!(r.priority, 0, "base built-in '{}' must have priority 0", r.name);
         }
     }
 
@@ -3657,8 +3724,7 @@ fg = "red"
             None,
             None,
             None,
-            None,
-            None,
+            RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .expect("default load");
@@ -3688,8 +3754,14 @@ fg = "red"
         let compiled =
             compile_from_config(&config, None, None, crate::terminfo::ColorDepth::Truecolor)
                 .expect("compile");
-        assert!(compiled.individuals.len() >= 12, "at least 12 builtins compiled");
-        assert!(compiled.priorities.iter().all(|&p| p == 0), "all builtins priority 0");
+        // v0.12.0: 14 default-on built-ins (12 base @ priority 0 + arn @ 200 +
+        // instance_id @ 100). The four default-off promoted rules are filtered.
+        assert_eq!(compiled.individuals.len(), 14, "14 default-on built-ins compiled");
+        assert_eq!(
+            compiled.priorities.iter().filter(|&&p| p == 0).count(),
+            12,
+            "the 12 base built-ins keep priority 0"
+        );
     }
 
     #[test]
@@ -3704,5 +3776,238 @@ fg = "red"
             crate::terminfo::ColorDepth::Truecolor,
         );
         assert!(result.is_err(), "unknown theme name surfaces as Error");
+    }
+
+    // -----------------------------------------------------------------------
+    // v0.12.0 — promoted domain built-ins (indices 12-17).
+    // -----------------------------------------------------------------------
+
+    fn builtin(name: &str) -> BuiltinRule {
+        builtin_rules().into_iter().find(|r| r.name == name).expect("builtin present")
+    }
+
+    /// Apply a compiled handle to one input line; return the stylized bytes.
+    fn apply_to_line(compiled: &arc_swap::ArcSwap<Compiled>, line: &str) -> Vec<u8> {
+        let mut scratch = crate::pipeline::PipelineScratch::default();
+        let mut out = Vec::new();
+        crate::pipeline::apply_rules(line.as_bytes(), compiled, &mut scratch, &mut out)
+            .expect("apply_rules writes into Vec");
+        out
+    }
+
+    fn has_sgr_span_for(bytes: &[u8], substring: &str) -> bool {
+        let s = String::from_utf8_lossy(bytes);
+        s.contains(substring) && s.contains("\u{1b}[")
+    }
+
+    fn no_sgr_span_for(bytes: &[u8], substring: &str) -> bool {
+        let s = String::from_utf8_lossy(bytes);
+        if !s.contains(substring) {
+            return false;
+        }
+        let idx = s.find(substring).expect("checked above");
+        !s[..idx].contains("\u{1b}[")
+    }
+
+    /// Compile the default built-in set (`arn` + `instance_id` on; others off).
+    fn compile_default() -> arc_swap::ArcSwap<Compiled> {
+        arc_swap::ArcSwap::from_pointee(
+            Compiled::load_with_theme(
+                None,
+                None,
+                None,
+                RuleSource::UserConfig,
+                crate::terminfo::ColorDepth::Truecolor,
+            )
+            .expect("compile"),
+        )
+    }
+
+    /// Compile with one default-off built-in enabled via a synthetic config.
+    fn compile_with_enabled(name: &str) -> arc_swap::ArcSwap<Compiled> {
+        let cfg = crate::config::Config {
+            general: crate::config::GeneralSection::default(),
+            rules: vec![crate::config::UserRule {
+                name: name.to_owned(),
+                pattern: None,
+                style: None,
+                enabled: true,
+                styles: None,
+                priority: None,
+            }],
+        };
+        arc_swap::ArcSwap::from_pointee(
+            Compiled::load_with_theme(
+                Some(&cfg),
+                None,
+                None,
+                RuleSource::UserConfig,
+                crate::terminfo::ColorDepth::Truecolor,
+            )
+            .expect("compile"),
+        )
+    }
+
+    #[test]
+    fn builtin_names_has_18_with_promoted_appended_at_end() {
+        assert_eq!(BUILTIN_NAMES.len(), 18);
+        assert_eq!(
+            &BUILTIN_NAMES[12..18],
+            &["instance_id", "region", "arn", "container_id", "image_tag", "pod_name"]
+        );
+    }
+
+    #[test]
+    fn promoted_default_enabled_state() {
+        assert!(
+            builtin("arn").enabled && builtin("instance_id").enabled,
+            "arn + instance_id default-on"
+        );
+        for off in ["region", "container_id", "image_tag", "pod_name"] {
+            assert!(!builtin(off).enabled, "{off} must default-off");
+        }
+    }
+
+    #[test]
+    fn promoted_priorities() {
+        assert_eq!(builtin("arn").priority, 200);
+        assert_eq!(builtin("image_tag").priority, 200);
+        for p in ["instance_id", "region", "container_id", "pod_name"] {
+            assert_eq!(builtin(p).priority, 100, "{p} priority 100");
+        }
+    }
+
+    #[test]
+    fn promoted_colors_are_pairwise_distinct_and_distinct_from_neighbors() {
+        // Anti-collision (spec §3.4): assert distinctness, not exact hex.
+        let names = [
+            "arn",
+            "instance_id",
+            "region",
+            "container_id",
+            "image_tag",
+            "pod_name",
+            "uuid",
+            "filename",
+        ];
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                assert_ne!(
+                    builtin(names[i]).style.fg,
+                    builtin(names[j]).style.fg,
+                    "{} and {} must have distinct fg",
+                    names[i],
+                    names[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arn_fires_by_default() {
+        let c = compile_default();
+        assert!(has_sgr_span_for(
+            &apply_to_line(&c, "Found arn:aws:iam:::role/MyRole ok\n"),
+            "arn:aws:iam:::role/MyRole"
+        ));
+    }
+
+    #[test]
+    fn instance_id_fires_by_default_rejects_wrong_shape() {
+        let c = compile_default();
+        assert!(has_sgr_span_for(
+            &apply_to_line(&c, "Instance: i-0abcd1234567890ef up\n"),
+            "i-0abcd1234567890ef"
+        ));
+        assert!(no_sgr_span_for(
+            &apply_to_line(&c, "fake i-0abcd1234567890e end\n"),
+            "i-0abcd1234567890e"
+        ));
+        assert!(no_sgr_span_for(
+            &apply_to_line(&c, "fake i-0ABCD1234567890EF end\n"),
+            "i-0ABCD1234567890EF"
+        ));
+    }
+
+    #[test]
+    fn instance_id_prose_immune() {
+        let c = compile_default();
+        for word in ["multi-0abcd1234567890ef", "wifi-0abcd1234567890ef"] {
+            let line = format!("see {word} here\n");
+            // The `i-`/`fi-` boundary: `multi-` has no word-boundary before `i-`.
+            assert!(
+                no_sgr_span_for(&apply_to_line(&c, &line), word),
+                "{word} must not match instance_id"
+            );
+        }
+    }
+
+    #[test]
+    fn arn_prose_immune() {
+        let c = compile_default();
+        for line in ["a warn:aws message\n", "the alarm:aws fired\n"] {
+            let bytes = apply_to_line(&c, line);
+            let s = String::from_utf8_lossy(&bytes);
+            assert!(!s.contains("\u{1b}["), "no SGR for prose `{line}`: {s:?}");
+        }
+    }
+
+    #[test]
+    fn container_id_off_by_default_on_when_enabled() {
+        let off = compile_default();
+        assert!(no_sgr_span_for(
+            &apply_to_line(&off, "git 7c79c4bf9712 by Alice\n"),
+            "7c79c4bf9712"
+        ));
+        let on = compile_with_enabled("container_id");
+        assert!(has_sgr_span_for(
+            &apply_to_line(&on, "git 7c79c4bf9712 by Alice\n"),
+            "7c79c4bf9712"
+        ));
+    }
+
+    #[test]
+    fn region_off_by_default_on_when_enabled_rejects_invented() {
+        let on = compile_with_enabled("region");
+        assert!(has_sgr_span_for(&apply_to_line(&on, "Region: us-east-1 ok\n"), "us-east-1"));
+        assert!(no_sgr_span_for(&apply_to_line(&on, "Region: eu-south-3 ok\n"), "eu-south-3"));
+    }
+
+    #[test]
+    fn arn_envelope_wins_over_interior_ipv4_independent_of_region_off() {
+        // arn ON (200) suppresses interior ipv4 (0); region is OFF and irrelevant.
+        let c = compile_default();
+        let line = "arn:aws:ec2:us-west-2:111111111111:vpc/1.2.3.4\n";
+        let bytes = apply_to_line(&c, line);
+        assert!(has_sgr_span_for(&bytes, "arn:aws:ec2:us-west-2:111111111111:vpc/1.2.3.4"));
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(
+            !s.contains("\u{1b}[32m1.2.3.4") && !s.contains("\u{1b}[34m1.2.3.4"),
+            "interior ipv4 suppressed: {s:?}"
+        );
+    }
+
+    #[test]
+    fn pod_name_on_when_enabled_rejects_bare_git_hash() {
+        let on = compile_with_enabled("pod_name");
+        assert!(has_sgr_span_for(
+            &apply_to_line(&on, "Pod nginx-deployment-7c79c4bf97-9hk6r Running\n"),
+            "nginx-deployment-7c79c4bf97-9hk6r"
+        ));
+        assert!(no_sgr_span_for(&apply_to_line(&on, "Commit 7c79c4bf97 by Alice\n"), "7c79c4bf97"));
+    }
+
+    #[test]
+    fn image_tag_on_when_enabled_two_branches_and_fp_guard() {
+        let on = compile_with_enabled("image_tag");
+        assert!(has_sgr_span_for(
+            &apply_to_line(&on, "Pull gcr.io/google/nginx:1.21 done\n"),
+            "gcr.io/google/nginx:1.21"
+        ));
+        assert!(has_sgr_span_for(
+            &apply_to_line(&on, "docker pull nginx:latest\n"),
+            "nginx:latest"
+        ));
+        assert!(no_sgr_span_for(&apply_to_line(&on, "docker pull nginx:1.21\n"), "nginx:1.21"));
     }
 }

@@ -656,6 +656,12 @@ mod tests {
 
     #[test]
     fn shipped_theme_files_parse_and_validate() {
+        // The 12 base built-ins (indices 0-11). The six promoted domain rules
+        // (v0.12.0, indices 12-17) fall back to their inline `builtin_rules()`
+        // defaults under every theme until the per-theme entries land; until
+        // then a shipped theme overrides exactly the 12 base built-ins.
+        let base_builtins: std::collections::HashSet<&str> =
+            crate::rules::BUILTIN_NAMES.iter().take(12).copied().collect();
         for &name in names() {
             let loaded = load(name).unwrap();
             let src: &str = &loaded.source;
@@ -663,11 +669,14 @@ mod tests {
                 .unwrap_or_else(|e| panic!("theme {name:?} did not parse: {e}"));
             validate_theme_rules(name, &synthetic_path(name), &cfg)
                 .unwrap_or_else(|e| panic!("theme {name:?} failed validation: {e}"));
-            assert_eq!(
-                cfg.rules.len(),
-                crate::rules::BUILTIN_NAMES.len(),
-                "theme {name:?} should override every built-in"
-            );
+            let overridden: std::collections::HashSet<&str> =
+                cfg.rules.iter().map(|r| r.name.as_str()).collect();
+            for base in &base_builtins {
+                assert!(
+                    overridden.contains(base),
+                    "theme {name:?} should override every base built-in; missing {base:?}"
+                );
+            }
         }
     }
 

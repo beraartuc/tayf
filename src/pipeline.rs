@@ -1730,8 +1730,7 @@ mod pipeline_tests {
             None,
             None,
             None,
-            None,
-            None,
+            crate::rules::RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();
@@ -1753,8 +1752,7 @@ mod pipeline_tests {
             None,
             None,
             None,
-            None,
-            None,
+            crate::rules::RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();
@@ -1780,8 +1778,7 @@ mod pipeline_tests {
             None,
             None,
             None,
-            None,
-            None,
+            crate::rules::RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();
@@ -1807,8 +1804,7 @@ mod pipeline_tests {
             None,
             None,
             None,
-            None,
-            None,
+            crate::rules::RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();
@@ -1836,8 +1832,7 @@ mod pipeline_tests {
             Some(&cfg),
             Some("/x"),
             None,
-            None,
-            None,
+            crate::rules::RuleSource::UserConfig,
             crate::terminfo::ColorDepth::Truecolor,
         )
         .unwrap();

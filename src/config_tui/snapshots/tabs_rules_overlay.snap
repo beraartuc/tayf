@@ -12,13 +12,13 @@
 │  filename                    ││                                              │
 │  fqdn                        ││                                              │
 │  duration                    ││                                              │
+│  instance_id                 ││                                              │
+│  region                      ││                                              │
+│  arn                         ││                                              │
+│  container_id                ││                                              │
+│  image_tag                   ││                                              │
+│  pod_name                    ││                                              │
 │── User ──                    ││                                              │
-│                              ││                                              │
-│                              ││                                              │
-│                              ││                                              │
-│                              ││                                              │
-│                              ││                                              │
-│                              ││                                              │
 │                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
   n:new  e:edit  c:color  o:override  r:reset  d:delete                         

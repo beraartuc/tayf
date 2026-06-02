@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::error::{Error, Result};
 
 /// Top-level config shape.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
@@ -627,6 +627,13 @@ pub(crate) fn default_config_toml() -> String {
     for r in crate::rules::builtin_rules() {
         let _ = writeln!(out, "[[rules]]");
         let _ = writeln!(out, "name = \"{}\"", r.name);
+        // Default-off built-ins (FP-sensitive opt-in rules: region,
+        // container_id, image_tag, pod_name) MUST be emitted with
+        // `enabled = false`, else a fresh config would re-arm them (the merge
+        // flips the working `enabled` state from the written value).
+        if !r.enabled {
+            let _ = writeln!(out, "enabled = false");
+        }
         // Triple-single-quoted literal strings preserve regex backslashes verbatim.
         let _ = writeln!(out, "pattern = '''{}'''", r.pattern);
         // Style serialization: emit only non-default axes for a minimal, clean roundtrip.
@@ -1699,5 +1706,16 @@ priority = 99999999999999
             assert_eq!(parsed.name, *expected, "rule order preserved");
             assert!(parsed.pattern.is_some(), "every dumped rule has a pattern");
         }
+    }
+
+    #[test]
+    fn default_config_keeps_default_off_builtins_off() {
+        let toml = default_config_toml();
+        let cfg = parse("/x", &toml).expect("generated config parses");
+        let cid =
+            cfg.rules.iter().find(|r| r.name == "container_id").expect("container_id emitted");
+        assert!(!cid.enabled, "container_id must be written with enabled = false");
+        let arn = cfg.rules.iter().find(|r| r.name == "arn").expect("arn emitted");
+        assert!(arn.enabled, "arn (default-on) stays enabled");
     }
 }

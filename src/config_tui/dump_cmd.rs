@@ -1,9 +1,11 @@
 //! `tayf config dump` implementation (no ratatui). Iterates
-//! `rules::builtin_rules()` + `themes::REGISTRY` + `profiles::EMBEDDED_PROFILES`
-//! and serializes to stdout as TOML via `toml::ser::to_string_pretty`.
+//! `rules::builtin_rules()` + `themes::names()` and serializes to stdout as a
+//! TOML reference catalog.
 //!
 //! `--kind` restricts the output to one section; default emits all
-//! three concatenated with one blank line between sections.
+//! three concatenated with one blank line between sections. The profiles
+//! section is a note (the embedded library is retired — profiles are now
+//! personal disk presets).
 
 use std::fmt::Write as _;
 use std::io::Write;
@@ -67,14 +69,12 @@ pub(crate) fn render(kind: Option<DumpKind>) -> String {
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str("# Embedded profile library shipped with tayf. Override an\n");
-        out.push_str("# embedded profile by writing `<config_base>/profiles/<name>.toml`.\n\n");
-        for name in crate::profiles::embedded_profile_names() {
-            let _ = writeln!(out, "[profiles.{name}]");
-            out.push_str(
-                "# (body omitted — see assets/profiles/*.toml in the tayf source tree)\n\n",
-            );
-        }
+        // The embedded profile library is retired (v0.12.0): the six domain
+        // rules are now built-ins. A profile is now a personal, switchable
+        // preset on disk.
+        out.push_str("# Profiles are personal, switchable presets. Create one by writing\n");
+        out.push_str("# `<config_base>/profiles/<name>.toml` (same `[[rules]]` schema as\n");
+        out.push_str("# config.toml) and activate it with `--profile <name>`.\n");
     }
 
     out
@@ -107,11 +107,16 @@ mod tests {
         assert!(out.contains("[[patterns]]"), "default dump must emit [[patterns]]");
         assert!(out.contains("[themes.dark]"), "default dump must emit [themes.dark]");
         assert!(out.contains("[themes.light]"), "default dump must emit [themes.light]");
-        assert!(out.contains("[profiles.aws]"), "default dump must emit [profiles.aws]");
-        assert!(out.contains("[profiles.k8s]"), "default dump must emit [profiles.k8s]");
-        assert!(out.contains("[profiles.docker]"), "default dump must emit [profiles.docker]");
-        assert!(out.contains("[profiles.gcp]"), "default dump must emit [profiles.gcp]");
-        assert!(out.contains("[profiles.network]"), "default dump must emit [profiles.network]");
+        // The embedded profile library is retired — the profiles section is a
+        // note about personal disk presets, not an enumeration.
+        assert!(
+            out.contains("Profiles are personal, switchable presets"),
+            "default dump must emit the profiles note; got: {out}"
+        );
+        assert!(
+            !out.contains("[profiles."),
+            "default dump must NOT enumerate retired embedded profiles; got: {out}"
+        );
     }
 
     #[test]
@@ -126,8 +131,8 @@ mod tests {
             "dump --kind themes must NOT emit [[patterns]]; got: {out}"
         );
         assert!(
-            !out.contains("[profiles."),
-            "dump --kind themes must NOT emit [profiles.*]; got: {out}"
+            !out.contains("Profiles are personal"),
+            "dump --kind themes must NOT emit the profiles note; got: {out}"
         );
     }
 
@@ -135,8 +140,8 @@ mod tests {
     fn dump_profiles_only_excludes_patterns_and_themes() {
         let out = super::render(Some(DumpKind::Profiles));
         assert!(
-            out.contains("[profiles."),
-            "dump --kind profiles must emit at least one [profiles.*] table; got: {out}"
+            out.contains("Profiles are personal, switchable presets"),
+            "dump --kind profiles must emit the profiles note; got: {out}"
         );
         assert!(
             !out.contains("[[patterns]]"),
