@@ -1047,6 +1047,35 @@ pub(crate) fn current_fg_for_rule(
     crate::rules::builtin_rules().into_iter().find(|r| r.name == name).and_then(|r| r.style.fg)
 }
 
+/// Resolve the **effective** enabled state of `rule_id`, in the same
+/// precedence compilation uses: pending `enabled` flip > active
+/// config/profile rule's `enabled` > the built-in's default-enabled
+/// state (from [`crate::rules::builtin_rules`]).
+///
+/// Drives the Patterns `Space` toggle (computes the current state to
+/// flip), the Detail `Status:` line, and the dimmed-row treatment in the
+/// list (spec §5). A user rule that is not a built-in name and is absent
+/// from the snapshot defaults to `true` (a freshly-added rule is on).
+pub(crate) fn effective_enabled_for_rule(
+    app: &App,
+    rule_id: &crate::config_tui::edit::RuleId,
+) -> bool {
+    let name = rule_id_display_name(rule_id);
+    // 1. Pending edit (highest precedence).
+    if let Some(en) = app.edits.rules.get(rule_id).and_then(|re| re.enabled) {
+        return en;
+    }
+    // 2. Active config/profile rule entry by name (a user `enabled = false`
+    //    on a built-in, or a user rule's own state).
+    if let Some(r) = app.snapshot.parsed.rules.iter().find(|r| r.name == name) {
+        return r.enabled;
+    }
+    // 3. Built-in default-enabled state. A name that is neither a snapshot
+    //    rule nor a built-in (should not happen for a resolved RuleId)
+    //    defaults to enabled.
+    crate::rules::builtin_rules().into_iter().find(|r| r.name == name).is_none_or(|r| r.enabled)
+}
+
 /// Look up the current pattern source for a `RuleId`, applying any
 /// `PendingEdits` overlay. Used by the `e` keystroke to initialize the
 /// `EditRegex` modal buffer. Embedded / disk-profile rule sources are
@@ -2030,7 +2059,9 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
         );
-        app.edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        app.edits
+            .rules
+            .insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles, enabled: None });
         assert!(app.edits.is_dirty(), "precondition: edits dirty");
         reload_snapshot_inline(&mut app).expect("reload empty-snapshot path must succeed");
         assert!(!app.edits.is_dirty(), "edits cleared after reload");
@@ -2051,7 +2082,9 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
         );
-        app.edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        app.edits
+            .rules
+            .insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles, enabled: None });
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(
             matches!(

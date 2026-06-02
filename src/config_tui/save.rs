@@ -588,12 +588,12 @@ mod tests {
         // TUI #1 adds "alpha" with one edit.
         p.rules.insert(
             RuleId::UserConfig("alpha".to_owned()),
-            RuleEdit { pattern: Some("first".to_owned()), styles: HashMap::new() },
+            RuleEdit { pattern: Some("first".to_owned()), styles: HashMap::new(), enabled: None },
         );
         // TUI #2 races and writes a different "alpha" — overwrites.
         p.rules.insert(
             RuleId::UserConfig("alpha".to_owned()),
-            RuleEdit { pattern: Some("second".to_owned()), styles: HashMap::new() },
+            RuleEdit { pattern: Some("second".to_owned()), styles: HashMap::new(), enabled: None },
         );
         let e = p.rules.get(&RuleId::UserConfig("alpha".to_owned())).unwrap();
         assert_eq!(
@@ -665,6 +665,7 @@ mod tests {
             RuleEdit {
                 pattern: Some("new_a".to_owned()),
                 styles: std::collections::HashMap::new(),
+                enabled: None,
             },
         );
         commit_save(&snap, &edits, SystemTime::now()).expect("save");
@@ -807,7 +808,11 @@ mod tests {
         let mut edits = crate::config_tui::edit::PendingEdits::default();
         edits.rules.insert(
             RuleId::UserConfig("x".to_owned()),
-            RuleEdit { pattern: Some("NEW".to_owned()), styles: std::collections::HashMap::new() },
+            RuleEdit {
+                pattern: Some("NEW".to_owned()),
+                styles: std::collections::HashMap::new(),
+                enabled: None,
+            },
         );
         commit_save(&snap, &edits, SystemTime::now()).expect("save");
         let disk_after = std::fs::read_to_string(&cfg_path).unwrap();

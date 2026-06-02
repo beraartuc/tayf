@@ -64,16 +64,26 @@ pub(crate) struct NewStyle {
 }
 
 /// A staged rule mutation — pattern source edit + per-style-key
-/// overlay edits. Empty == no edits for that rule.
+/// overlay edits + an optional enabled flip. Empty == no edits for that
+/// rule.
+///
+/// `enabled` is the staged on/off override (spec §5): `None` = the
+/// rule's enabled state is unchanged this session; `Some(true)` /
+/// `Some(false)` = the user toggled it on / off via `Space` on the
+/// Patterns tab. The flip is materialized into a synthetic
+/// [`crate::config::UserRule`] by `compile_pending` (live preview) and
+/// persisted to the active profile (`config.toml`) by `reconcile` on
+/// Ctrl+S.
 #[derive(Default, Clone, Debug)]
 pub(crate) struct RuleEdit {
     pub(crate) pattern: Option<String>,
     pub(crate) styles: HashMap<StyleKey, NewStyle>,
+    pub(crate) enabled: Option<bool>,
 }
 
 impl RuleEdit {
     fn is_empty(&self) -> bool {
-        self.pattern.is_none() && self.styles.is_empty()
+        self.pattern.is_none() && self.styles.is_empty() && self.enabled.is_none()
     }
 }
 
@@ -154,7 +164,10 @@ mod tests {
     fn staged_rule_edit_with_pattern_marks_dirty() {
         let mut p = PendingEdits::default();
         let id = RuleId::Builtin("uuid");
-        p.rules.insert(id, RuleEdit { pattern: Some(r"\bx\b".to_owned()), styles: HashMap::new() });
+        p.rules.insert(
+            id,
+            RuleEdit { pattern: Some(r"\bx\b".to_owned()), styles: HashMap::new(), enabled: None },
+        );
         assert!(p.is_dirty());
     }
 

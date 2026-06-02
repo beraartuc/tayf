@@ -134,6 +134,11 @@ pub(crate) fn compile_pending(
             if let Some(ns) = new_style_opt {
                 apply_new_style_to_user_rule(existing, ns);
             }
+            // Enabled flip (spec §5): Some(_) overrides the entry's
+            // enabled state; None leaves it unchanged.
+            if let Some(en) = rule_edit.enabled {
+                existing.enabled = en;
+            }
         } else if !matches!(rule_id, RuleId::UserConfig(_)) {
             // Non-UserConfig variant with no pre-existing user_rules
             // entry: push a synth UserRule. apply_user_rules_with_source
@@ -141,11 +146,18 @@ pub(crate) fn compile_pending(
             // (built-ins + theme + profile rules) and apply the
             // overlay in-place there. UserConfig variant with no match
             // = snapshot drift; silently no-op (matches v0.6 shipped).
+            //
+            // `enabled` carries the staged toggle (spec §5): an OFF flip
+            // synthesizes `enabled = false` (the canonical suppress path);
+            // an ON flip of a default-off built-in synthesizes `enabled =
+            // true`, which the merge applies in place because all 18
+            // built-ins are present in the working set (spec §3.2). No
+            // flip → `true` (preserve the default-enabled state).
             user_rules.push(crate::config::UserRule {
                 name: name_owned,
                 pattern: new_pat,
                 style: new_style_opt.map(new_style_to_user_style),
-                enabled: true,
+                enabled: rule_edit.enabled.unwrap_or(true),
                 styles: None,
                 priority: None,
             });
@@ -307,6 +319,7 @@ mod tests {
     use crate::config::{UserRule, UserStyle};
     use crate::config_tui::edit::{NewRule, NewStyle, RuleEdit};
     use crate::style::Color;
+    use crate::terminfo::ColorDepth;
     use std::collections::HashMap;
 
     /// A `UserStyle` with a single visible attribute — enough to pass
@@ -425,7 +438,11 @@ mod tests {
         let mut edits = PendingEdits::default();
         edits.rules.insert(
             RuleId::UserConfig("foo".to_owned()),
-            RuleEdit { pattern: Some(r"\bFOO\b".to_owned()), styles: HashMap::new() },
+            RuleEdit {
+                pattern: Some(r"\bFOO\b".to_owned()),
+                styles: HashMap::new(),
+                enabled: None,
+            },
         );
         let compiled =
             compile_pending(&snap, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
@@ -455,7 +472,11 @@ mod tests {
         // Modify existing pattern (keeps the snapshot's visible style).
         edits.rules.insert(
             RuleId::UserConfig("existing".to_owned()),
-            RuleEdit { pattern: Some(r"\bnew\b".to_owned()), styles: HashMap::new() },
+            RuleEdit {
+                pattern: Some(r"\bnew\b".to_owned()),
+                styles: HashMap::new(),
+                enabled: None,
+            },
         );
         // Add a wholly new rule with a visible style so `to_style`
         // accepts it.
@@ -484,7 +505,11 @@ mod tests {
         let mut edits = PendingEdits::default();
         edits.rules.insert(
             RuleId::Builtin("ipv4"),
-            RuleEdit { pattern: Some(r"\b1\.2\.3\.4\b".to_owned()), styles: HashMap::new() },
+            RuleEdit {
+                pattern: Some(r"\b1\.2\.3\.4\b".to_owned()),
+                styles: HashMap::new(),
+                enabled: None,
+            },
         );
         let compiled =
             compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
@@ -509,7 +534,9 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(Color::Red)), ..Default::default() },
         );
-        edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        edits
+            .rules
+            .insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles, enabled: None });
         let compiled =
             compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
                 .expect("compile");
@@ -544,7 +571,11 @@ mod tests {
         let mut edits = PendingEdits::default();
         edits.rules.insert(
             RuleId::Builtin("ipv4"),
-            RuleEdit { pattern: Some(r"\bxxx\b".to_owned()), styles: HashMap::new() },
+            RuleEdit {
+                pattern: Some(r"\bxxx\b".to_owned()),
+                styles: HashMap::new(),
+                enabled: None,
+            },
         );
         let compiled =
             compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
@@ -584,7 +615,9 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(Color::Green)), ..Default::default() },
         );
-        edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        edits
+            .rules
+            .insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles, enabled: None });
         let compiled =
             compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
                 .expect("compile");
@@ -622,7 +655,9 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(Color::Red)), ..Default::default() },
         );
-        edits.rules.insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles });
+        edits
+            .rules
+            .insert(RuleId::Builtin("ipv4"), RuleEdit { pattern: None, styles, enabled: None });
         let compiled =
             compile_pending(&snap, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
                 .expect("dedupe-then-mutate must avoid `seen` duplicate error");
@@ -656,7 +691,7 @@ mod tests {
         );
         edits.rules.insert(
             RuleId::DiskProfile { profile: "synthetic".to_owned(), rule: "ipv4".to_owned() },
-            RuleEdit { pattern: None, styles },
+            RuleEdit { pattern: None, styles, enabled: None },
         );
         let compiled =
             compile_pending(&snapshot, &edits, None, None, crate::terminfo::ColorDepth::Truecolor)
@@ -670,6 +705,68 @@ mod tests {
             compiled.styles[ipv4_idx].fg,
             Some(crate::style::Color::Cyan),
             "DiskProfile overlay applies style on name match"
+        );
+    }
+
+    #[test]
+    fn compile_pending_enabled_flip_on_enables_default_off_builtin() {
+        // Toggle-ON of `container_id` (default-off) via a RuleEdit enabled
+        // flip must make its pattern appear in the compiled set.
+        let snapshot = ConfigSnapshot::empty();
+        let baseline =
+            compile_pending(&snapshot, &PendingEdits::default(), None, None, ColorDepth::Truecolor)
+                .expect("baseline");
+        let cid_pattern = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "container_id")
+            .map(|r| r.pattern)
+            .expect("container_id builtin");
+        assert!(
+            !baseline.individuals.iter().any(|re| re.as_str() == cid_pattern),
+            "precondition: container_id absent from default compiled set"
+        );
+
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("container_id"),
+            RuleEdit { pattern: None, styles: HashMap::new(), enabled: Some(true) },
+        );
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, ColorDepth::Truecolor).expect("compile");
+        assert!(
+            compiled.individuals.iter().any(|re| re.as_str() == cid_pattern),
+            "enabled=true flip brings container_id into the compiled set"
+        );
+    }
+
+    #[test]
+    fn compile_pending_enabled_flip_off_disables_default_on_builtin() {
+        // Toggle-OFF of `arn` (default-on) via a RuleEdit enabled flip must
+        // drop its pattern from the compiled set.
+        let snapshot = ConfigSnapshot::empty();
+        let arn_pattern = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "arn")
+            .map(|r| r.pattern)
+            .expect("arn builtin");
+        let baseline =
+            compile_pending(&snapshot, &PendingEdits::default(), None, None, ColorDepth::Truecolor)
+                .expect("baseline");
+        assert!(
+            baseline.individuals.iter().any(|re| re.as_str() == arn_pattern),
+            "precondition: arn present in default compiled set"
+        );
+
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("arn"),
+            RuleEdit { pattern: None, styles: HashMap::new(), enabled: Some(false) },
+        );
+        let compiled =
+            compile_pending(&snapshot, &edits, None, None, ColorDepth::Truecolor).expect("compile");
+        assert!(
+            !compiled.individuals.iter().any(|re| re.as_str() == arn_pattern),
+            "enabled=false flip removes arn from the compiled set"
         );
     }
 

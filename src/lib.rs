@@ -535,7 +535,10 @@ pub mod __test_api {
             StyleKey::Default,
             NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
         );
-        app.0.edits.rules.insert(RuleId::Builtin(builtin_name), RuleEdit { pattern: None, styles });
+        app.0.edits.rules.insert(
+            RuleId::Builtin(builtin_name),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
     }
 
     /// True iff `app.edits.is_dirty()` (any staged mutation present).

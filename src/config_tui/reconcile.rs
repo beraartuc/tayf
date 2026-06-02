@@ -343,6 +343,11 @@ fn apply_user_config_rule(
     if let Some(pat) = &edit.pattern {
         rule_table["pattern"] = toml_edit::value(pat.as_str());
     }
+    // Enabled flip (spec §5): write/overwrite the `enabled` key when the
+    // user staged a Space-toggle on this rule. `None` leaves the key as-is.
+    if let Some(en) = edit.enabled {
+        rule_table["enabled"] = toml_edit::value(en);
+    }
     for (style_key, ns) in &edit.styles {
         let target = match style_key {
             StyleKey::Default => ensure_style_target(rule_table, "style")?,
@@ -357,6 +362,46 @@ fn apply_user_config_rule(
         };
         write_style_table(target, ns)?;
     }
+    Ok(())
+}
+
+/// Persist an `enabled` flip staged on a built-in / disk-profile rule.
+///
+/// A built-in or profile rule has no user-config `[[rules]]` entry to
+/// mutate, so the toggle is recorded as a name-keyed override entry —
+/// `[[rules]] name = "<name>" enabled = <bool>` — which the compile merge
+/// (`config::apply_user_rules_with_source`) applies in place against the
+/// built-in substrate (spec §3.2 + §5). An existing entry of the same
+/// name has its `enabled` key set; otherwise a stub entry is appended
+/// carrying only `name` + `enabled` (no pattern/style — the rule's
+/// definition lives in the built-in catalog and is preserved across the
+/// toggle). Pattern/style edits staged on a `Builtin` `RuleId` remain
+/// preview-only (the `o` override path stages a `UserConfig` `RuleId` for
+/// persisted recolors); only the `enabled` axis is persisted here.
+fn apply_enabled_flip_by_name(
+    doc: &mut DocumentMut,
+    name: &str,
+    enabled: bool,
+) -> Result<(), ReconcileError> {
+    let rules = ensure_rules_array(doc)?;
+    let rule_table = if let Some(i) = find_rule_index_by_name(rules, name) {
+        rules.get_mut(i).unwrap_or_else(|| {
+            unreachable!(
+                "find_rule_index_by_name returned valid idx {i}; toml_edit ArrayOfTables index invariant violation"
+            )
+        })
+    } else {
+        let mut t = Table::new();
+        t["name"] = toml_edit::value(name);
+        rules.push(t);
+        let last_idx = rules.len() - 1;
+        rules.get_mut(last_idx).unwrap_or_else(|| {
+            unreachable!(
+                "entry was just pushed at last_idx; toml_edit ArrayOfTables index invariant violation"
+            )
+        })
+    };
+    rule_table["enabled"] = toml_edit::value(enabled);
     Ok(())
 }
 
@@ -419,9 +464,21 @@ pub(crate) fn apply_edits(
     for (rule_id, rule_edit) in &edits.rules {
         match rule_id {
             RuleId::UserConfig(name) => apply_user_config_rule(&mut working, name, rule_edit)?,
-            RuleId::Builtin(_) | RuleId::Embedded { .. } | RuleId::DiskProfile { .. } => {
-                // v0.5.4 tabs only stage UserConfig; defensive no-op for other variants.
-                // Spec §5.1.
+            RuleId::Builtin(name) => {
+                // Persist a staged enabled flip on a built-in as a name-keyed
+                // override entry (spec §5). Pattern/style edits on a Builtin
+                // RuleId stay preview-only — the `o` override path stages a
+                // UserConfig RuleId for persisted recolors.
+                if let Some(en) = rule_edit.enabled {
+                    apply_enabled_flip_by_name(&mut working, name, en)?;
+                }
+            }
+            RuleId::Embedded { rule, .. } | RuleId::DiskProfile { rule, .. } => {
+                // Symmetric enabled-flip persistence for embedded / disk-profile
+                // rule sources. Pattern/style remain preview-only.
+                if let Some(en) = rule_edit.enabled {
+                    apply_enabled_flip_by_name(&mut working, rule, en)?;
+                }
             }
         }
     }
@@ -495,6 +552,7 @@ mod tests {
             RuleEdit {
                 pattern: Some(r"\bx\b".to_owned()),
                 styles: std::collections::HashMap::new(),
+                enabled: None,
             },
         );
         let out = apply_edits(&doc, &edits).expect("ok");
@@ -559,7 +617,10 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(Color::Red)), ..NewStyle::default() },
         );
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("style = { fg = \"red\" }"), "inline form expected: {out:?}");
     }
@@ -577,7 +638,10 @@ mod tests {
             StyleKey::Numbered(1),
             NewStyle { fg: Some(Some(Color::Green)), ..NewStyle::default() },
         );
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("styles"), "must have styles. sub-table: {out:?}");
         assert!(
@@ -600,7 +664,10 @@ mod tests {
             StyleKey::Named("matchname".to_owned()),
             NewStyle { fg: Some(Some(Color::Blue)), ..NewStyle::default() },
         );
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("matchname"), "named key expected: {out:?}");
         assert!(out.contains("fg = \"blue\""));
@@ -621,7 +688,10 @@ mod tests {
         let mut edits = PendingEdits::default();
         let mut styles = std::collections::HashMap::new();
         styles.insert(StyleKey::Default, NewStyle { fg: Some(None), ..NewStyle::default() });
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(!out.contains("fg"), "fg key must be gone: {out:?}");
         assert!(out.contains("bold = true"), "bold must survive: {out:?}");
@@ -649,7 +719,10 @@ mod tests {
                 ..NewStyle::default()
             },
         );
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok — no panic");
         assert!(out.contains("bold = true"), "bold expected: {out:?}");
         assert!(out.contains("italic = true"), "italic expected: {out:?}");
@@ -671,6 +744,7 @@ mod tests {
             RuleEdit {
                 pattern: Some(r"\b[a-z]+\b".to_owned()),
                 styles: std::collections::HashMap::new(),
+                enabled: None,
             },
         );
         let out = apply_edits(&doc, &edits).expect("ok");
@@ -695,7 +769,11 @@ mod tests {
         let mut edits = PendingEdits::default();
         edits.rules.insert(
             RuleId::UserConfig("x".to_owned()),
-            RuleEdit { pattern: Some("new".to_owned()), styles: std::collections::HashMap::new() },
+            RuleEdit {
+                pattern: Some("new".to_owned()),
+                styles: std::collections::HashMap::new(),
+                enabled: None,
+            },
         );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(
@@ -721,7 +799,10 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(Color::Blue)), ..NewStyle::default() },
         );
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("style = { fg = \"blue\" }"), "inline form preserved: {out:?}");
         assert!(!out.contains("[rules.style]"), "must NOT flip to block form: {out:?}");
@@ -740,11 +821,132 @@ mod tests {
             StyleKey::Default,
             NewStyle { fg: Some(Some(Color::Blue)), ..NewStyle::default() },
         );
-        edits.rules.insert(RuleId::UserConfig("x".to_owned()), RuleEdit { pattern: None, styles });
+        edits.rules.insert(
+            RuleId::UserConfig("x".to_owned()),
+            RuleEdit { pattern: None, styles, enabled: None },
+        );
         let out = apply_edits(&doc, &edits).expect("ok");
         assert!(out.contains("[rules.style]"), "block form preserved: {out:?}");
         assert!(out.contains("fg = \"blue\""), "fg updated: {out:?}");
         assert!(!out.contains("style = { "), "must NOT flip to inline form: {out:?}");
+    }
+
+    #[test]
+    fn builtin_enabled_flip_off_writes_rules_entry_with_enabled_false() {
+        // Spec §5: a staged Space-toggle OFF of a default-on built-in must
+        // persist as a `[[rules]] name = "arn" enabled = false` entry so the
+        // compile merge drops it on the next run.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("arn"),
+            RuleEdit {
+                pattern: None,
+                styles: std::collections::HashMap::new(),
+                enabled: Some(false),
+            },
+        );
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains("[[rules]]"), "rules section appended: {out:?}");
+        assert!(out.contains("name = \"arn\""), "arn name written: {out:?}");
+        assert!(out.contains("enabled = false"), "enabled = false written: {out:?}");
+    }
+
+    #[test]
+    fn builtin_enabled_flip_on_writes_rules_entry_with_enabled_true() {
+        // Spec §5: a staged Space-toggle ON of a default-off built-in must
+        // persist as `[[rules]] name = "container_id" enabled = true`.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let source = "[general]\ntheme = \"dark\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("container_id"),
+            RuleEdit {
+                pattern: None,
+                styles: std::collections::HashMap::new(),
+                enabled: Some(true),
+            },
+        );
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains("name = \"container_id\""), "container_id written: {out:?}");
+        assert!(out.contains("enabled = true"), "enabled = true written: {out:?}");
+    }
+
+    #[test]
+    fn user_config_enabled_flip_writes_enabled_into_existing_entry() {
+        // A user-config rule toggled OFF writes `enabled = false` into its
+        // existing [[rules]] entry, preserving the pattern.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let source = "[[rules]]\nname = \"my_rule\"\npattern = \"FOO\"\n";
+        let doc: DocumentMut = source.parse().expect("valid TOML");
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::UserConfig("my_rule".to_owned()),
+            RuleEdit {
+                pattern: None,
+                styles: std::collections::HashMap::new(),
+                enabled: Some(false),
+            },
+        );
+        let out = apply_edits(&doc, &edits).expect("ok");
+        assert!(out.contains("enabled = false"), "enabled = false written: {out:?}");
+        assert!(out.contains("pattern = \"FOO\""), "pattern preserved: {out:?}");
+    }
+
+    #[test]
+    fn builtin_enabled_flip_round_trips_through_save_to_compiled_set() {
+        // End-to-end through commit_save → snapshot reparse: an OFF flip of
+        // `arn` persisted to disk drops arn from the next compile.
+        use crate::config_tui::edit::{RuleEdit, RuleId};
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, b"[general]\n").unwrap();
+        let snap =
+            crate::config_tui::snapshot::ConfigSnapshot::read_from_disk(Some(&cfg_path)).unwrap();
+        let mut edits = PendingEdits::default();
+        edits.rules.insert(
+            RuleId::Builtin("arn"),
+            RuleEdit {
+                pattern: None,
+                styles: std::collections::HashMap::new(),
+                enabled: Some(false),
+            },
+        );
+        let new_snap =
+            crate::config_tui::save::commit_save(&snap, &edits, std::time::SystemTime::now())
+                .expect("save");
+        // The reparsed snapshot's rules carry the persisted `arn enabled=false`.
+        let arn = new_snap
+            .parsed
+            .rules
+            .iter()
+            .find(|r| r.name == "arn")
+            .expect("arn entry persisted to disk");
+        assert!(!arn.enabled, "persisted arn entry has enabled=false");
+        // And compiling that config drops arn from the active set.
+        let arn_pattern = crate::rules::builtin_rules()
+            .into_iter()
+            .find(|r| r.name == "arn")
+            .map(|r| r.pattern)
+            .expect("arn builtin");
+        let reparsed_config = crate::config::Config {
+            general: new_snap.parsed.general.clone(),
+            rules: new_snap.parsed.rules.clone(),
+        };
+        let compiled = crate::rules::compile_from_config(
+            &reparsed_config,
+            None,
+            None,
+            crate::terminfo::ColorDepth::Truecolor,
+        )
+        .expect("compile reparsed config");
+        assert!(
+            !compiled.individuals.iter().any(|re| re.as_str() == arn_pattern),
+            "arn dropped from compiled set after persisted OFF flip"
+        );
     }
 
     #[test]

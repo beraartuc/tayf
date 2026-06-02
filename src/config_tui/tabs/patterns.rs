@@ -256,9 +256,23 @@ pub(crate) fn dispatch_key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('h') => app.focus.patterns.detail_focused = false,
         KeyCode::Char('l') | KeyCode::Enter => app.focus.patterns.detail_focused = true,
         KeyCode::Char(' ') => {
-            app.toast = Some(crate::config_tui::app::Toast::ok(
-                "(activate semantic n/a for patterns — use 'c' to edit style)",
-            ));
+            // Toggle the selected rule's enabled state (spec §5). Resolve
+            // the RuleId, compute its current effective-enabled, and stage
+            // the inverse into the rule's RuleEdit (merging with any
+            // existing edit so a color/regex edit is preserved). The flip
+            // flows into the live preview via compile_pending and persists
+            // to config.toml via reconcile on Ctrl+S.
+            if let Some(rule_id) = crate::config_tui::events::resolve_selected_rule_id(app) {
+                let name = crate::config_tui::events::rule_id_display_name(&rule_id);
+                let current = crate::config_tui::events::effective_enabled_for_rule(app, &rule_id);
+                let next = !current;
+                app.edits.rules.entry(rule_id).or_default().enabled = Some(next);
+                app.preview.debouncer.mark_edit();
+                let verb = if next { "enabled" } else { "disabled" };
+                app.toast = Some(crate::config_tui::app::Toast::ok(format!(
+                    "staged '{name}' {verb} — Ctrl+S to save"
+                )));
+            }
         }
         KeyCode::Char('o') => {
             // `o` overrides the currently-selected built-in by staging a
@@ -406,6 +420,107 @@ mod tests {
         // case-insensitive: filter "FOO" matches "unique-user-FOO".
         let layout_lc = patterns_list_layout(builtins, &users, "foo");
         assert_eq!(layout_lc.user_names, vec!["unique-user-FOO".to_owned()]);
+    }
+
+    /// Selectable index of a built-in by name in a fresh (empty-snapshot,
+    /// no-filter) App — equals the name's position in `BUILTIN_NAMES`.
+    fn builtin_selectable_idx(app: &App, name: &str) -> usize {
+        let layout =
+            patterns_list_layout(&app.catalog.builtin_rule_names, &app.snapshot.parsed.rules, "");
+        layout.builtin_names.iter().position(|n| *n == name).expect("builtin present in layout")
+    }
+
+    #[test]
+    fn space_on_default_on_builtin_stages_enabled_false() {
+        use crate::config_tui::edit::RuleId;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default_for_test();
+        // `arn` is a default-on built-in (spec §3.1).
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "arn");
+        assert!(
+            crate::config_tui::events::effective_enabled_for_rule(&app, &RuleId::Builtin("arn")),
+            "precondition: arn is default-on"
+        );
+        dispatch_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        assert_eq!(
+            app.edits.rules.get(&RuleId::Builtin("arn")).and_then(|e| e.enabled),
+            Some(false),
+            "Space on default-on builtin stages enabled=false"
+        );
+        assert!(
+            !crate::config_tui::events::effective_enabled_for_rule(&app, &RuleId::Builtin("arn")),
+            "effective state flips to disabled"
+        );
+    }
+
+    #[test]
+    fn space_on_default_off_builtin_stages_enabled_true() {
+        use crate::config_tui::edit::RuleId;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default_for_test();
+        // `container_id` is a default-off built-in (spec §3.1).
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "container_id");
+        assert!(
+            !crate::config_tui::events::effective_enabled_for_rule(
+                &app,
+                &RuleId::Builtin("container_id")
+            ),
+            "precondition: container_id is default-off"
+        );
+        dispatch_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        assert_eq!(
+            app.edits.rules.get(&RuleId::Builtin("container_id")).and_then(|e| e.enabled),
+            Some(true),
+            "Space on default-off builtin stages enabled=true"
+        );
+        assert!(
+            crate::config_tui::events::effective_enabled_for_rule(
+                &app,
+                &RuleId::Builtin("container_id")
+            ),
+            "effective state flips to enabled"
+        );
+    }
+
+    #[test]
+    fn space_toggle_is_idempotent_round_trip() {
+        use crate::config_tui::edit::RuleId;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default_for_test();
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "arn");
+        dispatch_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        dispatch_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        assert_eq!(
+            app.edits.rules.get(&RuleId::Builtin("arn")).and_then(|e| e.enabled),
+            Some(true),
+            "two flips return to the default-on state (enabled=true)"
+        );
+    }
+
+    #[test]
+    fn space_toggle_preserves_a_concurrent_color_edit() {
+        use crate::config_tui::edit::{NewStyle, RuleEdit, RuleId, StyleKey};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        use std::collections::HashMap;
+        let mut app = App::default_for_test();
+        // Stage a color edit first, then toggle enabled — the toggle must
+        // merge into the existing RuleEdit, not clobber the style.
+        let mut styles: HashMap<StyleKey, NewStyle> = HashMap::new();
+        styles.insert(
+            StyleKey::Default,
+            NewStyle { fg: Some(Some(crate::style::Color::Red)), ..NewStyle::default() },
+        );
+        app.edits
+            .rules
+            .insert(RuleId::Builtin("arn"), RuleEdit { pattern: None, styles, enabled: None });
+        app.focus.patterns.selected_idx = builtin_selectable_idx(&app, "arn");
+        dispatch_key(&mut app, KeyEvent::from(KeyCode::Char(' ')));
+        let edit = app.edits.rules.get(&RuleId::Builtin("arn")).expect("edit present");
+        assert_eq!(edit.enabled, Some(false), "enabled flip staged");
+        assert!(
+            edit.styles.get(&StyleKey::Default).and_then(|ns| ns.fg).flatten().is_some(),
+            "concurrent color edit preserved"
+        );
     }
 
     #[test]
