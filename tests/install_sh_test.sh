@@ -47,6 +47,30 @@ else
   fail=1
 fi
 
+# gh_auth_token: GH_TOKEN takes precedence over GITHUB_TOKEN, falling back to
+# empty when neither is set. resolve_version feeds this into the api.github.com
+# tag lookup so an authenticated request lifts the 60 req/hr unauthenticated
+# rate limit (the recurring installer-e2e flake: shared CI IP -> HTTP 403).
+expect_token() { # description want actual
+  if [ "$2" = "$3" ]; then
+    printf 'ok:   gh_auth_token %s -> %s\n' "$1" "${3:-<empty>}"
+  else
+    printf 'FAIL: gh_auth_token %s -> %s (want %s)\n' "$1" "${3:-<empty>}" "${2:-<empty>}"
+    fail=1
+  fi
+}
+# These subshells set GH_TOKEN/GITHUB_TOKEN purely so the sourced gh_auth_token
+# can read them; shellcheck (run without -x) sees neither the read nor the
+# intended subshell-local isolation, hence the directive.
+# shellcheck disable=SC2030,SC2031,SC2034  # reason: token env is read only by sourced gh_auth_token; subshell scoping is deliberate test isolation
+expect_token "GH_TOKEN preferred over GITHUB_TOKEN" "gh-tok" \
+  "$( export GH_TOKEN=gh-tok GITHUB_TOKEN=ghub-tok; gh_auth_token )"
+# shellcheck disable=SC2030,SC2031,SC2034  # reason: see directive above
+expect_token "GITHUB_TOKEN used when GH_TOKEN unset" "ghub-tok" \
+  "$( unset GH_TOKEN; export GITHUB_TOKEN=ghub-tok; gh_auth_token )"
+expect_token "empty when neither set" "" \
+  "$( unset GH_TOKEN GITHUB_TOKEN; gh_auth_token )"
+
 # verify_checksum round-trip: a matching .sha256 passes, a wrong one aborts.
 tmpd="$(mktemp -d)"
 printf 'hello tayf\n' > "${tmpd}/blob"

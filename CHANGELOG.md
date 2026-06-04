@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `install.sh` now authenticates its latest-release lookup with `GH_TOKEN` (or
+  `GITHUB_TOKEN`) when one is present in the environment, lifting the 60 req/hr
+  unauthenticated GitHub API rate limit. On shared/CI networks the unauthenticated
+  lookup intermittently returned HTTP 403, aborting the install with "could not
+  resolve the latest release tag" (the recurring `installer-e2e` CI failure). The
+  token is sent only on the `api.github.com` tag request, never to the release
+  asset hosts; users without a token are unaffected.
+
 ## [0.12.2] - 2026-06-02
 
 ### Fixed

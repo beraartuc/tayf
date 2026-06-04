@@ -46,14 +46,33 @@ parse_tag_from_json() {
     | sed -e 's/.*"tag_name":[[:space:]]*"//' -e 's/".*//'
 }
 
-# Download $1 to file $2 ("-" = stdout). Prefers curl, falls back to busybox/GNU
-# wget (Alpine ships wget, not curl). Returns non-zero on HTTP/transport error.
+# Echo a GitHub token for API authentication from the environment, or nothing.
+# GH_TOKEN takes precedence over GITHUB_TOKEN (matching the gh CLI convention).
+# Used only for the api.github.com tag lookup in resolve_version, to lift the
+# 60 req/hr unauthenticated rate limit; never passed to asset download hosts.
+gh_auth_token() {
+  if [ -n "${GH_TOKEN:-}" ]; then
+    printf '%s' "${GH_TOKEN}"
+  elif [ -n "${GITHUB_TOKEN:-}" ]; then
+    printf '%s' "${GITHUB_TOKEN}"
+  fi
+}
+
+# Download $1 to file $2 ("-" = stdout), optionally authenticating with bearer
+# token $3. Prefers curl, falls back to busybox/GNU wget (Alpine ships wget,
+# not curl). The token is sent only when a non-empty $3 is supplied — callers
+# pass it solely for the api.github.com request, so it never reaches a release
+# asset host. Returns non-zero on HTTP/transport error.
 http_get() {
-  url="$1"; out="$2"
+  url="$1"; out="$2"; token="${3:-}"
   if command -v curl >/dev/null 2>&1; then
-    if [ "$out" = "-" ]; then curl -fsSL "$url"; else curl -fsSL -o "$out" "$url"; fi
+    set --
+    [ -n "$token" ] && set -- -H "Authorization: Bearer ${token}"
+    if [ "$out" = "-" ]; then curl -fsSL "$@" "$url"; else curl -fsSL "$@" -o "$out" "$url"; fi
   elif command -v wget >/dev/null 2>&1; then
-    if [ "$out" = "-" ]; then wget -qO- "$url"; else wget -qO "$out" "$url"; fi
+    set --
+    [ -n "$token" ] && set -- --header="Authorization: Bearer ${token}"
+    if [ "$out" = "-" ]; then wget -qO- "$@" "$url"; else wget -qO "$out" "$@" "$url"; fi
   else
     die "need curl or wget to download"
   fi
@@ -67,7 +86,7 @@ resolve_version() {
     printf '%s' "$TAYF_VERSION"
     return 0
   fi
-  body="$(http_get "https://api.github.com/repos/${REPO}/releases/latest" - || true)"
+  body="$(http_get "https://api.github.com/repos/${REPO}/releases/latest" - "$(gh_auth_token)" || true)"
   tag="$(parse_tag_from_json "$body")"
   [ -n "$tag" ] || die "could not resolve the latest release tag (GitHub API rate limit?) — set TAYF_VERSION=vX.Y.Z"
   printf '%s' "$tag"
@@ -159,6 +178,9 @@ Environment:
   TAYF_VERSION       install a specific tag (e.g. v0.11.0); default: latest release
                      (also the escape hatch if the GitHub API rate-limits you)
   TAYF_INSTALL_DIR   install directory; default: \$HOME/.local/bin
+  GH_TOKEN           optional GitHub token (or GITHUB_TOKEN) used only to
+                     authenticate the latest-release lookup, lifting the
+                     unauthenticated API rate limit on shared/CI networks
 
 Detects your OS/arch, downloads the matching signed binary from the GitHub
 release, verifies its SHA256 (mandatory) and — if an authenticated gh CLI is
