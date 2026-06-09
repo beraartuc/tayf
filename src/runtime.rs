@@ -14,9 +14,8 @@
 //! `nix::poll::poll([stdin, self_pipe_read], None)` instead of `stdin.read`
 //! directly, so the runtime can wake it up at shutdown by writing one byte
 //! to the self-pipe write end. After `child.wait()` returns, the runtime
-//! writes the wake-up byte and joins the input thread cleanly. This removes
-//! the v0.1 "OS reaps blocked input thread at process exit" limit recorded
-//! in spec §3.4 step 7.
+//! writes the wake-up byte and joins the input thread cleanly, so the
+//! process never relies on the OS to reap a blocked input thread at exit.
 
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
@@ -160,9 +159,9 @@ fn spawn_output_thread(
     // reason: `thread::Builder::spawn` only fails when the OS refuses to
     // create a thread (resource exhaustion). In that state tayf cannot do
     // its job at all, and `TtyGuard`'s `Drop` will restore the terminal
-    // when the resulting panic unwinds. v0.1 accepts the panic; v0.2 may
-    // propagate this as `Error::Pty` once the facade is shaped to surface
-    // pre-loop spawn failures.
+    // when the resulting panic unwinds. The panic is accepted as the
+    // unrecoverable-failure path; propagating it as an `Error` would only
+    // re-shape the same abort.
     thread::Builder::new()
         .name("tayf-output".into())
         .spawn(move || -> io::Result<()> {
@@ -237,7 +236,7 @@ fn spawn_output_thread(
 
 fn spawn_input_thread(mut writer: Writer, shutdown_read: OwnedFd) -> JoinHandle<()> {
     // reason: see `spawn_output_thread` — thread spawn failure is treated as
-    // unrecoverable in v0.1.
+    // unrecoverable.
     thread::Builder::new()
         .name("tayf-input".into())
         .spawn(move || {
