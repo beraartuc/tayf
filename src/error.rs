@@ -383,9 +383,9 @@ pub enum Error {
     /// File-watcher operation failed (start, register path, event channel).
     ///
     /// Uses `#[source]` rather than `#[from]` so call sites in the watcher
-    /// and reload orchestrator construct `Error::Watch(...)` explicitly — the
-    /// conversion is part of the contract there, not an implicit coercion.
-    #[error("file watcher error: {0}")]
+    /// construct `Error::Watch(...)` explicitly — the conversion is part of
+    /// the contract there, not an implicit coercion.
+    #[error("file watcher error: {0}; check that the config directory is readable, or re-run with --no-hot-reload to start without config watching")]
     Watch(#[source] notify::Error),
 
     /// One or more validation errors collected from a single pass over a
@@ -792,8 +792,9 @@ mod tests {
         let inner = notify::Error::generic("permission denied");
         let err = crate::error::Error::Watch(inner);
         let msg = err.to_string();
-        assert!(msg.contains("file watcher error"));
-        assert!(msg.contains("permission denied"));
+        assert!(msg.starts_with("file watcher error: "), "what-failed prefix; got: {msg}");
+        assert!(msg.contains("permission denied"), "why (source detail); got: {msg}");
+        assert!(msg.contains("--no-hot-reload"), "actionable guidance; got: {msg}");
     }
 
     #[test]

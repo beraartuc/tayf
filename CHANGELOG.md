@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The file-watcher startup error now ends with actionable guidance ("check that
+  the config directory is readable, or re-run with `--no-hot-reload` to start
+  without config watching") instead of stopping at the raw watcher failure.
+
 ### Fixed
 - `install.sh` now authenticates its latest-release lookup with `GH_TOKEN` (or
   `GITHUB_TOKEN`) when one is present in the environment, lifting the 60 req/hr
