@@ -91,20 +91,30 @@ tayf/
 ├── clippy.toml
 ├── rustfmt.toml
 ├── deny.toml                          # cargo-deny policy (licenses, advisories)
+├── install.sh                         # curl|sh installer (static musl binaries)
 ├── ARCHITECTURE.md                    # architecture overview (English)
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
 ├── README.md
 ├── CHANGELOG.md
 ├── CLAUDE.md                          # this file
+├── CONTRIBUTING.md
 ├── SECURITY.md                        # vulnerability reporting policy
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                     # fmt + clippy + test + audit + deny + fuzz
+│       ├── ci.yml                     # fmt + clippy + test + audit + deny + bench
+│       ├── installer-smoke.yml        # install.sh end-to-end smoke
 │       └── release.yml                # tag-triggered signed publish + GH release
+├── assets/
+│   ├── themes/                        # built-in theme TOML sources (embedded at build time)
+│   └── profiles/                      # empty (.gitkeep) — embedded profile library retired in v0.12
+├── docs/
+│   └── demo/                          # scripted demo session
+├── fuzz/                              # cargo-fuzz harness + seed corpus
+│   └── fuzz_targets/                  # ansi_sm, line_buffer, pipeline_feed, regex_compile
 ├── src/
 │   ├── main.rs                        # CLI entry, ExitCode mapping
-│   ├── lib.rs                         # Tayf::run facade
+│   ├── lib.rs                         # Tayf::run facade (+ __test_api / __bench__ adapters)
 │   ├── cli.rs                         # clap derive Args + subcommands
 │   ├── error.rs                       # tayf::Error enum (thiserror)
 │   ├── shell.rs                       # ShellSpec discovery
@@ -118,15 +128,19 @@ tayf/
 │   ├── rules.rs                       # Compiled struct + builtin patterns
 │   ├── style.rs                       # Color + Style + SGR audit gate
 │   ├── themes.rs                      # built-in theme library + disk loader
-│   ├── profiles.rs                    # profile resolution + built-in profiles
+│   ├── profiles.rs                    # profile resolution (presets over config.toml)
 │   ├── reload.rs                      # hot-reload orchestrator
 │   ├── watch.rs                       # notify-based config-file watcher
 │   ├── bg_detect.rs                   # terminal background-color detection
 │   ├── terminfo.rs                    # TTY detection + winsize helper + color depth
 │   ├── config.rs                      # TOML config load + validation
+│   ├── init/                          # `tayf init` shell-hook installer
+│   │   ├── mod.rs
+│   │   └── shell_hook.rs
 │   ├── config_tui/                    # interactive `tayf config` TUI
 │   │   ├── mod.rs
 │   │   ├── app.rs
+│   │   ├── chrome.rs
 │   │   ├── events.rs
 │   │   ├── render.rs
 │   │   ├── edit.rs
@@ -138,9 +152,11 @@ tayf/
 │   │   ├── merge.rs
 │   │   ├── search.rs
 │   │   ├── style_ratatui.rs
+│   │   ├── theme_resolve.rs
 │   │   ├── dump_cmd.rs
 │   │   ├── status_cmd.rs
 │   │   ├── test_support.rs
+│   │   ├── snapshots/                 # render snapshot fixtures (*.snap)
 │   │   ├── tabs/
 │   │   │   ├── mod.rs
 │   │   │   ├── patterns.rs
@@ -154,6 +170,7 @@ tayf/
 │   │       ├── edit_regex.rs
 │   │       ├── help.rs
 │   │       ├── new_pattern.rs
+│   │       ├── new_profile.rs
 │   │       ├── preview.rs
 │   │       ├── sample_set.rs
 │   │       ├── save_diff.rs
@@ -165,17 +182,25 @@ tayf/
 │   ├── pipeline_feed.rs               # pipeline micro-bench
 │   ├── e2e_overhead.rs                # end-to-end PTY overhead bench
 │   ├── redos.rs                       # ReDoS adversarial bench
-│   └── BASELINE.md                    # recorded baseline numbers
+│   ├── common/                        # bench math helpers (also a [[test]] target)
+│   ├── inputs/                        # canonical e2e input shapes (prose/log/ansi)
+│   ├── baselines/                     # recorded per-version baseline JSON
+│   └── BASELINE.md                    # recorded baseline numbers + history
 └── tests/
-    ├── integration_smoke.rs           # spawn shell, send command, assert exit
-    ├── integration_signals.rs         # SIGWINCH / SIGINT / SIGTERM forwarding
-    ├── integration_config.rs          # config load + validation
-    ├── integration_hot_reload.rs      # SIGHUP + file-change reload
-    ├── integration_themes.rs          # theme load + apply
-    ├── integration_profiles.rs        # profile resolution
+    ├── common/
+    │   ├── mod.rs                     # shared PTY test helpers
+    │   └── tui_harness.rs             # in-process TUI test harness
+    ├── fixtures/                      # config/theme TOML fixtures
+    ├── audit_corpus/                  # built-in pattern FP/FN corpus data
+    ├── audit_corpus.rs                # corpus-driven built-in pattern audit
     ├── adversarial.rs                 # ReDoS + memory-cap adversarial tests
-    └── common/
-        └── mod.rs                     # shared test helpers + TUI harness
+    ├── config_tui_*.rs                # TUI logic suites (picker, conflicts, save, ...)
+    ├── e2e_overhead_math.rs           # bench math unit tests
+    ├── e2e_overhead_smoke.rs          # bench harness smoke
+    ├── install_sh_test.sh             # installer unit tests (bash)
+    ├── integration_*.rs               # PTY end-to-end suites (smoke, signals, config,
+    │                                  #   hot-reload, themes, profiles, init, TUI, ...)
+    └── readme_limitations.rs          # keeps README limitation claims true
 ```
 
 Each file MUST have a module-level doc-comment explaining its purpose, public API, and invariants.
