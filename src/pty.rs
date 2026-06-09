@@ -75,8 +75,7 @@ impl PtySession {
         // (still true as of 0.9), so the conventional leading-dash argv[0]
         // trick for login shells (e.g. `-zsh`) is not available without
         // forking the crate. We pass `-l` instead, which both zsh and bash
-        // honour for login mode; the `ShellSpec::argv0` helper is retained
-        // for v0.2 when we drop down to a custom spawn path.
+        // honour for login mode.
         let mut cmd = CommandBuilder::new(spec.path.as_os_str());
         if spec.login {
             cmd.arg("-l");

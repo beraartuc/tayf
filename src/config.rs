@@ -35,14 +35,11 @@ pub(crate) struct Config {
 /// but the field itself is omitted.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-// reason: `respect_existing_colors` is parsed and stored but not yet
-// consumed in v0.2.0 — full ANSI awareness lands in v0.3, at which
-// point this field gates the new behavior. Documented as "accepted
-// but ignored" in the field doc-comment below.
-#[allow(dead_code)]
 pub(crate) struct GeneralSection {
-    /// Accepted but ignored in v0.2.0 — v0.3 will use it once full ANSI
-    /// awareness lands.
+    /// When `true` (default), lines that already carry SGR styling from the
+    /// child program pass through untouched; tayf only colorizes unstyled
+    /// lines. Snapshotted into [`crate::rules::Compiled`] at (re)load time
+    /// and read once per line by the pipeline's skip gate.
     #[serde(default = "default_true")]
     pub(crate) respect_existing_colors: bool,
 
@@ -201,7 +198,6 @@ fn parse_color_field(
 /// entire match, covered by the rule's `style` field). Callers
 /// special-case `key == "0"` BEFORE invoking this helper to emit
 /// `ThemeRuleErrorKind::CaptureGroupIndexZeroForbidden`.
-#[allow(dead_code)] // reason: Task 9 + Task 10 consume this helper.
 pub(crate) fn validate_styles_map_key(key: &str) -> Option<usize> {
     if key.is_empty() {
         return None;

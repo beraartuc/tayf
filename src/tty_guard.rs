@@ -20,10 +20,9 @@
 //! `disallowed-methods` clippy rule already bans `std::process::exit`.
 
 use std::io::IsTerminal;
-use std::os::fd::{AsFd, RawFd};
+use std::os::fd::AsFd;
 use std::sync::{Mutex, OnceLock};
 
-use nix::libc::STDIN_FILENO;
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 
 use crate::error::Result;
@@ -44,13 +43,6 @@ static PANIC_RESTORE_STATE: OnceLock<Mutex<Option<Termios>>> = OnceLock::new();
 /// supported and will leave the inner guard's "original" snapshot pointing
 /// at the outer guard's raw mode, defeating the restore.
 pub(crate) struct TtyGuard {
-    /// Raw stdin fd, stored for identity/debug purposes. Syscalls always go
-    /// through `std::io::stdin().as_fd()` to avoid `unsafe` fd construction.
-    // reason: kept on the type as an identity/debug record (see `fd()`).
-    // The Drop path resolves stdin afresh to stay robust if stdin was
-    // redirected; this field is the original-fd witness.
-    #[allow(dead_code)]
-    fd: RawFd,
     original: Termios,
 }
 
@@ -75,17 +67,7 @@ impl TtyGuard {
 
         install_panic_hook(original.clone());
 
-        Ok(TtyGuard { fd: STDIN_FILENO, original })
-    }
-
-    /// The raw fd this guard was constructed against. Provided for debug
-    /// logging and tests; not used by restoration paths.
-    // reason: diagnostic accessor; live binary path does not need it but it
-    // is part of the documented surface and exercised by the Task 19 smoke
-    // test once that lands.
-    #[allow(dead_code)]
-    pub(crate) fn fd(&self) -> RawFd {
-        self.fd
+        Ok(TtyGuard { original })
     }
 }
 
