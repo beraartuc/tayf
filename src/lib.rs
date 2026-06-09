@@ -493,8 +493,12 @@ pub mod __test_api {
     ///
     /// Primitive `&str` signatures keep `pub(crate) UserRule` /
     /// `ConfigSnapshot` off the public boundary.
+    ///
+    /// # Panics
+    /// Panics if the ratatui `TestBackend` terminal cannot be constructed
+    /// (test convenience).
     #[must_use]
-    #[allow(clippy::expect_used)]
+    #[allow(clippy::expect_used)] // reason: test-support adapter; failures are test crashes by design.
     pub fn boot_app_with_user_config_and_sample(
         user_rules: &[(&str, &str)],
         sample: &str,
@@ -872,7 +876,7 @@ pub mod __test_api {
     /// # Panics
     /// Panics if `compile_pending` returns an error (test convenience).
     #[must_use]
-    #[allow(clippy::expect_used)]
+    #[allow(clippy::expect_used)] // reason: test-support adapter; failures are test crashes by design.
     pub fn compile_pending_individual_patterns(app: &AppHandle) -> Vec<String> {
         let theme = app.0.snapshot.parsed.theme.as_deref();
         let profile = app.0.snapshot.parsed.profile.as_deref();

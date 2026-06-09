@@ -764,7 +764,7 @@ fn descend_mut<'doc>(
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used)] // reason: test module; failures are immediate test crashes by design.
 mod tests {
     //! Pure-logic tests for `merge_three_way` and `write_to_path`.
     //!
