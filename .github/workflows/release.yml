@@ -25,10 +25,10 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: macos-14,      target: aarch64-apple-darwin }
+          - { os: macos-26,      target: aarch64-apple-darwin }
           # x86_64 macOS is cross-compiled on the (plentiful) arm runner to
-          # avoid the capacity-constrained macos-13 (Intel) runners.
-          - { os: macos-14,      target: x86_64-apple-darwin }
+          # avoid depending on GitHub's retired Intel macOS runners.
+          - { os: macos-26,      target: x86_64-apple-darwin }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
           - { os: ubuntu-latest, target: aarch64-unknown-linux-musl }
     steps:
