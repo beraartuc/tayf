@@ -46,7 +46,7 @@ confidence-threshold = 0.93
 multiple-versions = "deny"
 deny = []
 skip-tree = [
-    { crate = "ratatui@0.30.0", depth = 4, reason = "drags hashbrown 0.16 + signal-hook 0.3 + itertools 0.14 via crossterm/kasuari/widgets; upstream-owned, not reducible by us" },
+    { crate = "ratatui@0.30.2", depth = 4, reason = "drags hashbrown 0.16 + signal-hook 0.3 + itertools 0.14 via crossterm/kasuari/widgets; upstream-owned, not reducible by us" },
     { crate = "criterion@0.8.2", depth = 2, reason = "dev-only; pulls itertools 0.13" },
 ]
 skip = [
