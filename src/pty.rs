@@ -160,14 +160,51 @@ impl ChildHandle {
     /// not fit in `i32` saturate to `70` (sysexits `EX_SOFTWARE`).
     pub(crate) fn wait(&mut self) -> Result<i32> {
         let status = self.child.wait().map_err(io_err)?;
-        let code: i32 = status.exit_code().try_into().unwrap_or(70);
-        Ok(code)
+        Ok(status_code(&status))
+    }
+
+    /// Non-blocking poll for child exit.
+    ///
+    /// Returns `Ok(None)` while the child is still running. Used by the
+    /// runtime's shutdown-aware wait loop so a signal or terminal hangup can
+    /// interrupt the wait instead of blocking forever on a child that ignores
+    /// `SIGTERM`/`SIGHUP`.
+    ///
+    /// # Errors
+    /// Returns `Error::Pty` if polling the child fails.
+    pub(crate) fn try_wait(&mut self) -> Result<Option<i32>> {
+        match self.child.try_wait().map_err(io_err)? {
+            Some(status) => Ok(Some(status_code(&status))),
+            None => Ok(None),
+        }
     }
 
     /// Process ID of the child (used for signal forwarding to its group).
     pub(crate) fn pid(&self) -> Option<u32> {
         self.child.process_id()
     }
+
+    /// Deliver `signal` to the child's process group.
+    ///
+    /// `portable-pty` spawns the child with `setsid(2)`, so the child is both
+    /// session leader and process-group leader; `killpg(child_pid)` therefore
+    /// reaches the shell and every foreground/background job it spawned.
+    /// Failures are intentionally ignored (`ESRCH` for an already-reaped
+    /// group, `EPERM` if the group changed ownership) — the caller is in the
+    /// shutdown path and has no useful fallback.
+    pub(crate) fn signal_group(&self, signal: nix::sys::signal::Signal) {
+        if let Some(pid) = self.pid() {
+            if let Ok(pid_i32) = i32::try_from(pid) {
+                let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid_i32), signal);
+            }
+        }
+    }
+}
+
+/// Map a `portable-pty` status to tayf's `i32` exit code contract. Codes that
+/// do not fit in `i32` saturate to 70 (sysexits `EX_SOFTWARE`).
+fn status_code(status: &portable_pty::ExitStatus) -> i32 {
+    status.exit_code().try_into().unwrap_or(70)
 }
 
 fn io_err(e: impl std::fmt::Display) -> crate::error::Error {

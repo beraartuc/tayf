@@ -2,8 +2,9 @@
 //!
 //! Output thread reads PTY master, feeds Pipeline, writes stdout. When the
 //! child exits, the slave side closes; on Linux the master read returns EIO,
-//! on macOS Ok(0). Either way the output thread drains its partial line and
-//! exits. Main joins the output thread, then returns the child's exit code.
+//! on macOS Ok(0). Either way the output thread drains its partial line, asks
+//! the main thread to shut down, and exits. Main reaps the child, joins the
+//! output thread, then returns the child's exit code.
 //!
 //! The output thread is **`poll(2)`-driven** with a 50ms timeout so that
 //! interactive prompts (which do not end in `\n`) are flushed through
@@ -13,22 +14,43 @@
 //! Input thread reads stdin, writes PTY master. The input thread blocks on
 //! `nix::poll::poll([stdin, self_pipe_read], None)` instead of `stdin.read`
 //! directly, so the runtime can wake it up at shutdown by writing one byte
-//! to the self-pipe write end. After `child.wait()` returns, the runtime
-//! writes the wake-up byte and joins the input thread cleanly, so the
-//! process never relies on the OS to reap a blocked input thread at exit.
+//! to the self-pipe write end. After the child is reaped, the runtime writes
+//! the wake-up byte and joins the input thread cleanly, so the process never
+//! relies on the OS to reap a blocked input thread at exit.
+//!
+//! ## Shutdown is not just `child.wait()`
+//!
+//! The main thread must not block unconditionally in `wait(2)` on the child.
+//! Interactive shells can ignore `SIGTERM`/`SIGHUP`, and terminal hangups can
+//! leave a detached tayf waiting on a child forever. Instead the main thread
+//! polls the child while watching a shutdown channel fed by:
+//!
+//! - the signal thread (SIGTERM, or a SIGHUP identified as a terminal hangup),
+//! - the output thread (PTY EOF/EIO),
+//! - the input thread (stdin EOF/EIO).
+//!
+//! On shutdown the main thread gives the child a short grace period (the
+//! forwarded signal may still be taking effect), then sends `SIGTERM` to the
+//! child's process group, then `SIGKILL`, reaping it before joining the I/O
+//! threads. This bounds tayf's lifetime even when the child ignores every
+//! catchable signal.
 
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+use nix::sys::signal::Signal;
 
 use crate::error::{Error, Result};
 use crate::pipeline::Pipeline;
 use crate::pty::{ChildHandle, Reader, Writer};
 use crate::rules::Compiled;
+use crate::shutdown::ShutdownReason;
 
 /// Read chunk size for the master fd. 8 KiB is the canonical pipe buffer on
 /// macOS and a common Linux default; larger sizes do not measurably help
@@ -43,12 +65,28 @@ const READ_BUF_BYTES: usize = 8 * 1024;
 /// `const`-friendly one-liner at the call site.
 const POLL_TIMEOUT_MS: u16 = 50;
 
-/// Run the I/O loop until the child exits.
+/// How long the child gets to exit on its own after a shutdown trigger before
+/// the runtime sends `SIGTERM` to its process group. Long enough for a shell
+/// to run its `EXIT`/`HUP`/`TERM` trap and flush output; short enough that a
+/// closed terminal does not leave an orphan around.
+const SHUTDOWN_GRACE_MS: u64 = 500;
+
+/// How long the child gets after `SIGTERM` before the runtime sends
+/// `SIGKILL`. Only reached when the child ignores both the forwarded signal
+/// and `SIGTERM`, which is exactly the orphan case this path exists for.
+const SIGKILL_GRACE_MS: u64 = 500;
+
+/// Run the I/O loop until the child exits or the session is shut down.
 ///
 /// Spawns the output thread (PTY → stdout via `Pipeline`) and the input
-/// thread (stdin → PTY). The main thread waits on the child, joins the
-/// output thread, then wakes the input thread via the self-pipe and joins
-/// it as well (spec §3.4 step 7).
+/// thread (stdin → PTY). The main thread polls the child while watching
+/// `shutdown_rx`; on a shutdown request it escalates from the forwarded
+/// signal to `SIGTERM`, then `SIGKILL`, reaps the child, joins the output
+/// thread, then wakes the input thread via the self-pipe and joins it as well
+/// (spec §3.4 step 7).
+///
+/// `shutdown_tx` is cloned into the I/O threads and dropped here after the
+/// spawns, so the channel disconnects once every observer has exited.
 ///
 /// # Errors
 /// Returns `Error::Pty` if the self-pipe cannot be created or if waiting on
@@ -59,15 +97,18 @@ pub(crate) fn run(
     mut child: ChildHandle,
     rules: Arc<ArcSwap<Compiled>>,
     apply_colors: bool,
+    shutdown_rx: &Receiver<ShutdownReason>,
+    shutdown_tx: Sender<ShutdownReason>,
 ) -> Result<i32> {
     let pipeline = Pipeline::new(rules);
 
     let (shutdown_read, shutdown_write) = make_self_pipe()?;
 
-    let output_handle = spawn_output_thread(reader, pipeline, apply_colors);
-    let input_handle = spawn_input_thread(writer, shutdown_read);
+    let output_handle = spawn_output_thread(reader, pipeline, apply_colors, shutdown_tx.clone());
+    let input_handle = spawn_input_thread(writer, shutdown_read, shutdown_tx.clone());
+    drop(shutdown_tx);
 
-    let code = child.wait()?;
+    let code = wait_for_child(&mut child, shutdown_rx)?;
 
     // Drain the output thread. It should already be exiting because the
     // child closed the slave; we just join. We intentionally ignore the
@@ -89,6 +130,65 @@ pub(crate) fn run(
     Ok(code)
 }
 
+/// Wait for the child while honouring shutdown requests.
+///
+/// Without a shutdown request this is a `try_wait` poll every
+/// [`POLL_TIMEOUT_MS`]; the child is normally long-lived (an interactive
+/// shell), so the 20 wake-ups per second are negligible and avoid the need
+/// for a SIGCHLD handler.
+///
+/// A shutdown request starts an escalation ladder:
+///
+/// 1. Wait [`SHUTDOWN_GRACE_MS`] for the child to exit on its own. For a
+///    forwarded `SIGTERM`/`SIGHUP` this is usually enough.
+/// 2. Send `SIGTERM` to the child process group and wait
+///    [`SIGKILL_GRACE_MS`].
+/// 3. Send `SIGKILL` to the process group and reap.
+///
+/// `SIGTERM` is sent again in step 2 even when the original trigger was a
+/// forwarded `SIGTERM`: the child may have reset or ignored the disposition,
+/// and a duplicate `SIGTERM` is harmless.
+fn wait_for_child(child: &mut ChildHandle, shutdown_rx: &Receiver<ShutdownReason>) -> Result<i32> {
+    let mut term_deadline: Option<Instant> = None;
+    let mut kill_deadline: Option<Instant> = None;
+
+    loop {
+        if let Some(code) = child.try_wait()? {
+            return Ok(code);
+        }
+
+        let now = Instant::now();
+        if let Some(deadline) = kill_deadline {
+            if now >= deadline {
+                child.signal_group(Signal::SIGKILL);
+                return child.wait();
+            }
+        } else if let Some(deadline) = term_deadline {
+            if now >= deadline {
+                child.signal_group(Signal::SIGTERM);
+                kill_deadline = Some(now + Duration::from_millis(SIGKILL_GRACE_MS));
+            }
+        }
+
+        match shutdown_rx.recv_timeout(Duration::from_millis(u64::from(POLL_TIMEOUT_MS))) {
+            Ok(_reason) => start_grace_period(&mut term_deadline),
+            Err(RecvTimeoutError::Timeout) => {}
+            // Every observer thread is gone but the child may still be
+            // running (e.g. both I/O threads saw EOF). Treat that like a
+            // shutdown request rather than waiting forever.
+            Err(RecvTimeoutError::Disconnected) => start_grace_period(&mut term_deadline),
+        }
+    }
+}
+
+/// Arm the first shutdown deadline exactly once, even if several threads
+/// report a closing stream in quick succession.
+fn start_grace_period(term_deadline: &mut Option<Instant>) {
+    if term_deadline.is_none() {
+        *term_deadline = Some(Instant::now() + Duration::from_millis(SHUTDOWN_GRACE_MS));
+    }
+}
+
 /// Create a self-pipe used to wake the input thread at shutdown.
 ///
 /// Returns `(read_end, write_end)` as `OwnedFd` so both ends are closed on
@@ -102,6 +202,14 @@ pub(crate) fn run(
 /// observable inheritance hazard.
 fn make_self_pipe() -> Result<(OwnedFd, OwnedFd)> {
     nix::unistd::pipe().map_err(|e| Error::Pty(io::Error::from(e)))
+}
+
+/// Best-effort shutdown notification from an I/O thread.
+///
+/// A send failure means the main thread already dropped the receiver (it is
+/// exiting), so there is nothing left to coordinate.
+fn request_shutdown(shutdown_tx: &Sender<ShutdownReason>, reason: ShutdownReason) {
+    let _ = shutdown_tx.send(reason);
 }
 
 /// Write one byte to the self-pipe write end to wake the input thread.
@@ -155,6 +263,7 @@ fn spawn_output_thread(
     mut reader: Reader,
     mut pipeline: Pipeline,
     apply_colors: bool,
+    shutdown_tx: Sender<ShutdownReason>,
 ) -> JoinHandle<io::Result<()>> {
     // reason: `thread::Builder::spawn` only fails when the OS refuses to
     // create a thread (resource exhaustion). In that state tayf cannot do
@@ -193,8 +302,11 @@ fn spawn_output_thread(
                         // emitting an empty SGR pair on the next prompt
                         // refresh.
                         if apply_colors {
-                            pipeline.tick(&mut stdout)?;
-                            stdout.flush()?;
+                            if let Err(e) = pipeline.tick(&mut stdout).and_then(|()| stdout.flush())
+                            {
+                                request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                                return Err(e);
+                            }
                         }
                         continue;
                     }
@@ -202,39 +314,67 @@ fn spawn_output_thread(
                     // Spurious EINTR (e.g. SIGWINCH delivered to this
                     // thread): loop and retry the poll.
                     Err(nix::errno::Errno::EINTR) => continue,
-                    Err(e) => return Err(io::Error::from(e)),
+                    Err(e) => {
+                        request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                        return Err(io::Error::from(e));
+                    }
                 }
                 match reader.read(&mut buf) {
-                    Ok(0) => break, // macOS: child closed
+                    Ok(0) => {
+                        // macOS: child closed the slave. Ask the main
+                        // thread to reap it (and escalate if it somehow
+                        // stays alive with its tty closed).
+                        request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                        break;
+                    }
                     Ok(n) => {
-                        if apply_colors {
-                            pipeline.feed(&buf[..n], &mut stdout)?;
+                        let write_result = if apply_colors {
+                            pipeline.feed(&buf[..n], &mut stdout)
                         } else {
-                            stdout.write_all(&buf[..n])?;
+                            stdout.write_all(&buf[..n])
                         }
-                        stdout.flush()?;
+                        .and_then(|()| stdout.flush());
+                        if let Err(e) = write_result {
+                            // stdout is gone (terminal closed, EPIPE/EIO).
+                            // The child may still be alive with its tty
+                            // open; the main thread must tear it down.
+                            request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                            return Err(e);
+                        }
                     }
                     // Linux signals child-closed by surfacing EIO on the
                     // master fd; macOS returns Ok(0). Treat both as EOF.
-                    Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => break,
+                    Err(e) if e.raw_os_error() == Some(nix::libc::EIO) => {
+                        request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                        break;
+                    }
                     // Spurious EINTR: loop and retry the read.
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                        return Err(e);
+                    }
                 }
             }
             // Final drain of any pending partial line (no trailing newline,
             // e.g. a prompt). Skipped when colors are disabled because the
             // pipeline was never fed.
             if apply_colors {
-                pipeline.drain(&mut stdout)?;
-                stdout.flush()?;
+                if let Err(e) = pipeline.drain(&mut stdout).and_then(|()| stdout.flush()) {
+                    request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
+                    return Err(e);
+                }
             }
             Ok(())
         })
         .expect("output thread must spawn")
 }
 
-fn spawn_input_thread(mut writer: Writer, shutdown_read: OwnedFd) -> JoinHandle<()> {
+fn spawn_input_thread(
+    mut writer: Writer,
+    shutdown_read: OwnedFd,
+    shutdown_tx: Sender<ShutdownReason>,
+) -> JoinHandle<()> {
     // reason: see `spawn_output_thread` — thread spawn failure is treated as
     // unrecoverable.
     thread::Builder::new()
@@ -262,10 +402,13 @@ fn spawn_input_thread(mut writer: Writer, shutdown_read: OwnedFd) -> JoinHandle<
                     // Spurious EINTR (e.g. SIGWINCH delivered to this
                     // thread): loop and retry the poll.
                     Err(nix::errno::Errno::EINTR) => continue,
-                    Err(_) => break,
+                    Err(_) => {
+                        request_shutdown(&shutdown_tx, ShutdownReason::StdinClosed);
+                        break;
+                    }
                 }
                 // Shutdown signal: pipe is readable (the main thread of
-                // `runtime::run` wrote a byte after `child.wait`). Exit
+                // `runtime::run` wrote a byte after reaping the child). Exit
                 // without draining; the pipe is dropped on thread exit.
                 if pollfds[1].any().unwrap_or(false) {
                     break;
@@ -276,18 +419,29 @@ fn spawn_input_thread(mut writer: Writer, shutdown_read: OwnedFd) -> JoinHandle<
                     continue;
                 }
                 match handle.read(&mut buf) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        // stdin EOF: the terminal emulator closed its side.
+                        // Ask the main thread to tear the session down
+                        // instead of leaving a detached child behind.
+                        request_shutdown(&shutdown_tx, ShutdownReason::StdinClosed);
+                        break;
+                    }
                     Ok(n) => {
                         if writer.write_all(&buf[..n]).is_err() {
                             // EPIPE — master write end is gone (the child
-                            // closed). Exit quietly.
+                            // closed). Exit quietly; the output thread will
+                            // observe the matching EOF.
+                            request_shutdown(&shutdown_tx, ShutdownReason::PtyClosed);
                             break;
                         }
                     }
                     // Spurious EINTR: loop and retry the read on the next
                     // poll iteration.
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                    Err(_) => break,
+                    Err(_) => {
+                        request_shutdown(&shutdown_tx, ShutdownReason::StdinClosed);
+                        break;
+                    }
                 }
             }
         })

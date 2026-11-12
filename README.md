@@ -529,6 +529,15 @@ If `tayf` was launched without a config file, the file watcher is not active
 — but `SIGHUP` still works as a manual reload trigger. If you create a config
 later, send `SIGHUP` to pick it up.
 
+**Signals and clean shutdown.** A manual `kill -HUP <pid>` — with the terminal
+still attached — reloads the config and leaves the session running. A terminal
+hangup (closing the terminal window) also arrives as `SIGHUP`, but with stdin
+already hung up: `tayf` forwards the signal to the child process group and then
+ends the session itself, escalating to `SIGKILL` if the child ignores it.
+`SIGTERM` likewise shuts `tayf` down after forwarding. This prevents a closed
+terminal from leaving a detached shell behind. `SIGINT` (`Ctrl-C`) remains
+forward-only and never ends the `tayf` session.
+
 **Note:** `SIGHUP` is forwarded to the child process group in every
 configuration, mirroring `SIGINT` / `SIGTERM`. If you have a script that
 relies on `tayf` swallowing `SIGHUP`, install your own trap
@@ -577,7 +586,9 @@ value (including unset) means bypass is off.
 In bypass mode tayf still:
 - Wraps the PTY (your child shell still has a controlling terminal).
 - Forwards `SIGWINCH`, `SIGINT`, `SIGTERM`, `SIGHUP` to the child process
-  group (so `Ctrl-C` and tmux detach still work).
+  group (so `Ctrl-C` still works).
+- Shuts down cleanly on `SIGTERM`/terminal hangup, killing the child process
+  group if it ignores the forwarded signal, so no orphaned shell is left.
 - Protects the terminal via its raw-mode RAII guard (Ctrl-C / panic cleanup
   is still safe).
 

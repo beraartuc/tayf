@@ -26,7 +26,8 @@ no colorization.
 At steady state tayf runs a handful of threads:
 
 - **I/O loop** ([`runtime.rs`](./src/runtime.rs)) — a `poll(2)`-driven loop
-  moving bytes between the user's stdin/stdout and the PTY master.
+  moving bytes between the user's stdin/stdout and the PTY master, plus the
+  shutdown coordinator.
 - **Signal thread** ([`signals.rs`](./src/signals.rs)) — forwards
   `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGWINCH` to the child **process group**.
 - **Hot-reload watcher + orchestrator** ([`watch.rs`](./src/watch.rs),
@@ -36,6 +37,18 @@ At steady state tayf runs a handful of threads:
 
 The active rule set is shared as an `ArcSwap`, so a hot reload publishes a new
 ruleset atomically without locking the hot path.
+
+**Shutdown coordination.** The main thread owns the child handle and polls
+`try_wait` instead of blocking in `wait(2)`. It watches a shutdown channel
+([`shutdown.rs`](./src/shutdown.rs)) fed by the signal thread (`SIGTERM`, or a
+`SIGHUP` whose stdin is already hung up), the output thread (PTY EOF/EIO, or a
+failed stdout write), and the input thread (stdin EOF/EIO). A manual
+`kill -HUP` keeps the terminal attached, so it still only triggers a config
+reload. On a shutdown request the main thread gives the child a short grace
+period, then sends `SIGTERM` to the child process group, then `SIGKILL`,
+reaping it before joining the I/O threads. This bounds tayf's lifetime even
+when an interactive shell ignores every catchable signal; `SIGINT` stays
+forward-only so `Ctrl-C` cancels the foreground job without ending tayf.
 
 **Backpressure and interruption.** The output thread writes to stdout with a
 blocking `write_all` + `flush`, so a slow terminal applies natural back-pressure:
@@ -96,7 +109,10 @@ Grouped by responsibility (one logical concern per file —
   `sh -c`).
 - [`shell.rs`](./src/shell.rs) — shell discovery (`$SHELL` → `/etc/passwd` → `/bin/sh`).
 - [`signals.rs`](./src/signals.rs) — signal forwarding to the child process group.
-- [`runtime.rs`](./src/runtime.rs) — the two-thread `poll(2)` I/O loop + shutdown.
+- [`shutdown.rs`](./src/shutdown.rs) — shutdown request channel shared by the
+  signal and I/O threads.
+- [`runtime.rs`](./src/runtime.rs) — the two-thread `poll(2)` I/O loop + shutdown
+  coordinator (grace period → `SIGTERM` → `SIGKILL` → reap).
 - [`terminfo.rs`](./src/terminfo.rs) — TTY detection, window size, color depth.
 - [`bg_detect.rs`](./src/bg_detect.rs) — best-effort startup background-color
   detection (`COLORFGBG`, then an OSC 11 query) to pick a default theme.

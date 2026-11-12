@@ -63,6 +63,7 @@ pub(crate) mod reload;
 pub(crate) mod rules;
 pub(crate) mod runtime;
 pub(crate) mod shell;
+pub(crate) mod shutdown;
 pub(crate) mod signals;
 pub(crate) mod terminfo;
 pub(crate) mod themes;
@@ -169,10 +170,23 @@ impl Tayf {
 
             // No reload pipeline in bypass — pass None to signal thread.
             // SIGHUP is still forwarded to the child PG (signals.rs
-            // handler body, v0.3.3 F2-b fix).
-            let signal_guard = signals::spawn_handler(resizer, child_pid, None)?;
+            // handler body, v0.3.3 F2-b fix). The shutdown channel is
+            // shared with the signal thread and the I/O threads so a
+            // SIGTERM / terminal hangup / PTY EOF can end the session even
+            // when the child ignores the forwarded signal.
+            let (shutdown_tx, shutdown_rx) = shutdown::channel();
+            let signal_guard =
+                signals::spawn_handler(resizer, child_pid, None, shutdown_tx.clone())?;
 
-            let exit_code = runtime::run(reader, writer, child, Arc::clone(&empty_rules), false)?;
+            let exit_code = runtime::run(
+                reader,
+                writer,
+                child,
+                Arc::clone(&empty_rules),
+                false,
+                &shutdown_rx,
+                shutdown_tx,
+            )?;
 
             // Explicit ordered shutdown for symmetry with the non-bypass
             // branch: signal_guard joined first, tty_guard restored last.
@@ -267,7 +281,9 @@ impl Tayf {
         // forwards to the child PG unconditionally (v0.3.3 F2-b), and
         // additionally sends to reload_tx when Some.
         let signal_reload_tx = if hot_reload_enabled { Some(reload_tx.clone()) } else { None };
-        let signal_guard = signals::spawn_handler(resizer, child_pid, signal_reload_tx)?;
+        let (shutdown_tx, shutdown_rx) = shutdown::channel();
+        let signal_guard =
+            signals::spawn_handler(resizer, child_pid, signal_reload_tx, shutdown_tx.clone())?;
 
         // Spawn the file watcher only when (a) a config file was loaded
         // AND (b) hot-reload is enabled. Either condition false → no
@@ -333,7 +349,15 @@ impl Tayf {
         // — receiver is already gone.
         drop(reload_tx);
 
-        let exit_code = runtime::run(reader, writer, child, Arc::clone(&rules), apply_colors)?;
+        let exit_code = runtime::run(
+            reader,
+            writer,
+            child,
+            Arc::clone(&rules),
+            apply_colors,
+            &shutdown_rx,
+            shutdown_tx,
+        )?;
 
         // Explicit ordered shutdown (preserves the v0.3.2 invariant; see
         // spec §3.3 drop-ordering invariant):

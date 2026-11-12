@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `tayf` no longer leaks the wrapped shell when the terminal goes away. Closing
+  the terminal window delivers `SIGHUP` with stdin hung up; `SIGTERM` and
+  PTY/stdin EOF or EIO are now shutdown triggers too. After forwarding the
+  signal, `tayf` waits a short grace period,
+  sends `SIGTERM` to the child process group, then `SIGKILL` if the child still
+  ignores it, and exits. Previously the signal thread only forwarded the signal
+  and the runtime blocked in `child.wait()` forever, so a signal-ignoring
+  shell — and `tayf` itself — stayed alive as an orphan. A manual
+  `kill -HUP <pid>` still reloads the config instead of ending the session;
+  `SIGINT` remains forward-only.
+
 ## [0.12.3] - 2026-06-09
 
 ### Changed
