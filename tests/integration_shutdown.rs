@@ -7,7 +7,10 @@
 //! output thread while the main thread kept waiting on the child.
 //!
 //! These tests use shells that deliberately ignore `TERM`/`HUP` so only the
-//! runtime's `SIGKILL` escalation can make tayf exit. Each test bounds the
+//! runtime's `SIGKILL` escalation can make tayf exit. The shell tests also run
+//! a signal-ignoring foreground job: with job control it lives in its own
+//! process group, so the escalation must reach the PTY's foreground group, not
+//! just the shell's. Each test bounds the
 //! wait and kills tayf on failure so a regression cannot wedge the suite.
 
 #![cfg(unix)]
@@ -64,7 +67,43 @@ fn read_child_pid(path: &std::path::Path) -> i32 {
     std::fs::read_to_string(path).expect("read child pid file").trim().parse().expect("parse pid")
 }
 
-/// Assert that the wrapped child (recorded by each test in a pid file) is
+/// Poll until `path` holds a pid, so a test never signals tayf before the
+/// shell has finished its setup.
+fn wait_for_pid_file(path: &std::path::Path) -> i32 {
+    let deadline = Instant::now() + Duration::from_millis(EXIT_BUDGET_MS);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(pid) = text.trim().parse() {
+                return pid;
+            }
+        }
+        assert!(Instant::now() < deadline, "pid file {} never appeared", path.display());
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Make the wrapped interactive shell ignore `TERM`/`HUP` and start a
+/// foreground job that ignores them too. Returns `(shell_pid, job_pid)`.
+///
+/// With job control on, the shell puts the job in its own process group, so
+/// signalling the shell's group alone leaves the job behind as an orphan. The
+/// job records its own pid (`$$` of the inner `sh`, kept across `exec`) so
+/// the test can assert it is gone as well. Ignored dispositions are inherited
+/// across `fork` and `exec`, so only `SIGKILL` can end either process.
+fn start_signal_ignoring_job(writer: &mut dyn Write, dir: &std::path::Path) -> (i32, i32) {
+    let shell_pid_file = dir.join("shell.pid");
+    let job_pid_file = dir.join("job.pid");
+    let setup = format!(
+        "echo $$ > '{}'\ntrap '' TERM HUP\nsh -c 'echo $$ > \"{}\"; exec sleep 60'\n",
+        shell_pid_file.display(),
+        job_pid_file.display()
+    );
+    writer.write_all(setup.as_bytes()).expect("write setup");
+    writer.flush().expect("flush");
+    (wait_for_pid_file(&shell_pid_file), wait_for_pid_file(&job_pid_file))
+}
+
+/// Assert that a process spawned under tayf (recorded in a pid file) is
 /// really gone. Checking only that tayf exited would also pass for an
 /// implementation that abandons the child — the exact leak these tests guard
 /// against.
@@ -84,7 +123,6 @@ fn assert_child_gone(pid: i32, context: &str) {
 #[test]
 fn sigterm_terminates_tayf_when_child_ignores_it() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pid_file = dir.path().join("child.pid");
     let (master, mut child) = spawn_tayf(std::path::Path::new("/bin/sh"));
     let tayf_pid = child.process_id().expect("tayf pid");
 
@@ -92,14 +130,7 @@ fn sigterm_terminates_tayf_when_child_ignores_it() {
     let _reader = master.try_clone_reader().expect("clone reader");
 
     std::thread::sleep(Duration::from_millis(SETTLE_MS));
-
-    // Ignored dispositions are inherited across exec, so both the shell and
-    // the foreground `sleep` ignore TERM and HUP. Only SIGKILL can end this
-    // session.
-    let setup = format!("echo $$ > '{}'\ntrap '' TERM HUP\nsleep 60\n", pid_file.display());
-    writer.write_all(setup.as_bytes()).expect("write trap");
-    writer.flush().expect("flush");
-    std::thread::sleep(Duration::from_millis(SETTLE_MS));
+    let (shell_pid, job_pid) = start_signal_ignoring_job(&mut writer, dir.path());
 
     let pid = i32::try_from(tayf_pid).expect("pid fits i32");
     kill(Pid::from_raw(pid), Signal::SIGTERM).expect("kill -TERM tayf");
@@ -109,27 +140,25 @@ fn sigterm_terminates_tayf_when_child_ignores_it() {
         "tayf must exit after SIGTERM even when the child ignores TERM/HUP; \
          shutdown escalation did not reach SIGKILL"
     );
-    assert_child_gone(read_child_pid(&pid_file), "SIGTERM");
+    assert_child_gone(shell_pid, "SIGTERM shell");
+    assert_child_gone(job_pid, "SIGTERM foreground job");
 }
 
 #[test]
 fn terminal_hangup_terminates_tayf_when_child_ignores_it() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pid_file = dir.path().join("child.pid");
     let (master, mut child) = spawn_tayf(std::path::Path::new("/bin/sh"));
 
     let mut writer = master.take_writer().expect("take writer");
     let reader = master.try_clone_reader().expect("clone reader");
 
     std::thread::sleep(Duration::from_millis(SETTLE_MS));
-    let setup = format!("echo $$ > '{}'\ntrap '' TERM HUP\nsleep 60\n", pid_file.display());
-    writer.write_all(setup.as_bytes()).expect("write trap");
-    writer.flush().expect("flush");
-    std::thread::sleep(Duration::from_millis(SETTLE_MS));
+    let (shell_pid, job_pid) = start_signal_ignoring_job(&mut writer, dir.path());
 
     // Closing every master fd is what a terminal-emulator window close does:
-    // tayf's stdin reports POLLHUP and the kernel delivers SIGHUP. The child
-    // ignores both, so tayf must escalate to SIGKILL and exit itself.
+    // tayf's stdin reports POLLHUP and the kernel delivers SIGHUP. The shell
+    // and its foreground job ignore both, so tayf must escalate to SIGKILL
+    // and exit itself.
     drop(writer);
     drop(reader);
     drop(master);
@@ -139,7 +168,8 @@ fn terminal_hangup_terminates_tayf_when_child_ignores_it() {
         "tayf must exit on terminal hangup (SIGHUP + stdin EOF) instead of \
          leaving the shell as an orphan"
     );
-    assert_child_gone(read_child_pid(&pid_file), "terminal hangup");
+    assert_child_gone(shell_pid, "terminal hangup shell");
+    assert_child_gone(job_pid, "terminal hangup foreground job");
 }
 
 #[test]

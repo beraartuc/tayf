@@ -4,8 +4,9 @@
 //! terminal, and launches the requested shell. `into_parts` decomposes the
 //! session into four narrow handles owned by separate threads (spec §3.3):
 //! a `Reader` (master read half), a `Writer` (master write half), a
-//! `Resizer` (shared master for `SIGWINCH`), and a `ChildHandle` (reaping
-//! and pid lookup for signal forwarding to the child's process group).
+//! `Resizer` (shared master for `SIGWINCH`), and a `ChildHandle` (reaping,
+//! pid lookup, and shutdown signalling of the child's process group and the
+//! PTY's foreground process group).
 //!
 //! This decomposition is what lets the I/O loop avoid a single
 //! `Arc<Mutex<PtySession>>` shared across every thread.
@@ -56,6 +57,9 @@ pub(crate) struct Resizer {
 /// Child reaper + exit-code accessor.
 pub(crate) struct ChildHandle {
     child: Box<dyn Child + Send + Sync>,
+    /// Master shared with the `Resizer`, used only to look up the PTY's
+    /// foreground process group (`tcgetpgrp`) when shutting the session down.
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 }
 
 impl PtySession {
@@ -108,13 +112,13 @@ impl PtySession {
         })?;
 
         let master = Arc::new(Mutex::new(self.master));
-        let resizer = Resizer { master };
+        let resizer = Resizer { master: Arc::clone(&master) };
 
         Ok((
             Reader { inner: reader, master_fd },
             Writer { inner: writer },
             resizer,
-            ChildHandle { child: self.child },
+            ChildHandle { child: self.child, master },
         ))
     }
 }
@@ -184,20 +188,39 @@ impl ChildHandle {
         self.child.process_id()
     }
 
-    /// Deliver `signal` to the child's process group.
+    /// Deliver `signal` to the PTY's foreground process group and to the
+    /// child's process group.
     ///
     /// `portable-pty` spawns the child with `setsid(2)`, so the child is both
-    /// session leader and process-group leader; `killpg(child_pid)` therefore
-    /// reaches the shell and every foreground/background job it spawned.
+    /// session leader and process-group leader; `killpg(child_pid)` reaches
+    /// the shell itself. An interactive shell with job control runs each job
+    /// in its own process group, though, so a foreground job that ignores
+    /// `SIGHUP` would outlive the shell as an orphan. The foreground group is
+    /// therefore looked up via `tcgetpgrp` on the master and signalled first,
+    /// while the shell is still alive to keep it attached to the PTY.
+    /// Background jobs in other groups are left to the shell's own hangup
+    /// handling, as on a real terminal.
+    ///
     /// Failures are intentionally ignored (`ESRCH` for an already-reaped
     /// group, `EPERM` if the group changed ownership) — the caller is in the
     /// shutdown path and has no useful fallback.
-    pub(crate) fn signal_group(&self, signal: nix::sys::signal::Signal) {
-        if let Some(pid) = self.pid() {
-            if let Ok(pid_i32) = i32::try_from(pid) {
-                let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid_i32), signal);
-            }
+    pub(crate) fn signal_session(&self, signal: nix::sys::signal::Signal) {
+        let child_pgid = self.pid().and_then(|pid| i32::try_from(pid).ok());
+        if let Some(pgid) = self.foreground_pgid().filter(|&pgid| Some(pgid) != child_pgid) {
+            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), signal);
         }
+        if let Some(pgid) = child_pgid {
+            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), signal);
+        }
+    }
+
+    /// The PTY's current foreground process group, if the kernel reports one.
+    ///
+    /// Returns `None` when the master mutex is poisoned or `tcgetpgrp` fails
+    /// or reports no group (for example once the session leader has exited).
+    fn foreground_pgid(&self) -> Option<i32> {
+        let master = self.master.lock().ok()?;
+        master.process_group_leader().filter(|&pgid| pgid > 0)
     }
 }
 

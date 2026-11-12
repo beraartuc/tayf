@@ -45,8 +45,9 @@ ruleset atomically without locking the hot path.
 failed stdout write), and the input thread (stdin EOF/EIO). A manual
 `kill -HUP` keeps the terminal attached, so it still only triggers a config
 reload. On a shutdown request the main thread gives the child a short grace
-period, then sends `SIGTERM` to the child process group, then `SIGKILL`,
-reaping it before joining the I/O threads. This bounds tayf's lifetime even
+period, then sends `SIGTERM` to the PTY's foreground process group and the
+child's process group (an interactive shell runs each job in its own group),
+then `SIGKILL`, reaping the child before joining the I/O threads. This bounds tayf's lifetime even
 when an interactive shell ignores every catchable signal; `SIGINT` stays
 forward-only so `Ctrl-C` cancels the foreground job without ending tayf.
 

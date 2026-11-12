@@ -10,9 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tayf` no longer leaks the wrapped shell when the terminal goes away. Closing
   the terminal window delivers `SIGHUP` with stdin hung up; `SIGTERM` and
   PTY/stdin EOF or EIO are now shutdown triggers too. After forwarding the
-  signal, `tayf` waits a short grace period,
-  sends `SIGTERM` to the child process group, then `SIGKILL` if the child still
-  ignores it, and exits. Previously the signal thread only forwarded the signal
+  signal, `tayf` waits a one-second grace period, sends `SIGTERM` to the
+  child process group and to the PTY's foreground process group (so a
+  foreground job that ignores `SIGHUP` does not outlive the shell), then
+  `SIGKILL` if they still ignore it, and exits. Previously the signal thread only forwarded the signal
   and the runtime blocked in `child.wait()` forever, so a signal-ignoring
   shell — and `tayf` itself — stayed alive as an orphan. A manual
   `kill -HUP <pid>` still reloads the config instead of ending the session;

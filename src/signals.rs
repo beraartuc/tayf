@@ -194,8 +194,10 @@ fn forward_to_pgid(child_pid: i32, sig: i32) {
 fn stdin_hung_up() -> bool {
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
-        // No terminal to hang up; treat a detached stdin as a hangup so a
-        // SIGHUP cannot leave tayf waiting on a dead session.
+        // Defensive: `TtyGuard::engage` already refuses a non-terminal stdin,
+        // so the runtime never reaches here without a tty. Should that ever
+        // change, treat a detached stdin as a hangup so a SIGHUP cannot leave
+        // tayf waiting on a dead session.
         return true;
     }
     let mut pollfds = [PollFd::new(stdin.as_fd(), PollFlags::POLLIN)];

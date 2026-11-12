@@ -530,13 +530,16 @@ If `tayf` was launched without a config file, the file watcher is not active
 later, send `SIGHUP` to pick it up.
 
 **Signals and clean shutdown.** A manual `kill -HUP <pid>` — with the terminal
-still attached — reloads the config and leaves the session running. A terminal
-hangup (closing the terminal window) also arrives as `SIGHUP`, but with stdin
-already hung up: `tayf` forwards the signal to the child process group and then
-ends the session itself, escalating to `SIGKILL` if the child ignores it.
-`SIGTERM` likewise shuts `tayf` down after forwarding. This prevents a closed
-terminal from leaving a detached shell behind. `SIGINT` (`Ctrl-C`) remains
-forward-only and never ends the `tayf` session.
+still attached — reloads the config, and `tayf` does not end the session
+itself; the `SIGHUP` it forwards may still end a shell that does not trap it
+(see the note below). A terminal hangup (closing the terminal window) also
+arrives as `SIGHUP`, but with stdin already hung up: `tayf` forwards the signal
+to the child process group and then ends the session itself, escalating to
+`SIGTERM` and then `SIGKILL` — for both the shell and the job running in the
+foreground — if they ignore it. `SIGTERM` likewise shuts `tayf` down after
+forwarding. This prevents a closed terminal from leaving a detached shell or
+foreground job behind. `SIGINT` (`Ctrl-C`) remains forward-only and never ends
+the `tayf` session.
 
 **Note:** `SIGHUP` is forwarded to the child process group in every
 configuration, mirroring `SIGINT` / `SIGTERM`. If you have a script that

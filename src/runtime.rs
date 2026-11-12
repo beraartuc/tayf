@@ -31,9 +31,9 @@
 //!
 //! On shutdown the main thread gives the child a short grace period (the
 //! forwarded signal may still be taking effect), then sends `SIGTERM` to the
-//! child's process group, then `SIGKILL`, reaping it before joining the I/O
-//! threads. This bounds tayf's lifetime even when the child ignores every
-//! catchable signal.
+//! PTY's foreground process group and the child's process group, then
+//! `SIGKILL`, reaping the child before joining the I/O threads. This bounds
+//! tayf's lifetime even when the child ignores every catchable signal.
 
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
@@ -66,10 +66,11 @@ const READ_BUF_BYTES: usize = 8 * 1024;
 const POLL_TIMEOUT_MS: u16 = 50;
 
 /// How long the child gets to exit on its own after a shutdown trigger before
-/// the runtime sends `SIGTERM` to its process group. Long enough for a shell
-/// to run its `EXIT`/`HUP`/`TERM` trap and flush output; short enough that a
-/// closed terminal does not leave an orphan around.
-const SHUTDOWN_GRACE_MS: u64 = 500;
+/// the runtime sends `SIGTERM` to its process groups. Long enough for a shell
+/// to run its `EXIT`/`HUP`/`TERM` trap and save its history file even on a
+/// loaded machine; short enough that a closed terminal does not leave an
+/// orphan around.
+const SHUTDOWN_GRACE_MS: u64 = 1_000;
 
 /// How long the child gets after `SIGTERM` before the runtime sends
 /// `SIGKILL`. Only reached when the child ignores both the forwarded signal
@@ -141,9 +142,10 @@ pub(crate) fn run(
 ///
 /// 1. Wait [`SHUTDOWN_GRACE_MS`] for the child to exit on its own. For a
 ///    forwarded `SIGTERM`/`SIGHUP` this is usually enough.
-/// 2. Send `SIGTERM` to the child process group and wait
+/// 2. Send `SIGTERM` to the PTY's foreground process group and the child's
+///    process group (see [`ChildHandle::signal_session`]) and wait
 ///    [`SIGKILL_GRACE_MS`].
-/// 3. Send `SIGKILL` to the process group and reap.
+/// 3. Send `SIGKILL` to the same groups and reap.
 ///
 /// `SIGTERM` is sent again in step 2 even when the original trigger was a
 /// forwarded `SIGTERM`: the child may have reset or ignored the disposition,
@@ -160,18 +162,23 @@ fn wait_for_child(child: &mut ChildHandle, shutdown_rx: &Receiver<ShutdownReason
         let now = Instant::now();
         if let Some(deadline) = kill_deadline {
             if now >= deadline {
-                child.signal_group(Signal::SIGKILL);
+                crate::log::info_msg!("child ignored SIGTERM; sending SIGKILL");
+                child.signal_session(Signal::SIGKILL);
                 return child.wait();
             }
         } else if let Some(deadline) = term_deadline {
             if now >= deadline {
-                child.signal_group(Signal::SIGTERM);
+                crate::log::info_msg!("child still running after grace period; sending SIGTERM");
+                child.signal_session(Signal::SIGTERM);
                 kill_deadline = Some(now + Duration::from_millis(SIGKILL_GRACE_MS));
             }
         }
 
         match shutdown_rx.recv_timeout(Duration::from_millis(u64::from(POLL_TIMEOUT_MS))) {
-            Ok(_reason) => start_grace_period(&mut term_deadline),
+            Ok(reason) => {
+                crate::log::info_msg!("shutdown requested: {reason:?}");
+                start_grace_period(&mut term_deadline);
+            }
             Err(RecvTimeoutError::Timeout) => {}
             // Every observer thread is gone but the child may still be
             // running (e.g. both I/O threads saw EOF). Treat that like a
