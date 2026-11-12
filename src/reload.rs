@@ -459,10 +459,8 @@ fn parse_log_line(line: &str) -> Option<ReloadEvent> {
     let reload_count: u64 = count_str.parse().ok()?;
     let outcome = if outcome_str == "ok" {
         ReloadOutcome::Ok
-    } else if let Some(reason) = outcome_str.strip_prefix("err: ") {
-        ReloadOutcome::Err(reason.to_owned())
     } else {
-        return None;
+        ReloadOutcome::Err(outcome_str.strip_prefix("err: ")?.to_owned())
     };
     let timestamp =
         SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(u64::try_from(ts_ms).ok()?);

@@ -667,7 +667,7 @@ mod tests {
     fn parse_empty_yields_defaults() {
         let cfg = parse("/x", "").unwrap();
         assert!(cfg.general.respect_existing_colors);
-        assert!(cfg.rules.is_empty());
+        assert!(cfg.rules.is_empty(), "expected empty, got {:?}", cfg.rules);
     }
 
     #[test]

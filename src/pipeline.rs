@@ -540,7 +540,11 @@ impl Pipeline {
         use crate::ansi::StepEvent;
         match event {
             StepEvent::Data => {
-                debug_assert!(self.sequence_scratch.is_empty());
+                debug_assert!(
+                    self.sequence_scratch.is_empty(),
+                    "sequence scratch must be empty on a Data event, got {:?}",
+                    self.sequence_scratch
+                );
                 // Reachable only via the ForceStringTerminate re-step (a non-ESC
                 // byte re-classified in Ground). Route through the same bulk feeder
                 // as the fast path (feed_byte_with_overflow retired in v0.8.2).

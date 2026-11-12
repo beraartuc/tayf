@@ -1737,19 +1737,51 @@ mod tests {
     #[test]
     fn duration_rejects_word_continuation() {
         // FP guards: \b after [smhd] fails when next char is also a word char.
-        assert!(all_matches("duration", "5min ago").is_empty());
-        assert!(all_matches("duration", "5seconds").is_empty());
-        assert!(all_matches("duration", "5days").is_empty());
-        assert!(all_matches("duration", "5hours").is_empty());
+        assert!(
+            all_matches("duration", "5min ago").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "5min ago")
+        );
+        assert!(
+            all_matches("duration", "5seconds").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "5seconds")
+        );
+        assert!(
+            all_matches("duration", "5days").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "5days")
+        );
+        assert!(
+            all_matches("duration", "5hours").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "5hours")
+        );
     }
 
     #[test]
     fn duration_rejects_bare_unit_with_whitespace() {
         // FP guards: bare units require NO space; multi-letter units may have one.
-        assert!(all_matches("duration", "5 m of cable").is_empty());
-        assert!(all_matches("duration", "took 5 s").is_empty());
-        assert!(all_matches("duration", "took 5 h").is_empty());
-        assert!(all_matches("duration", "took 5 d").is_empty());
+        assert!(
+            all_matches("duration", "5 m of cable").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "5 m of cable")
+        );
+        assert!(
+            all_matches("duration", "took 5 s").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "took 5 s")
+        );
+        assert!(
+            all_matches("duration", "took 5 h").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "took 5 h")
+        );
+        assert!(
+            all_matches("duration", "took 5 d").is_empty(),
+            "expected empty, got {:?}",
+            all_matches("duration", "took 5 d")
+        );
     }
 
     #[test]

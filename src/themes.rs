@@ -955,7 +955,7 @@ mod tests {
     fn discover_disk_themes_returns_empty_when_dir_missing() {
         let dir = tmp();
         let names = discover_disk_themes(dir.path());
-        assert!(names.is_empty());
+        assert!(names.is_empty(), "expected empty, got {names:?}");
     }
 
     #[test]

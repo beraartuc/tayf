@@ -186,7 +186,7 @@ mod tests {
     fn empty_feed_yields_nothing() {
         let mut buf = LineBuffer::new();
         let lines = buf.feed(b"");
-        assert!(lines.is_empty());
+        assert!(lines.is_empty(), "expected empty, got {lines:?}");
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
     fn partial_line_is_held() {
         let mut buf = LineBuffer::new();
         let lines = buf.feed(b"part");
-        assert!(lines.is_empty());
+        assert!(lines.is_empty(), "expected empty, got {lines:?}");
         let lines = buf.feed(b"ial\n");
         assert_eq!(lines, vec![b"partial\n".to_vec()]);
     }
@@ -286,7 +286,7 @@ mod tests {
         let mut buf = LineBuffer::new();
         let (lines1, ovf1) = buf.feed_with_overflow(&vec![b'a'; 32 * 1024]);
         assert!(ovf1.is_none());
-        assert!(lines1.is_empty());
+        assert!(lines1.is_empty(), "expected empty, got {lines1:?}");
 
         let (lines2, ovf2) = buf.feed_with_overflow(&vec![b'b'; 40 * 1024]);
         assert!(matches!(ovf2, Some(Error::BufferOverflow { .. })));
@@ -339,7 +339,8 @@ mod tests {
             b.feed_data_run(b"a\nb\nc\n"),
             vec![(b"a".to_vec(), true), (b"b".to_vec(), true), (b"c".to_vec(), true)]
         );
-        assert!(b.drain().is_empty());
+        let rest = b.drain();
+        assert!(rest.is_empty(), "expected empty, got {rest:?}");
 
         let mut b = LineBuffer::new();
         assert_eq!(b.feed_data_run(b"line1\npartial2"), vec![(b"line1".to_vec(), true)]);

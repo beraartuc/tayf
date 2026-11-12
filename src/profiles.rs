@@ -359,7 +359,7 @@ style = { fg = "#f7d17f" }
     #[test]
     fn profile_defaults_to_empty_rules_and_no_theme() {
         let p = Profile::default();
-        assert!(p.rules.is_empty());
+        assert!(p.rules.is_empty(), "expected empty, got {:?}", p.rules);
         assert!(p.theme.is_none());
     }
 
@@ -553,7 +553,11 @@ unexpected_field = "this must fail"
     fn list_names_with_root_returns_empty_when_dir_missing() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         // profiles/ deliberately absent.
-        assert!(list_names_with_root(&tmp.path().join("tayf")).is_empty());
+        assert!(
+            list_names_with_root(&tmp.path().join("tayf")).is_empty(),
+            "expected empty, got {:?}",
+            list_names_with_root(&tmp.path().join("tayf"))
+        );
     }
 
     #[test]

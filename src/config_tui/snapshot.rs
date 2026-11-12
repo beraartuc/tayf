@@ -153,10 +153,10 @@ pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
         padded.push(0);
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (i, b) in chunk.chunks_exact(4).enumerate().take(16) {
-            w[i] = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        for (i, b) in chunk.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*b);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
@@ -266,8 +266,8 @@ mod tests {
     fn read_from_disk_missing_path_returns_empty_snapshot() {
         let snap = ConfigSnapshot::read_from_disk(None).expect("empty snap");
         assert!(snap.source_path.is_none());
-        assert!(snap.raw_bytes.is_empty());
-        assert!(snap.parsed.rules.is_empty());
+        assert!(snap.raw_bytes.is_empty(), "expected empty, got {:?}", snap.raw_bytes);
+        assert!(snap.parsed.rules.is_empty(), "expected empty, got {:?}", snap.parsed.rules);
     }
 
     #[test]
@@ -286,8 +286,8 @@ mod tests {
         let snap = ConfigSnapshot::empty_at(p.clone());
         assert_eq!(snap.source_path.as_deref(), Some(p.as_path()));
         // Same empty shape as empty(): zero rules, empty doc, empty-input hash.
-        assert!(snap.raw_bytes.is_empty());
-        assert!(snap.parsed.rules.is_empty());
+        assert!(snap.raw_bytes.is_empty(), "expected empty, got {:?}", snap.raw_bytes);
+        assert!(snap.parsed.rules.is_empty(), "expected empty, got {:?}", snap.parsed.rules);
         assert_eq!(snap.source_hash, ConfigSnapshot::empty().source_hash);
     }
 }

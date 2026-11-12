@@ -54,6 +54,6 @@ mod tests {
     fn filter_names_lowercase_no_matches_returns_empty() {
         let names = ["alpha", "beta"];
         let out = filter_names_lowercase(names.iter().copied(), "xx");
-        assert!(out.is_empty());
+        assert!(out.is_empty(), "expected empty, got {out:?}");
     }
 }

@@ -569,8 +569,16 @@ mod tests {
             assert!(!s.to_sgr().is_empty(), "visible style {s:?} unexpectedly produced empty SGR");
         }
         // Inverse direction: only Style::DEFAULT (all None / all false) produces "".
-        assert!(Style::DEFAULT.to_sgr().is_empty());
-        assert!(Style::default().to_sgr().is_empty());
+        assert!(
+            Style::DEFAULT.to_sgr().is_empty(),
+            "expected empty, got {:?}",
+            Style::DEFAULT.to_sgr()
+        );
+        assert!(
+            Style::default().to_sgr().is_empty(),
+            "expected empty, got {:?}",
+            Style::default().to_sgr()
+        );
     }
 
     #[test]

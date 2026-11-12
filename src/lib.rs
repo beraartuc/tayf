@@ -92,8 +92,7 @@ pub use error::{
 /// between the two escape hatches.
 pub(crate) fn env_truthy(name: &str) -> bool {
     std::env::var(name)
-        .ok()
-        .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
 }
 
 use std::process::ExitCode;

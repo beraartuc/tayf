@@ -591,7 +591,7 @@ mod tests {
     fn from_color_none_is_empty_default() {
         let s = ColorPickerState::from_color(None);
         assert_eq!(s.section, PickerSection::Hex);
-        assert!(s.hex_buf.is_empty());
+        assert!(s.hex_buf.is_empty(), "expected empty, got {:?}", s.hex_buf);
         assert_eq!(s.selected_color(), None);
     }
 
@@ -617,7 +617,7 @@ mod tests {
     fn invalid_hex_char_in_hex_section_is_ignored() {
         let mut s = ColorPickerState { section: PickerSection::Hex, ..Default::default() };
         dispatch_key(&mut s, mk(KeyCode::Char('z')));
-        assert!(s.hex_buf.is_empty());
+        assert!(s.hex_buf.is_empty(), "expected empty, got {:?}", s.hex_buf);
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
         let mut s = ColorPickerState { section: PickerSection::Hex, ..Default::default() };
         s.hex_buf = "ff8800".to_owned();
         dispatch_key(&mut s, mk(KeyCode::Char('N')));
-        assert!(s.hex_buf.is_empty());
+        assert!(s.hex_buf.is_empty(), "expected empty, got {:?}", s.hex_buf);
     }
 
     #[test]
