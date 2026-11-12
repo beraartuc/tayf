@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.4] - 2026-11-12
 
 ### Fixed
 - `tayf` no longer leaks the wrapped shell when the terminal goes away. Closing
@@ -13,11 +13,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   signal, `tayf` waits a one-second grace period, sends `SIGTERM` to the
   child process group and to the PTY's foreground process group (so a
   foreground job that ignores `SIGHUP` does not outlive the shell), then
-  `SIGKILL` if they still ignore it, and exits. Previously the signal thread only forwarded the signal
-  and the runtime blocked in `child.wait()` forever, so a signal-ignoring
-  shell — and `tayf` itself — stayed alive as an orphan. A manual
-  `kill -HUP <pid>` still reloads the config instead of ending the session;
-  `SIGINT` remains forward-only.
+  `SIGKILL` if they still ignore it, and exits. Previously the signal thread
+  only forwarded the signal and the runtime blocked in `child.wait()` forever,
+  so a signal-ignoring shell — and `tayf` itself — stayed alive as an orphan.
+  A manual `kill -HUP <pid>` still reloads the config instead of ending the
+  session; `SIGINT` remains forward-only.
+
+### Security
+- Updated locked dependencies for RustSec advisories published since 0.12.3:
+  `rustix` 1.1.6 (RUSTSEC-2026-0486), `anyhow` 1.0.104 (RUSTSEC-2026-0190),
+  and `lru` 0.18 via `ratatui` 0.30.2 (RUSTSEC-2026-0253). None of the
+  affected APIs are reachable from tayf's code paths; the update keeps the
+  shipped binaries off known-unsound versions.
 
 ## [0.12.3] - 2026-06-09
 
