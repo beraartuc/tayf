@@ -131,16 +131,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # nightly
         with:
           toolchain: nightly
-      # cargo-fuzz install: VERSION-pinned (@0.13.1, the latest release) but
-      # intentionally NOT --locked. Supply-chain tradeoff (accepted): the tool
-      # version is pinned, but its transitive deps float to the latest
-      # semver-compatible — the idiomatic `cargo install` form. Rationale:
-      #  - --locked forces cargo-fuzz 0.13.1's bundled lockfile, which pins
-      #    rustix 0.36.5; its Linux raw backend uses reserved `rustc_attrs` and
-      #    no longer compiles on current nightly.
-      #  - 0.13.1 IS the latest release (can't bump to a clean lockfile).
-      # cargo-fuzz is a non-shipped dev tool, installed only on the CI runner.
-      - run: cargo install cargo-fuzz@0.13.1
+      # cargo-fuzz install: VERSION-pinned and --locked, so the tool builds
+      # from its own published lockfile (reproducible; no floating transitive
+      # deps). 0.13.1's lockfile pinned rustix 0.36.5, whose Linux raw backend
+      # uses reserved `rustc_attrs` and no longer compiles on current nightly;
+      # 0.13.2 ships rustix 1.x. cargo-fuzz is a non-shipped dev tool,
+      # installed only on the CI runner.
+      - run: cargo install --locked cargo-fuzz@0.13.2
       - name: Build + short-run each fuzz target
         run: |
           set -euo pipefail
